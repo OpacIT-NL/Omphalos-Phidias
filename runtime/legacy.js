@@ -35,11 +35,8 @@ function normalizeDefinition(definition, filename) {
   const type = slug(filename);
   const inputPorts = (definition.inputs || []).map(item => port(item, isAction(item) ? ACTION : 'value'));
   const outputPorts = (definition.outputs || []).map(item => port(item, isAction(item) ? ACTION : 'value'));
-  const optionIDs = new Set((definition.options || []).map(option => option.id));
-  const fieldSources = [
-    ...(definition.options || []),
-    ...(definition.inputs || []).filter(input => !isAction(input) && !optionIDs.has(input.id))
-  ];
+  // Value inputs are connector ports. Only declared options are editable fields.
+  const fieldSources = [...(definition.options || [])];
   const fields = fieldSources.map(source => {
     const type = fieldType(source);
     return {

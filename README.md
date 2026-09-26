@@ -186,13 +186,16 @@ You can also copy the entire project folder directly. The builder never starts p
 | --- | --- |
 | On startup | Runs once when the application starts |
 | On interval | Runs every N seconds; skips overlapping ticks |
-| HTTP endpoint | Starts a workflow on an exact method/path match |
+| On cron | Runs once per matching minute using a five-field local-time cron expression |
+| HTTP endpoint | Starts a workflow on an exact method/path match; its Body output carries text or parsed JSON request bodies |
 | Write to log | Writes to standard output |
 | Set variable | Stores a value for the current execution |
 | Condition | Compares values and takes the true/false branch |
 | Wait | Delays execution |
 | HTTP request | Calls an HTTP(S) URL, storing status and response body |
-| HTTP response | Sends a text or JSON response to the incoming request |
+| HTTP response | Sends a text or JSON response; connect its Body input or use the fallback body field |
+
+Cron expressions use `minute hour day-of-month month weekday`; lists, ranges, and steps such as `*/15 * * * *` are supported. Schedules use the deployed application server's local time.
 
 The imported library additionally includes text/number/list/object manipulation, comparisons, dates, files/folders, console input, emitters/receivers, arbitrary JavaScript, API requests, FTP/FTPS, SSH, and MySQL blocks. Network and database credentials are stored in exported `workspaces.json` when entered directly, so prefer protected files or environment-oriented custom blocks for secrets.
 
@@ -207,9 +210,9 @@ Hello {{request.query.name}}
 
 An entire field containing one template preserves its value's type, so `{{request.body}}` can pass a JSON object to the response block. Embedded templates stringify objects. Templates only read own properties; they do not evaluate JavaScript. Environment variables come from the **deployed application**. Keep secrets there instead of in workspaces, which are included in exports.
 
-HTTP endpoints expose `request.method`, `request.path`, `request.query`, `request.headers`, and `request.body`. JSON request bodies are parsed when Content-Type contains `application/json`. An endpoint without an executed response block returns 204. Unmatched routes return 404; workflow failures are logged and return 500 if no response was sent. Outbound non-2xx HTTP statuses are stored in the result for branching, rather than automatically thrown.
+HTTP endpoints expose `request.method`, `request.path`, `request.query`, `request.headers`, and `request.body`. Their Body output carries the same request body as text or parsed JSON, and the HTTP response Body input accepts either form. JSON request bodies are parsed when Content-Type contains `application/json`. An endpoint without an executed response block returns 204. Unmatched routes return 404; workflow failures are logged and return 500 if no response was sent. Outbound non-2xx HTTP statuses are stored in the result for branching, rather than automatically thrown.
 
-Built-in execution limits: 1 MB incoming/outgoing HTTP bodies, 30-second outbound HTTP timeout, 60-second workflow deadline, 1,000 blocks per workspace. Variables are isolated to a run and held in memory. HTTP triggers are public application routes; add the authentication your deployment needs before exposing sensitive workflows. This initial version has no cron scheduling, durable job queue, persistent variables, retry policy, or in-builder execution console.
+Built-in execution limits: 1 MB incoming/outgoing HTTP bodies, 30-second outbound HTTP timeout, 60-second workflow deadline, 1,000 blocks per workspace. Variables are isolated to a run and held in memory. HTTP triggers are public application routes; add the authentication your deployment needs before exposing sensitive workflows. There is no durable job queue, persistent variables, retry policy, or in-builder execution console.
 
 ## Add blocks
 
@@ -233,7 +236,7 @@ module.exports = {
 };
 ```
 
-Use unique lowercase filenames and types containing letters, numbers, `_` or `-`. Fields support `text`, `number` (with `min`/`max`), and `select` (with `choices`). Return an output name to continue or return nothing to stop. `ctx` provides `vars`, `request`, `response`, `env`, `render`, and an abort `signal`. Custom asynchronous blocks must honor `ctx.signal`; this runtime is not a sandbox or a hard execution timeout for arbitrary JavaScript. The three trigger types are implemented by the runtime; adding a new trigger requires extending `app.js` too. Blocks requiring third-party modules must declare their dependencies in the project's `package.json` and install them on deployment.
+Use unique lowercase filenames and types containing letters, numbers, `_` or `-`. Fields support `text`, `number` (with `min`/`max`), and `select` (with `choices`). Return an output name to continue or return nothing to stop. `ctx` provides `vars`, `request`, `response`, `env`, `render`, and an abort `signal`. Custom asynchronous blocks must honor `ctx.signal`; this runtime is not a sandbox or a hard execution timeout for arbitrary JavaScript. The built-in startup, interval, cron, and HTTP triggers are implemented by the runtime; adding a new trigger requires extending `app.js` too. Blocks requiring third-party modules must declare their dependencies in the project's `package.json` and install them on deployment.
 
 ## HTTP API
 
@@ -292,4 +295,4 @@ Output is written to the ignored `dist/` directory. On systems with `sha256sum`,
 npm test
 ```
 
-Tests cover console modes and help, running/startup persistence, staged accounts, first-launch configuration, upgrade-safe packaging, cumulative log levels, file rotation, log privacy, salted Argon2id storage, session persistence/expiration/revocation, password reset, rate limiting, CSRF, protected routes, server persistence and conflicts, validation, ZIP contents, deployment in a separate Node process, HTTP workflows, condition branches, outbound requests, startup/interval triggers, and shutdown. The frontend is plain HTML/CSS/JavaScript under `public/`; `server.js` hosts both the UI and the API.
+Tests cover console modes and help, running/startup persistence, staged accounts, first-launch configuration, upgrade-safe packaging, cumulative log levels, file rotation, log privacy, salted Argon2id storage, session persistence/expiration/revocation, password reset, rate limiting, CSRF, protected routes, server persistence and conflicts, validation, ZIP contents, deployment in a separate Node process, HTTP workflows, condition branches, outbound requests, startup/interval/cron triggers, and shutdown. The frontend is plain HTML/CSS/JavaScript under `public/`; `server.js` hosts both the UI and the API.

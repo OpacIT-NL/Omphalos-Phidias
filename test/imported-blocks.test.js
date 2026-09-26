@@ -13,7 +13,9 @@ const edge = (id, from, output, to, input = 'action', kind = 'action') => ({ id,
 
 test('every imported block loads with normalized fields and typed ports', () => {
   const library = definitions();
-  assert.equal(library.size, 74);
+  assert.equal(library.size, 75);
+  assert.deepEqual(library.get('merge_texts_advanced').fields.map(field => field.key), ['text']);
+  assert.deepEqual(library.get('merge_texts_advanced').inputPorts.map(port => port.id), ['action', 'text1', 'text2', 'text3']);
   for (const [type, definition] of library) {
     assert.equal(definition.type, type);
     assert.ok(definition.name);

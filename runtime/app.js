@@ -5,6 +5,7 @@ const path = require('node:path');
 const readline = require('node:readline');
 const { validate } = require('./validate');
 const { normalizeDefinition, executeLegacy } = require('./legacy');
+const { parseCron, matchesCron } = require('./cron');
 
 function loadDefinitions(directory) {
   return new Map(fs.readdirSync(directory).filter(name => /^[a-z0-9_-]+\.js$/.test(name)).map(name => {
@@ -35,7 +36,7 @@ async function readBody(request) {
   }
   return text;
 }
-function createApp({ directory = __dirname, document, definitions, onError = console.error } = {}) {
+function createApp({ directory = __dirname, document, definitions, onError = console.error, clock = () => new Date() } = {}) {
   definitions ||= loadDefinitions(path.join(directory, 'blocks'));
   for (const [type, definition] of definitions) definitions.set(type, normalizeDefinition(definition, `${type}.js`));
   document ||= JSON.parse(fs.readFileSync(path.join(directory, 'workspaces.json'), 'utf8'));
@@ -87,6 +88,7 @@ function createApp({ directory = __dirname, document, definitions, onError = con
         await executeLegacy(def, context, block, inputs, follow);
         context.evaluated.add(block.id);
       } else {
+        if (def.trigger === 'http') context.values.set(block.id + ':body', request?.body ?? '');
         const output = def.trigger ? 'next' : await def.execute(context, block.options, inputs);
         if (output) await follow(output);
       }
@@ -151,6 +153,17 @@ function createApp({ directory = __dirname, document, definitions, onError = con
             running = true;
             try { await track(run(ws, block)); } catch (error) { onError(error); } finally { running = false; }
           }, block.options.seconds * 1000));
+        }
+        if (trigger === 'cron') {
+          const schedule = parseCron(block.options.expression);
+          let lastMinute = '';
+          timers.push(setInterval(() => {
+            const now = clock(), minute = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}-${now.getHours()}-${now.getMinutes()}`;
+            if (matchesCron(schedule, now) && minute !== lastMinute) {
+              lastMinute = minute;
+              track(run(ws, block)).catch(onError);
+            }
+          }, 1000));
         }
       }
       return server.address();

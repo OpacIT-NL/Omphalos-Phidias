@@ -1,5 +1,6 @@
 'use strict';
 const safeID = /^[a-zA-Z0-9_-]{1,80}$/;
+const { parseCron } = require('./cron');
 function validate(document, definitions) {
   const fail = message => { throw Object.assign(new Error(message), { status: 400 }); };
   if (!document || document.version !== 1 || typeof document.name !== 'string' || !document.name.trim() || document.name.length > 100) fail('Invalid project name or format version');
@@ -28,6 +29,9 @@ function validate(document, definitions) {
         const route = `${block.options.method} ${block.options.path}`;
         if (ws.active && routes.has(route)) fail(`Duplicate HTTP endpoint: ${route}`);
         if (ws.active) routes.add(route);
+      }
+      if (block.type === 'cron') {
+        try { parseCron(block.options.expression); } catch (error) { fail(error.message); }
       }
       nodes.set(block.id, block);
     }

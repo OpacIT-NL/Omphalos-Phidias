@@ -32,7 +32,7 @@ test('project creation, atomic saves, conflicts, reload, and downloadable ZIP', 
   const { store, call, directory } = await fixture(t);
   const response = await call('/api/projects', 'POST', { name: 'My project' }); assert.equal(response.status, 201);
   const project = await response.json(), endpoint = `/api/projects/${project.id}`;
-  for (const file of ['app.js', 'workspaces.json', 'blocks/http.js', 'validate.js', 'package.json']) await fs.access(path.join(directory, project.id, file));
+  for (const file of ['app.js', 'workspaces.json', 'blocks/http.js', 'validate.js', 'cron.js', 'package.json']) await fs.access(path.join(directory, project.id, file));
   project.workspaces[0].blocks[1].options.body = 'Updated application';
   const results = await Promise.all([call(endpoint, 'PUT', project), call(endpoint, 'PUT', project)]);
   assert.deepEqual(results.map(res => res.status).sort(), [200, 409]);
@@ -136,6 +136,28 @@ test('runtime HTTP payloads, variables, conditions, outbound requests and failur
   assert.equal(errors.length, 1);
 });
 
+test('HTTP endpoint body output connects to HTTP response body input', async t => {
+  const { store } = await fixture(t), project = await store.create('HTTP body ports');
+  const workspace = project.workspaces[0];
+  workspace.blocks = [
+    { id: 'http', type: 'http', x: 0, y: 0, options: { method: 'POST', path: '/body' } },
+    { id: 'response', type: 'respond', x: 0, y: 0, options: { status: 200, body: 'fallback' } }
+  ];
+  workspace.connections = [
+    { id: 'action', from: 'http', output: 'next', to: 'response', input: 'action', kind: 'action' },
+    { id: 'body', from: 'http', output: 'body', to: 'response', input: 'body', kind: 'value' }
+  ];
+  const app = createApp({ document: project, definitions: store.definitions(project.id) });
+  const address = await app.start(0, '127.0.0.1'); t.after(() => app.stop());
+  const base = `http://127.0.0.1:${address.port}/body`;
+  const text = await fetch(base, { method: 'POST', headers: { 'content-type': 'text/plain' }, body: 'plain text' });
+  assert.equal(text.headers.get('content-type'), 'text/plain; charset=utf-8');
+  assert.equal(await text.text(), 'plain text');
+  const json = await fetch(base, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ok: true }) });
+  assert.equal(json.headers.get('content-type'), 'application/json; charset=utf-8');
+  assert.deepEqual(await json.json(), { ok: true });
+});
+
 test('startup and interval triggers, disabled workspaces, clean shutdown', async t => {
   const definitions = loadDefinitions(path.resolve(__dirname, '../blocks')); let runs = 0;
   definitions.set('count', { type: 'count', fields: [], outputs: [], execute: async () => { runs++; } });
@@ -148,6 +170,23 @@ test('startup and interval triggers, disabled workspaces, clean shutdown', async
   const app = createApp({ document, definitions }); t.after(() => app.stop()); await app.start(0, '127.0.0.1'); assert.equal(runs, 1);
   await new Promise(resolve => setTimeout(resolve, 1150)); assert.equal(runs, 2); await app.stop();
   await new Promise(resolve => setTimeout(resolve, 1050)); assert.equal(runs, 2);
+});
+
+test('cron triggers follow five-field local schedules and reject invalid expressions', async t => {
+  const definitions = loadDefinitions(path.resolve(__dirname, '../blocks')); let runs = 0;
+  definitions.set('count', { type: 'count', fields: [], outputs: [], execute: async () => { runs++; } });
+  let now = new Date(2026, 0, 15, 12, 34, 0);
+  const workspace = { id: 'main', name: 'Main', active: true, blocks: [
+    { id: 'cron', type: 'cron', x: 0, y: 0, options: { expression: '* * * * *' } },
+    { id: 'counter', type: 'count', x: 0, y: 0, options: {} }
+  ], connections: [{ id: 'a', from: 'cron', output: 'next', to: 'counter' }] };
+  const document = { version: 1, name: 'Cron', workspaces: [workspace] };
+  const app = createApp({ document, definitions, clock: () => now }); t.after(() => app.stop()); await app.start(0, '127.0.0.1');
+  await new Promise(resolve => setTimeout(resolve, 1100)); assert.equal(runs, 1);
+  now = new Date(now.getTime() + 60000); await new Promise(resolve => setTimeout(resolve, 1100)); assert.equal(runs, 2);
+  const invalid = structuredClone(document); invalid.workspaces[0].blocks[0].options.expression = 'not cron';
+  assert.throws(() => validate(invalid, definitions), /Cron expression/);
+  await app.stop();
 });
 
 test('templates preserve objects and do not traverse prototypes or evaluate code', () => {

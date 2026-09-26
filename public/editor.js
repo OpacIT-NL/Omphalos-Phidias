@@ -6,6 +6,9 @@ const initials = name => String(name || 'Project').split(/[\s_-]+/).filter(Boole
 let project = null, projects = [], definitions = [], workspaceID = null, selected = null, selectedEdge = null, pending = null;
 let csrfToken = '', dirty = false, generation = 0, saving = null, view = { x: 0, y: 60, zoom: 1 }, toastTimer;
 let pickerWorldPosition = null;
+let geometryFrame = 0;
+let portDrag = null, suppressPortClick = false;
+const nodeResizeObserver = new ResizeObserver(() => scheduleNodeGeometry());
 const ws = () => project?.workspaces.find(item => item.id === workspaceID);
 const def = type => definitions.find(item => item.type === type);
 const icons = { Triggers: '↗', Actions: '↳', Logic: '◇', Data: '≡' };
@@ -106,10 +109,11 @@ function renderLibrary() {
 }
 function optionEditor(field, value) {
   const key = escapeHTML(field.key), label = escapeHTML(field.label);
-  if (field.type === 'select') return `<label class="option-field"><span>${label}</span><select class="option-control" data-field="${key}">${(field.choices || []).map(choice => `<option value="${escapeHTML(choice)}" ${value === choice ? 'selected' : ''}>${escapeHTML(choice)}</option>`).join('')}</select></label>`;
-  if (field.type === 'number') return `<label class="option-field"><span>${label}</span><input class="option-control" type="number" data-field="${key}" value="${escapeHTML(value)}" ${field.min !== undefined ? `min="${field.min}"` : ''} ${field.max !== undefined ? `max="${field.max}"` : ''} step="any"></label>`;
-  if (field.type === 'checkbox') return `<label class="option-field"><span>${label}</span><input class="option-checkbox" type="checkbox" data-field="${key}" ${value ? 'checked' : ''}></label>`;
-  return `<label class="option-field"><span>${label}</span><textarea class="option-control" data-field="${key}" spellcheck="false">${escapeHTML(value)}</textarea></label>`;
+  const open = `<label class="option-field" data-option-field="${key}"><span>${label}</span>`;
+  if (field.type === 'select') return `${open}<select class="option-control" data-field="${key}">${(field.choices || []).map(choice => `<option value="${escapeHTML(choice)}" ${value === choice ? 'selected' : ''}>${escapeHTML(choice)}</option>`).join('')}</select></label>`;
+  if (field.type === 'number') return `${open}<input class="option-control" type="number" data-field="${key}" value="${escapeHTML(value)}" ${field.min !== undefined ? `min="${field.min}"` : ''} ${field.max !== undefined ? `max="${field.max}"` : ''} step="any"></label>`;
+  if (field.type === 'checkbox') return `${open}<input class="option-checkbox" type="checkbox" data-field="${key}" ${value ? 'checked' : ''}></label>`;
+  return `${open}<textarea class="option-control" data-field="${key}" spellcheck="false">${escapeHTML(value)}</textarea></label>`;
 }
 function portColor(port) { return typeColors[port.kind === 'action' ? 'action' : (port.types?.[0] || 'unspecified')] || typeColors.unspecified; }
 function renderGraph() {
@@ -119,11 +123,11 @@ function renderGraph() {
     const definition = def(block.type) || { name: block.type, category: 'Unknown', description: 'Unknown block', fields: [], outputs: [], inputPorts: [], outputPorts: [] };
     const inputs = definition.inputPorts || [];
     const outputs = definition.outputPorts || (definition.outputs || []).map(id => ({ id, name: id, kind: 'action', types: [] }));
-    const inputHTML = inputs.map(port => `<div class="port-row input-row"><button class="port input" style="--port-color:${portColor(port)}" data-input="${block.id}" data-port="${escapeHTML(port.id)}" data-kind="${port.kind}" data-types="${escapeHTML((port.types || []).join(','))}" aria-label="Connect ${escapeHTML(port.name)} input"></button><span>${escapeHTML(port.name)}</span></div>`).join('');
-    const outputHTML = outputs.map(port => `<div class="port-row output-row"><span>${escapeHTML(port.name)}</span><button class="port ${pending?.from === block.id && pending.output === port.id ? 'pending' : ''}" style="--port-color:${portColor(port)}" data-output="${escapeHTML(port.id)}" data-from="${block.id}" data-kind="${port.kind}" data-types="${escapeHTML((port.types || []).join(','))}" aria-label="Connect ${escapeHTML(port.name)} output"></button></div>`).join('');
+    const inputHTML = inputs.map(port => `<div class="port-row input-row" data-port-kind="${port.kind}" data-field-link="${escapeHTML(port.id)}"><button class="port input" style="--port-color:${portColor(port)}" data-input="${block.id}" data-port="${escapeHTML(port.id)}" data-kind="${port.kind}" data-types="${escapeHTML((port.types || []).join(','))}" aria-label="Connect ${escapeHTML(port.name)} input"></button><span>${escapeHTML(port.name)}</span></div>`).join('');
+    const outputHTML = outputs.map(port => `<div class="port-row output-row" data-port-kind="${port.kind}" data-field-link="${escapeHTML(port.id)}"><span>${escapeHTML(port.name)}</span><button class="port ${pending?.from === block.id && pending.output === port.id ? 'pending' : ''}" style="--port-color:${portColor(port)}" data-output="${escapeHTML(port.id)}" data-from="${block.id}" data-kind="${port.kind}" data-types="${escapeHTML((port.types || []).join(','))}" aria-label="Connect ${escapeHTML(port.name)} output"></button></div>`).join('');
     const optionHTML = definition.fields.map(field => optionEditor(field, block.options[field.key])).join('');
     const classes = [inputs.length && 'has-inputs', definition.fields.length && 'has-options', outputs.length && 'has-outputs'].filter(Boolean).join(' ');
-    return `<article class="node ${selected === block.id ? 'selected' : ''}" data-node="${block.id}" style="left:${block.x}px;top:${block.y}px"><div class="node-head"><span class="block-icon">${icons[definition.category] || '□'}</span><strong>${escapeHTML(definition.name)}</strong><span class="node-category">[${escapeHTML(definition.category)}]</span><span class="drag-grip">⠿</span></div><div class="node-body ${classes}"><div class="port-column input-ports">${inputHTML}</div><div class="option-column">${optionHTML || (!inputs.length && !outputs.length ? `<p>${escapeHTML(definition.description)}</p>` : '')}</div><div class="port-column output-ports">${outputHTML}</div></div></article>`;
+    return `<article class="node ${selected === block.id ? 'selected' : ''}" data-node="${block.id}" style="left:${block.x}px;top:${block.y}px"><div class="node-head"><span class="block-icon">${icons[definition.category] || '□'}</span><strong>${escapeHTML(definition.name)}</strong><span class="node-category">[${escapeHTML(definition.category)}]</span><span class="drag-grip">⠿</span></div><div class="node-body ${classes}" style="--port-row-count:${Math.max(inputs.length, outputs.length, 1)}"><div class="port-column input-ports">${inputHTML}</div><div class="option-column">${optionHTML || (!inputs.length && !outputs.length ? `<p>${escapeHTML(definition.description)}</p>` : '')}</div><div class="port-column output-ports">${outputHTML}</div></div></article>`;
   }).join('');
   $('#nodes').querySelectorAll('[data-field]').forEach(input => {
     input.addEventListener('input', () => {
@@ -132,19 +136,108 @@ function renderGraph() {
       markDirty(); requestAnimationFrame(renderWires);
     });
   });
-  updateView(); requestAnimationFrame(renderWires);
+  nodeResizeObserver.disconnect();
+  $('#nodes').querySelectorAll('.node').forEach(node => nodeResizeObserver.observe(node));
+  updateView(); scheduleNodeGeometry();
+}
+function alignPorts() {
+  $('#nodes').querySelectorAll('.node').forEach(node => {
+    const fields = new Map([...node.querySelectorAll('[data-option-field]')].map(field => [field.dataset.optionField, field]));
+    node.querySelectorAll('.port-column').forEach(column => {
+      let next = 0;
+      const columnTop = column.getBoundingClientRect().top;
+      column.querySelectorAll('.port-row').forEach(row => {
+        const field = row.dataset.portKind === 'value' ? fields.get(row.dataset.fieldLink) : null;
+        const control = field?.querySelector('[data-field]');
+        const controlBox = control?.getBoundingClientRect();
+        const top = controlBox ? (controlBox.top - columnTop) / view.zoom + control.offsetHeight / 2 - row.offsetHeight / 2 : next;
+        row.style.top = `${Math.max(0, Math.round(top))}px`;
+        next = Math.max(next + 29, top + row.offsetHeight + 7);
+      });
+    });
+  });
+}
+function scheduleNodeGeometry() {
+  if (geometryFrame) return;
+  geometryFrame = requestAnimationFrame(() => { geometryFrame = 0; alignPorts(); renderWires(); });
+}
+function wirePath(a, b) {
+  const curve = Math.max(60, Math.abs(b.x - a.x) * .5);
+  return `M ${a.x} ${a.y} C ${a.x + curve} ${a.y}, ${b.x - curve} ${b.y}, ${b.x} ${b.y}`;
 }
 function renderWires() {
   if (!ws()) { $('#wires').innerHTML = ''; return; }
   const worldRect = $('#world').getBoundingClientRect();
   const point = element => { const box = element.getBoundingClientRect(); return { x: (box.x + box.width / 2 - worldRect.x) / view.zoom, y: (box.y + box.height / 2 - worldRect.y) / view.zoom }; };
-  $('#wires').innerHTML = ws().connections.map(edge => {
+  const paths = ws().connections.map(edge => {
     const inputID = edge.input || 'action';
     const from = document.querySelector(`[data-from="${CSS.escape(edge.from)}"][data-output="${CSS.escape(edge.output)}"]`), to = document.querySelector(`[data-input="${CSS.escape(edge.to)}"][data-port="${CSS.escape(inputID)}"]`);
     if (!from || !to) return '';
-    const a = point(from), b = point(to), curve = Math.max(60, Math.abs(b.x - a.x) * .5);
-    return `<path data-edge="${edge.id}" class="${selectedEdge === edge.id ? 'selected' : ''}" style="--wire-color:${from.style.getPropertyValue('--port-color')}" d="M ${a.x} ${a.y} C ${a.x + curve} ${a.y}, ${b.x - curve} ${b.y}, ${b.x} ${b.y}"/>`;
+    return `<path data-edge="${edge.id}" class="${selectedEdge === edge.id ? 'selected' : ''}" style="--wire-color:${from.style.getPropertyValue('--port-color')}" d="${wirePath(point(from), point(to))}"/>`;
   }).join('');
+  let preview = '';
+  if (portDrag?.portElement?.isConnected) {
+    const anchor = point(portDrag.portElement);
+    const cursor = { x: (portDrag.pointerX - worldRect.x) / view.zoom, y: (portDrag.pointerY - worldRect.y) / view.zoom };
+    const color = portDrag.portElement.style.getPropertyValue('--port-color');
+    preview = `<path class="dragging-wire" style="--wire-color:${color}" d="${wirePath(anchor, cursor)}"/>`;
+  }
+  $('#wires').innerHTML = paths + preview;
+}
+function finishPortDrag(drag, target) {
+  if (!target || !target.matches('[data-output], [data-input]')) { toast('Drop on a compatible port to connect.'); return; }
+  if (drag.origin === 'output' && target.hasAttribute('data-input')) {
+    pending = { from: drag.portData.from, output: drag.portData.output, kind: drag.portData.kind, types: drag.portData.types.split(',').filter(Boolean) };
+    connect(target.dataset.input, target.dataset.port, target.dataset.kind, target.dataset.types.split(',').filter(Boolean));
+    return;
+  }
+  if (drag.origin === 'input' && target.hasAttribute('data-output')) {
+    pending = { from: target.dataset.from, output: target.dataset.output, kind: target.dataset.kind, types: target.dataset.types.split(',').filter(Boolean) };
+    connect(drag.portData.input, drag.portData.port, drag.portData.kind, drag.portData.types.split(',').filter(Boolean));
+    return;
+  }
+  toast('Drop onto the opposite port type.');
+}
+function clickPort(port) {
+  if (port.hasAttribute('data-output')) {
+    pending = { from: port.dataset.from, output: port.dataset.output, kind: port.dataset.kind, types: port.dataset.types.split(',').filter(Boolean) };
+    renderGraph(); $('#hint').textContent = 'Now click a compatible input port · Escape to cancel';
+  } else if (port.hasAttribute('data-input')) {
+    connect(port.dataset.input, port.dataset.port, port.dataset.kind, port.dataset.types.split(',').filter(Boolean));
+  }
+}
+function startPortDrag(event, port) {
+  if (!ws() || event.button !== 0) return;
+  portDrag = {
+    origin: port.hasAttribute('data-output') ? 'output' : 'input',
+    portElement: port,
+    portData: { ...port.dataset },
+    pointerX: event.clientX,
+    pointerY: event.clientY,
+    moved: false
+  };
+  const viewport = $('#viewport');
+  viewport.setPointerCapture(event.pointerId);
+  const move = current => {
+    if (!portDrag) return;
+    const dx = current.clientX - event.clientX, dy = current.clientY - event.clientY;
+    if (!portDrag.moved && Math.hypot(dx, dy) < 8) return;
+    portDrag.moved = true; pending = null; portDrag.pointerX = current.clientX; portDrag.pointerY = current.clientY; renderWires();
+  };
+  const stop = current => {
+    viewport.removeEventListener('pointermove', move); viewport.removeEventListener('pointerup', stop); viewport.removeEventListener('pointercancel', cancel);
+    const drag = portDrag; portDrag = null; renderWires();
+    if (!drag || !current) return;
+    if (!drag.moved) { suppressPortClick = true; clickPort(drag.portElement); return; }
+    suppressPortClick = true;
+    const target = document.elementFromPoint(current.clientX, current.clientY)?.closest('[data-output], [data-input]');
+    finishPortDrag(drag, target);
+  };
+  const cancel = () => {
+    viewport.removeEventListener('pointermove', move); viewport.removeEventListener('pointerup', stop); viewport.removeEventListener('pointercancel', cancel);
+    portDrag = null; renderWires();
+  };
+  viewport.addEventListener('pointermove', move); viewport.addEventListener('pointerup', stop); viewport.addEventListener('pointercancel', cancel);
 }
 function deleteSelection() {
   if (!ws()) return;
@@ -219,12 +312,14 @@ $('#viewport').addEventListener('contextmenu', event => {
   else openPicker(event.clientX, event.clientY);
 });
 $('#viewport').addEventListener('click', event => {
+  if (suppressPortClick) { suppressPortClick = false; event.preventDefault(); return; }
   const output = event.target.closest('[data-output]'), input = event.target.closest('[data-input]'), edge = event.target.closest('[data-edge]');
-  if (output) { pending = { from: output.dataset.from, output: output.dataset.output, kind: output.dataset.kind, types: output.dataset.types.split(',').filter(Boolean) }; renderGraph(); $('#hint').textContent = 'Now click a compatible input port · Escape to cancel'; }
-  else if (input) connect(input.dataset.input, input.dataset.port, input.dataset.kind, input.dataset.types.split(',').filter(Boolean));
+  if (output || input) clickPort(output || input);
   else if (edge) { selectedEdge = edge.dataset.edge; selected = null; renderGraph(); }
 });
 $('#viewport').addEventListener('pointerdown', event => {
+  const port = event.target.closest('[data-output], [data-input]');
+  if (port && event.button === 0) { startPortDrag(event, port); return; }
   if (event.button !== 0 || event.target.closest('button,input,textarea,select,[data-edge]')) return;
   const node = event.target.closest('[data-node]'), block = node ? ws()?.blocks.find(item => item.id === node.dataset.node) : null;
   if (block) { selected = block.id; selectedEdge = null; document.querySelectorAll('.node').forEach(el => el.classList.toggle('selected', el.dataset.node === selected)); }

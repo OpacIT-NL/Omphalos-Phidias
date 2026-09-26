@@ -123,6 +123,7 @@ button.primary { min-height:32px;border:1px solid var(--accent);border-radius:5p
 #wires { position:absolute;inset:0;width:8000px;height:8000px;overflow:visible;pointer-events:none; }
 #wires path { fill:none;stroke:var(--wire-color,var(--accent));stroke-width:3;pointer-events:stroke;cursor:pointer;opacity:.9; }
 #wires path:hover,#wires path.selected { stroke-width:5;filter:drop-shadow(0 0 3px var(--accent)); }
+#wires path.dragging-wire { stroke-dasharray:6 5; opacity:.72; pointer-events:none; }
 #nodes { position:absolute;inset:0; }
 .canvas-empty { position:absolute;inset:0;display:grid;place-content:center;justify-items:center;gap:7px;color:var(--muted);pointer-events:none; }
 .canvas-empty>span { font-size:42px;line-height:1; }
@@ -142,14 +143,14 @@ button.primary { min-height:32px;border:1px solid var(--accent);border-radius:5p
 .block-icon { flex:none;color:var(--accent);font-size:16px; }
 .node-category { color:var(--muted);font-size:11px;white-space:nowrap; }
 .drag-grip { margin-left:auto;color:var(--muted);font-size:16px; }
-.node-body { --port-inset:24px;display:grid;grid-template-columns:minmax(0,1fr);gap:10px;min-height:80px;padding:11px var(--port-inset) 20px; }
+.node-body { --port-inset:24px;display:grid;grid-template-columns:minmax(0,1fr);gap:10px;min-height:max(80px,calc(var(--port-row-count,1) * 29px - 7px));padding:11px var(--port-inset) 20px; }
 .node-body.has-inputs.has-options.has-outputs { grid-template-columns:minmax(80px,105px) minmax(150px,1fr) minmax(80px,105px); }
 .node-body.has-inputs.has-options:not(.has-outputs) { grid-template-columns:minmax(90px,110px) minmax(170px,1fr); }
 .node-body.has-options.has-outputs:not(.has-inputs) { grid-template-columns:minmax(170px,1fr) minmax(90px,110px); }
 .node-body.has-inputs.has-outputs:not(.has-options) { grid-template-columns:1fr 1fr; }
-.port-column { display:flex;flex-direction:column;gap:7px;min-width:0; }
+.port-column { position:relative;align-self:stretch;min-width:0; }
 .port-column:empty { display:none; }
-.port-row { position:relative;min-height:22px;display:flex;align-items:center;color:var(--muted);font-size:12px;line-height:1.15; }
+.port-row { position:absolute;left:0;width:100%;min-height:22px;display:flex;align-items:center;color:var(--muted);font-size:12px;line-height:1.15; }
 .output-row { justify-content:flex-end;text-align:right; }
 .port-row span { overflow-wrap:anywhere; }
 .port { position:absolute;width:11px;height:11px;border:1px solid #ffffffcc;border-radius:50%;padding:0;background:var(--port-color);box-shadow:0 0 0 5px transparent; }
