@@ -3,7 +3,7 @@ module.exports = {
   description: 'Send the response to an incoming HTTP request. Connect Body to send text or JSON; otherwise the Body option is used.',
   inputPorts: [
     { id: 'action', name: 'Action', kind: 'action', types: [] },
-    { id: 'body', name: 'Body', kind: 'value', types: ['string', 'object', 'number', 'boolean', 'null'] }
+    { id: 'body', name: 'Body', kind: 'value', types: ['text', 'object', 'number', 'boolean', 'null'] }
   ],
   outputs: [], fields: [
     { key: 'status', label: 'Status code', type: 'number', default: 200, min: 200, max: 599 },

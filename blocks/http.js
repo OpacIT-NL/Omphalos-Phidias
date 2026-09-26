@@ -4,7 +4,7 @@ module.exports = {
   trigger: 'http', outputs: ['next'],
   outputPorts: [
     { id: 'next', name: 'Action', kind: 'action', types: [] },
-    { id: 'body', name: 'Body', kind: 'value', types: ['string', 'object'] }
+    { id: 'body', name: 'Body', kind: 'value', types: ['text', 'object'] }
   ],
   fields: [
     { key: 'method', label: 'Method', type: 'select', choices: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'], default: 'GET' },

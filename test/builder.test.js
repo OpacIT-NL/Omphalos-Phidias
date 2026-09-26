@@ -147,7 +147,20 @@ test('HTTP endpoint body output connects to HTTP response body input', async t =
     { id: 'action', from: 'http', output: 'next', to: 'response', input: 'action', kind: 'action' },
     { id: 'body', from: 'http', output: 'body', to: 'response', input: 'body', kind: 'value' }
   ];
-  const app = createApp({ document: project, definitions: store.definitions(project.id) });
+  const definitions = store.definitions(project.id);
+  assert.ok(definitions.get('http').outputPorts.find(port => port.id === 'body').types.includes('text'));
+  const merge = definitions.get('merge_texts');
+  const textInputDocument = {
+    version: 1, name: 'HTTP text compatibility', workspaces: [{ id: 'main', name: 'Main', active: true,
+      blocks: [
+        { id: 'http', type: 'http', x: 0, y: 0, options: { method: 'POST', path: '/text' } },
+        { id: 'merge', type: 'merge_texts', x: 0, y: 0, options: Object.fromEntries(merge.fields.map(field => [field.key, field.default])) }
+      ],
+      connections: [{ id: 'body', from: 'http', output: 'body', to: 'merge', input: 'text1', kind: 'value' }]
+    }]
+  };
+  assert.doesNotThrow(() => validate(textInputDocument, definitions));
+  const app = createApp({ document: project, definitions });
   const address = await app.start(0, '127.0.0.1'); t.after(() => app.stop());
   const base = `http://127.0.0.1:${address.port}/body`;
   const text = await fetch(base, { method: 'POST', headers: { 'content-type': 'text/plain' }, body: 'plain text' });
