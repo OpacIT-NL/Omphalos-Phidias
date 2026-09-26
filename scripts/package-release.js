@@ -36,8 +36,7 @@ async function main() {
   // from being included when this command is also run on an installed builder.
   for (const filename of ['server.js', 'package.json', 'package-lock.json', 'README.md', 'LICENSE', '.env.example']) await add(filename);
   for (const directory of ['blocks', 'lib', 'public', 'runtime', 'scripts', 'test']) await add(directory);
-  // Ship fresh defaults, never a server administrator's local configuration.
-  files.push(['config.json', JSON.stringify({ port: 3000, auth: { database: 'data/auth.sqlite', secureCookies: false } }, null, 2) + '\n']);
+  // config.json is generated on first launch; never overwrite it on upgrades.
   const archive = zip(files);
   const output = path.join(root, 'dist');
   await fs.mkdir(output, { recursive: true });

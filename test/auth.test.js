@@ -8,6 +8,7 @@ const crypto = require('node:crypto');
 const argon2 = require('argon2');
 const { Auth } = require('../lib/auth');
 const { createServer } = require('../server');
+const { createLogger } = require('../lib/logger');
 const password = 'correct horse battery staple';
 const request = token => ({ headers: { cookie: `sentinel_session=${token}` } });
 async function fixture(t) {
@@ -85,7 +86,7 @@ test('failed-login rate limits survive restart and expire', async t => {
 
 test('HTTP login rotates sessions, sets secure cookies, and returns retry guidance', async t => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'sentinel-auth-http-'));
-  const { server, auth } = await createServer({ directory: path.join(directory, 'projects'), authDatabase: path.join(directory, 'auth.sqlite'), secureCookies: true });
+  const { server, auth } = await createServer({ directory: path.join(directory, 'projects'), authDatabase: path.join(directory, 'auth.sqlite'), secureCookies: true, logger: createLogger({ level: 0, directory: path.join(directory, 'logs') }) });
   await auth.createUser('alice', password);
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(async () => { await new Promise(resolve => { server.close(resolve); server.closeAllConnections(); }); await fs.rm(directory, { recursive: true, force: true }); });

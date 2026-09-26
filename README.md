@@ -9,63 +9,135 @@ Inspired by the block/workspace/export approach of [Discord App Builder](https:/
 Requires **Node.js 22.13 or newer** (Node.js 24 recommended). The builder uses Node’s built-in SQLite module and the `argon2` package. There is no frontend build step.
 
 ```sh
-npm install
-npm run user:create
-npm start
+npm ci
+node server.js
 ```
 
-Set the builder's port in `config.json` beside `server.js`, then restart the builder:
+First launch generates `config.json` beside `server.js` with local defaults. **This file is machine-local: it is not tracked by Git or included in release ZIPs.** Subsequent launches preserve it, and extracting an updated release does not overwrite it. An existing invalid config produces an error rather than being replaced with defaults.
+
+In an interactive terminal, create your first account and save the configuration:
+
+```text
+Console$> enable
+Console#> conf t
+Config#> username admin
+Password (hidden):
+Confirm password (hidden):
+Config#> enable secret
+Password (hidden):
+Confirm password (hidden):
+Config#> exit
+Console#> copy run start
+```
+
+`username admin` creates the web-login account. `enable secret` sets a separate password for privileged console access. Neither password is echoed, logged, or accepted inline. There is no default enable password; until one is configured, `enable` enters privileged mode directly.
+
+Open `http://127.0.0.1:3000` and sign in with your web account. For remote access, use `host 0.0.0.0` in configuration mode and serve the builder through an **HTTPS reverse proxy**. Set `auth secure-cookies true` for HTTPS; use `false` only for local HTTP development. The builder does not terminate TLS itself.
+
+## Interactive console
+
+`help` or `?` lists commands available in the current mode. `do help` lists enabled-mode commands while in configuration mode.
+
+| Mode | Prompt | Entry / exit |
+| --- | --- | --- |
+| Disabled | `Console$> ` | Initial mode; `enable` or `en` enters enabled mode, prompting for the enable password if configured |
+| Enabled | `Console#> ` | `config terminal`, `configure terminal`, or `conf t` enters configuration mode; `disable`, `dis`, or `exit` returns to disabled mode |
+| Configuration | `Config#> ` | `exit` or `end` returns to enabled mode; `disable` or `dis` returns to disabled mode |
+
+Enabled commands:
+
+| Command | Purpose |
+| --- | --- |
+| `show run` / `show running-config` | Show the current running settings and unsaved-change status; secrets are redacted |
+| `show start` / `show startup-config` | Show settings saved in `config.json`; secrets are redacted |
+| `show users` | List running accounts and whether their changes are unsaved |
+| `show status` | Show the active listening address and unsaved-change status |
+| `show version` | Show the application version (also available in disabled mode) |
+| `copy run start` | Save running settings to `config.json` and pending account changes to SQLite |
+| `shutdown` / `exit server` | Stop the application; asks for confirmation if changes are unsaved |
+
+`copy running-config startup-config` is also accepted. Enabled commands require the `do` prefix in configuration mode, for example `do show users` or `do copy run start`. Ordinary `do show` and `do copy` commands keep configuration mode active; mode-changing commands such as `do disable` still change modes. `exit` alone never shuts down the server.
+
+Configuration commands:
+
+| Command | Purpose / timing |
+| --- | --- |
+| `host <IPv4-or-IPv6>` | Change the listening address immediately |
+| `port <1-65535>` | Change the listening port immediately |
+| `log-level <0-4>` | Change log filtering immediately |
+| `username <name>` | Create or reset an account using hidden password prompts |
+| `user create <name>` | Create a new account; rejects an existing username |
+| `user password <name>` | Reset an existing account’s password |
+| `user delete <name>` / `no username <name>` | Remove an account from the running configuration |
+| `enable secret` / `enable password` | Set the console enable password with hidden prompts |
+| `no enable secret` / `no enable password` | Remove the console enable password |
+| `auth secure-cookies <true-or-false>` | Change the flag on newly issued cookies immediately |
+| `projects-directory <path>` | Change project storage after saving and restarting |
+| `auth database <path>` | Change the SQLite database path after saving and restarting |
+
+Quote paths containing spaces, for example `projects-directory "project storage"`. Relative storage paths resolve beside `server.js`, not against the terminal’s working directory. Storage path commands do not move existing files: account saves still target the active database until restart. Move/copy your database while the server is stopped if you intend to keep those accounts at a new path.
+
+Host and port changes reconnect the listener. If binding fails, the server attempts to restore its previous address and leaves the running configuration unchanged. Host, port, storage, and logging settings now come from `config.json`; the builder no longer uses `HOST`, `PORT`, `PROJECTS_DIR`, or `--port` overrides. Exported automation applications retain their own independent environment settings.
+
+Changes affect the running server but **do not survive restart until `copy run start`**. Account password hashes stay in SQLite, not in `config.json`; unsaved account changes and sessions for those accounts are held in memory. Saving persists both settings and accounts. New or reset accounts can log in before saving, and resets/deletions revoke sessions immediately. Restarting without saving restores the previously saved accounts/settings; revoked sessions remain revoked. Browser project saves are independent and still persist using the editor’s Save button.
+
+Console enable passwords use Argon2id hashes in `config.json`. `show run` and `show start` hide those hashes. Three failed enable attempts temporarily block elevation for 30 seconds. Console access requires access to the server terminal and does not use the web account password.
+
+The console starts only when stdin and stdout are interactive terminals. Background/service launches still run the web server and use the saved configuration. Ctrl+C cancels a terminal command/password prompt (and leaves configuration mode when at its command prompt); use `shutdown` to stop interactively. Ctrl+D detaches the console without stopping the web server. SIGTERM still shuts down the server; unsaved changes are not automatically saved. Logs redraw the active prompt without exposing password input.
+
+## Startup configuration
+
+Generated defaults:
 
 ```json
 {
   "port": 3000,
+  "host": "127.0.0.1",
+  "log-level": 3,
+  "projects-directory": "projects",
   "auth": {
     "database": "data/auth.sqlite",
     "secureCookies": false
+  },
+  "console": {
+    "enablePasswordHash": null
   }
 }
 ```
 
-The port must be an integer from 1 to 65535. The builder reads this file regardless of the working directory; `PORT` and `--port` no longer configure the builder.
+Settings can also be edited while the server is stopped. Missing fields in older configurations receive defaults in memory and are written on the next `copy run start`. Keep the startup configuration, project directory, and authentication database on persistent storage and back them up. Run one builder process against a project directory. All accounts share project access; this is not a service with isolated user workspaces or roles.
 
-Open `http://127.0.0.1:3000` (or your chosen port). To serve it on a remote Node.js server:
+## Server logging
 
-```sh
-HOST=0.0.0.0 npm start
-```
+Use `log-level <0-4>` in configuration mode to change filtering immediately, then save with `copy run start`. Editing `"log-level"` in `config.json` takes effect on the next launch. The default is `3`.
 
-Sign in with the username and password you created. For remote access, serve the builder through an **HTTPS reverse proxy** and set `auth.secureCookies` to `true` in `config.json`. Keep it `false` only for local HTTP development. The builder does not terminate TLS itself. No forwarded headers are trusted to enable secure cookies.
+| Level | Messages included |
+| --- | --- |
+| `0` | Critical |
+| `1` | Critical, Error |
+| `2` | Critical, Error, Warning |
+| `3` | Critical, Error, Warning, Info |
+| `4` | Critical, Error, Warning, Info, Debug |
 
-| Setting | Default | Purpose |
-| --- | --- | --- |
-| `port` in `config.json` | `3000` | Builder listening port; restart after editing |
-| `HOST` | `127.0.0.1` | Builder listening interface |
-| `PROJECTS_DIR` | `projects/` beside `server.js` | Persistent project storage |
-| `auth.database` in `config.json` | `data/auth.sqlite` | SQLite account/session file, relative to the builder directory |
-| `auth.secureCookies` in `config.json` | `false` | Set to `true` when serving over HTTPS |
+Every enabled event is written to both the console and `logs/YYYY-MM-DD.log` beside `server.js`. Files append across restarts and switch automatically at midnight UTC. Entries include a UTC timestamp and severity; multiline errors are escaped into one log entry. Critical/Error/Warning go to stderr, and Info/Debug go to stdout. Console prompts and command replies are always shown, independently of log level.
 
-Keep `PROJECTS_DIR` on persistent storage and back it up. Run one builder process against a project directory; saves are serialized within that process and use atomic file replacement plus revision checks. This is a shared trusted editor, not a multi-tenant service with separate user permissions.
+Info records startup, shutdown, sign-in/sign-out, and project create/save/export activity. Warning records rejected requests, Error records unexpected request failures, and Debug records request paths, status codes, and durations. Startup failures and uncaught failures are Critical. Request bodies, query strings, authorization headers, cookies, and passwords are not included in request logs.
+
+The `logs/` directory is created automatically and excluded from Git and release ZIPs. Files are not automatically deleted; manage retention on your server. If a file write fails, the original console entry remains available along with a Critical diagnostic. These settings control the builder server; exported automations run independently.
 
 ## Accounts and login
 
-Run account-management commands in an interactive terminal on the server:
+Manage web accounts through the configuration console, then save with `copy run start`. Usernames are case-insensitive, 3–64 characters, and may contain letters, numbers, dots, underscores, and hyphens. Account and enable passwords must contain at least 12 characters and be at most 1,024 bytes; spaces are preserved.
 
-```sh
-npm run user:create
-npm run user:reset-password
-```
+There is no default web account or public registration endpoint. Web authentication is always required, even before any accounts exist. All accounts currently share access to every project. Account credentials are salted **Argon2id** hashes (64 MiB memory, 3 iterations, parallelism 1) using [node-argon2](https://github.com/ranisalt/node-argon2). Saved account credentials, hashed session tokens, CSRF tokens, expiration timestamps, and login-rate-limit counters live in SQLite. Passwords and raw session tokens are not persisted.
 
-Both commands prompt for a username and a hidden password, then require password confirmation. Passwords are not passed on the command line or stored in config. Usernames are case-insensitive, 3–64 characters, and may contain letters, numbers, dots, underscores, and hyphens. Passwords must contain at least 12 characters and be at most 1,024 bytes; spaces are preserved.
+Sessions use random 256-bit cookies with `HttpOnly`, `SameSite=Strict`, and `Secure` when configured. They expire after eight hours. Saved sessions survive builder restarts; sessions for unsaved accounts remain in memory until `copy run start`. Signing out revokes the current session; resetting or deleting an account revokes its sessions. State-changing authenticated API calls require the session’s `X-CSRF-Token`, and cross-origin writes are rejected.
 
-There is no default account or public registration endpoint. Authentication is always required, including when no accounts exist yet. The previous `BUILDER_TOKEN` / bearer-token login has been removed. All accounts currently share access to every project; accounts do not provide project isolation or roles.
+Sign-in attempts are limited to 10 per username and 20 per connection IP in 15 minutes, with at most two password verifications in flight per builder process. Limits persist across restarts. Behind a reverse proxy the IP limit applies to the proxy connection address; the builder ignores untrusted `X-Forwarded-For` headers. Missing accounts and incorrect passwords return the same login error.
 
-Credentials are stored as salted **Argon2id** hashes (64 MiB memory, 3 iterations, parallelism 1) using [node-argon2](https://github.com/ranisalt/node-argon2). The SQLite database also stores hashed session tokens, CSRF tokens, expiration timestamps, and login-rate-limit counters. Passwords and raw session tokens are not persisted. Database files are created with owner-only permissions on Unix and excluded from Git and project exports.
+For offline account recovery, `npm run user:create` and `npm run user:reset-password` remain available after the first launch. Run them with the server stopped: they update SQLite directly and do not participate in the running configuration. To recover a forgotten console enable password, stop the server, set `console.enablePasswordHash` to `null` in your local config, restart, and set a new enable secret from the console.
 
-Sessions use random 256-bit cookies with `HttpOnly`, `SameSite=Strict`, and `Secure` when configured. They expire after eight hours and survive builder restarts. Signing out revokes the current session; resetting a password revokes all sessions for that account. Every successful login issues a fresh session and revokes the browser's previous one. State-changing authenticated API calls require the session's `X-CSRF-Token`, and cross-origin writes are rejected.
-
-Sign-in attempts are limited to 10 per username and 20 per connection IP in 15 minutes, with at most two password verifications in flight per builder process. Limits persist across restarts. Behind a reverse proxy the IP limit applies to the proxy connection address, so users share that limit; the builder deliberately ignores untrusted `X-Forwarded-For` headers. Login failures use the same message for missing accounts and incorrect passwords.
-
-Back up the authentication database as well as projects. For a simple file backup, stop the builder and account commands first, then copy the database and any `-wal`/`-shm` files together. Keep the database on local persistent storage supported by SQLite WAL. Deleting it removes every account and session. Password recovery is through the server-side reset command above.
+Back up `config.json`, projects, and the authentication database. For a simple file backup, stop the builder and account commands, then copy SQLite’s database and any `-wal`/`-shm` files together. Keep it on local persistent storage supported by SQLite WAL. Deleting the database removes every saved account and session.
 
 ## Build an automation
 
@@ -193,15 +265,14 @@ All tag pushes trigger the workflow, but packaging requires a semantic version t
 
 The tag automatically sets the application version inside the ZIP: `v0.0.1` becomes `0.0.1` in `package.json` and both root version fields of `package-lock.json`. The login page, editor footer, and startup message read that version from `package.json`. Prerelease and build suffixes are preserved. Packaging stamps the archived files without modifying or committing the source checkout; local development displays the version in the local `package.json`.
 
-The ZIP contains the builder source, tests, account-management scripts, documentation, and fresh `config.json` defaults. It excludes installed dependencies, projects, accounts, and local environment files. Application files sit directly at the ZIP root, with no enclosing directory. Extract it into your chosen application directory, enter that directory, then run:
+The ZIP contains the builder source, tests, account-management scripts, and documentation. It excludes `config.json`, installed dependencies, projects, accounts, logs, and local environment files. First launch creates a startup configuration only if it is missing, so extracting a new ZIP over an installation preserves its configuration. Application files sit directly at the ZIP root, with no enclosing directory. Extract it into your chosen application directory, enter that directory, then run:
 
 ```sh
 npm ci
-npm run user:create
-npm start
+node server.js
 ```
 
-Configure `config.json` for your server, including secure cookies when using HTTPS. Existing installations should keep their own configuration, project storage, and authentication database when upgrading. Dependencies are installed on the destination server so Argon2 uses the correct platform binary.
+Use the console to create an account, configure the server, and save with `copy run start`, including secure cookies when using HTTPS. Existing installations should keep their own configuration, project storage, and authentication database when upgrading. Dependencies are installed on the destination server so Argon2 uses the correct platform binary.
 
 Build the same ZIP locally without publishing:
 
@@ -217,4 +288,4 @@ Output is written to the ignored `dist/` directory. On systems with `sha256sum`,
 npm test
 ```
 
-Tests cover salted Argon2id storage, session persistence/expiration/revocation, password reset, rate limiting, CSRF, protected routes, server persistence and conflicts, validation, ZIP contents, deployment in a separate Node process, HTTP workflows, condition branches, outbound requests, startup/interval triggers, and shutdown. The frontend is plain HTML/CSS/JavaScript under `public/`; `server.js` hosts both the UI and the API.
+Tests cover console modes and help, running/startup persistence, staged accounts, first-launch configuration, upgrade-safe packaging, cumulative log levels, file rotation, log privacy, salted Argon2id storage, session persistence/expiration/revocation, password reset, rate limiting, CSRF, protected routes, server persistence and conflicts, validation, ZIP contents, deployment in a separate Node process, HTTP workflows, condition branches, outbound requests, startup/interval triggers, and shutdown. The frontend is plain HTML/CSS/JavaScript under `public/`; `server.js` hosts both the UI and the API.

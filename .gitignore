@@ -149,3 +149,7 @@ vite.config.ts.timestamp-*
 /data/
 *.sqlite
 *.sqlite-*
+
+# Machine-local startup configuration (generated on first launch)
+/config.json
+/config.json.*.tmp

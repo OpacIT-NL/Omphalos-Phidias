@@ -7,13 +7,14 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { once } = require('node:events');
 const { createServer } = require('../server');
+const { createLogger } = require('../lib/logger');
 const { createApp, loadDefinitions, render } = require('../runtime/app');
 const { validate } = require('../runtime/validate');
 const { crc32 } = require('../lib/zip');
 
 async function fixture(t) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'sentinel-test-'));
-  const { server, store, auth } = await createServer({ directory, authDatabase: path.join(directory, 'auth.sqlite'), secureCookies: false });
+  const { server, store, auth } = await createServer({ directory, authDatabase: path.join(directory, 'auth.sqlite'), secureCookies: false, logger: createLogger({ level: 0, directory: path.join(directory, 'logs') }) });
   await auth.createUser('tester', 'a-test-password-12345');
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(async () => { await new Promise(resolve => { server.close(resolve); server.closeAllConnections(); }); await fs.rm(directory, { recursive: true, force: true }); });
