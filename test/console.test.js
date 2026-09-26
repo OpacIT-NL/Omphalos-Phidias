@@ -123,6 +123,20 @@ test('enable password authentication is rate limited and can be removed in confi
   await engine.execute('dis'); await engine.execute('enable'); assert.equal(engine.mode, 'enabled');
 });
 
+
+test('enable passwords have no length or complexity requirements', async t => {
+  const { engine, answers, config } = await fixture(t);
+  await engine.execute('enable'); await engine.execute('conf t');
+  answers.push('x', 'x'); await engine.execute('enable secret');
+  assert.equal(await argon2.verify(config.running.console.enablePasswordHash, 'x'), true);
+  await engine.execute('disable'); answers.push('x'); await engine.execute('enable');
+  assert.equal(engine.mode, 'enabled');
+  await engine.execute('conf t'); answers.push('', ''); await engine.execute('enable password');
+  assert.equal(await argon2.verify(config.running.console.enablePasswordHash, ''), true);
+  await engine.execute('disable'); answers.push(''); await engine.execute('enable');
+  assert.equal(engine.mode, 'enabled');
+});
+
 test('help and question-mark show the current mode, and do help lists enabled commands', async t => {
   const { engine, messages } = await fixture(t);
   await engine.execute('help'); assert.match(messages.at(-1), /enable/); assert.doesNotMatch(messages.at(-1), /copy run start/);

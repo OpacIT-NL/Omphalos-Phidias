@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="system">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -9,19 +9,16 @@
 </head>
 <body class="login-page">
   <main class="login-card">
-    <a class="brand" href="/login" aria-label="OpacIT Omphalos Phidias"><span class="logo">P</span><span>PHIDIAS <small>OpacIT Omphalos</small></span></a>
-    <div class="eyebrow">YOUR AUTOMATIONS, ONE PLACE</div>
-    <h1>Welcome back.</h1>
-    <p class="login-description">Sign in to build, manage, and export your automations.</p>
+    <a class="brand" href="/login" aria-label="OpacIT Omphalos Phidias"><span class="logo">P</span><span class="brand-copy"><strong>OpacIT Omphalos</strong><small>Phidias</small></span></a>
+    <h1>Sign in</h1>
     <form id="login-form" action="/api/login" method="post">
       <label class="field"><span>Username</span><input id="username" name="username" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="64" required autofocus></label>
       <div class="field"><label for="password" class="password-label">Password</label><div class="password-input"><input id="password" name="password" type="password" autocomplete="current-password" required><button type="button" id="toggle-password" aria-label="Show password" aria-pressed="false">Show</button></div></div>
       <p id="login-error" class="login-error" role="alert" aria-live="polite"></p>
       <button id="sign-in" class="primary" type="submit">Sign in</button>
     </form>
-    <p class="login-help">Need an account or a password reset?<br>Contact your server administrator.</p>
     <noscript><p>Enable JavaScript to sign in and use the workflow editor.</p></noscript>
   </main>
-  <p class="login-footer">OpacIT Omphalos <span>·</span> Phidias <span class="app-version">v{{APP_VERSION}}</span></p>
+  <p class="login-footer"><strong>OpacIT Omphalos</strong><span>Phidias <span class="app-version">v{{APP_VERSION}}</span></span></p>
 </body>
 </html>

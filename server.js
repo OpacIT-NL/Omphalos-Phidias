@@ -160,7 +160,10 @@ if (require.main === module) {
     await listen(application.server, config.host, config.port);
     logger.info('OpacIT Omphalos Phidias v%s: http://%s:%d', version, config.host.includes(':') ? `[${config.host}]` : config.host, config.port);
     for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => { shutdown(signal).catch(error => { critical('Shutdown failed', error); process.exit(1); }); });
-    if (process.stdin.isTTY && process.stdout.isTTY) {
+    // Process managers such as CubeCoders AMP expose their console through a
+    // pipe rather than a TTY. Readline supports both, so attach whenever stdin
+    // is available instead of requiring an interactive terminal.
+    if (process.stdin && !process.stdin.destroyed && process.stdin.readable !== false) {
       const { Terminal } = require('./lib/terminal');
       const { CommandConsole } = require('./lib/console');
       terminal = new Terminal();

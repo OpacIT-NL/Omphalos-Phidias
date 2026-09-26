@@ -31,23 +31,36 @@ function validate(document, definitions) {
       }
       nodes.set(block.id, block);
     }
-    const outgoing = new Map();
+    const outgoing = new Map(), incoming = new Set();
     for (const edge of ws.connections) {
       if (!edge || typeof edge.id !== 'string' || !safeID.test(edge.id) || edgeIDs.has(edge.id)) fail('Invalid or duplicate connection ID');
       edgeIDs.add(edge.id);
       const source = nodes.get(edge.from), target = nodes.get(edge.to);
-      if (!source || !target || !definitions.get(source.type).outputs.includes(edge.output) || definitions.get(target.type).trigger) fail('Invalid connection or port');
-      const key = `${edge.from}:${edge.output}`;
-      if (outgoing.has(key)) fail('Each output accepts one connection');
-      outgoing.set(key, edge.to);
+      if (!source || !target) fail('Invalid connection or port');
+      const sourceDef = definitions.get(source.type), targetDef = definitions.get(target.type);
+      const output = sourceDef.outputPorts.find(port => port.id === edge.output);
+      const inputID = edge.input || targetDef.inputPorts.find(port => port.kind === 'action')?.id;
+      const input = targetDef.inputPorts.find(port => port.id === inputID);
+      if (!output || !input || output.kind !== input.kind || (edge.kind && edge.kind !== output.kind)) fail('Invalid connection or incompatible port');
+      if (targetDef.trigger) fail('Trigger blocks cannot have incoming connections');
+      if (output.kind === 'value' && output.types.length && input.types.length &&
+          !output.types.includes('unspecified') && !input.types.includes('unspecified') &&
+          !output.types.some(type => input.types.includes(type))) fail('Connected value types are incompatible');
+      const outputKey = `${edge.from}:${edge.output}`;
+      const inputKey = `${edge.to}:${input.id}`;
+      if (input.kind === 'value' && incoming.has(inputKey)) fail('Each value input accepts one connection');
+      if (output.kind === 'action' && outgoing.has(outputKey)) fail('Each action output accepts one connection');
+      incoming.add(inputKey);
+      const targets = outgoing.get(outputKey) || [];
+      targets.push(edge.to); outgoing.set(outputKey, targets);
     }
     const visited = new Set(), visiting = new Set();
     function visit(id) {
       if (visiting.has(id)) fail('Loops are not supported; use an interval trigger');
       if (visited.has(id)) return;
       visiting.add(id);
-      for (const port of definitions.get(nodes.get(id).type).outputs) {
-        const next = outgoing.get(`${id}:${port}`); if (next) visit(next);
+      for (const port of definitions.get(nodes.get(id).type).outputPorts) {
+        for (const next of outgoing.get(`${id}:${port.id}`) || []) visit(next);
       }
       visiting.delete(id); visited.add(id);
     }

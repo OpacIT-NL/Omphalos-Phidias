@@ -1,3 +1,4 @@
+document.documentElement.dataset.theme = localStorage.getItem('phidias-theme') || 'system';
 'use strict';
 const form = document.querySelector('#login-form');
 const password = document.querySelector('#password');

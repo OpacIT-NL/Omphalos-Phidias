@@ -1,13 +1,86 @@
 <!doctype html>
-<html lang="en">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>OpacIT Omphalos Phidias</title><link rel="stylesheet" href="/style.css"><script src="/editor.js" defer></script></head>
+<html lang="en" data-theme="system">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OpacIT Omphalos Phidias</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/editor.js" defer></script>
+</head>
 <body>
-<header><a class="brand" href="/" aria-label="OpacIT Omphalos Phidias home"><span class="logo">P</span><span>PHIDIAS <small>OpacIT Omphalos</small></span></a><div class="project-picker"><label for="projects">PROJECT</label><select id="projects"><option value="">Select a project</option></select><button id="new-project" title="Create project">+</button></div><span id="save-state" role="status">Ready</span><button id="save" disabled>Save project</button><button id="export" class="primary" disabled>Export application ↗</button><span id="account-name"></span><a id="sign-in-again" href="/login" target="_blank" rel="noopener" hidden>Sign in again</a><button id="logout">Sign out</button></header>
-<div class="shell">
-<aside class="library"><div class="section-title">BLOCK LIBRARY <span id="block-count">0</span></div><input id="search" type="search" placeholder="Search blocks…" aria-label="Search blocks"><div id="library"></div><div class="library-footer"><span class="live-dot"></span> Node.js runtime<br><small>Independent. Portable. Yours.</small><br><span class="app-version">Phidias v{{APP_VERSION}}</span></div></aside>
-<main><div class="workspace-bar"><div id="tabs"></div><button id="add-workspace" title="Add workspace" disabled>+</button><button id="workspace-settings" title="Workspace settings" disabled>•••</button></div><div class="canvas-heading"><div><div class="eyebrow">WORKFLOW EDITOR</div><h1 id="project-title">Build something that runs itself.</h1></div><span class="badge" id="workspace-status">SERVER HOSTED</span></div><div id="viewport" tabindex="0" aria-label="Workflow canvas"><div id="world"><svg id="wires" width="1" height="1" aria-label="Workflow connections"></svg><div id="nodes"></div></div><div id="welcome"><div class="welcome-icon">⌘</div><h2>Your next automation starts here.</h2><p>Create a project, connect a few blocks,<br>and take your application anywhere.</p><button class="primary" id="welcome-create">Create your first project</button></div></div><div class="canvas-footer"><span id="hint">Drag the background to pan · Scroll to zoom · Click ports to connect</span><div><button id="zoom-out" aria-label="Zoom out">−</button><button id="reset-view">100%</button><button id="zoom-in" aria-label="Zoom in">+</button><button id="fit">Fit</button></div></div></main>
-<aside class="inspector"><div class="section-title">CONFIGURATION</div><div id="inspector"><div class="empty-inspector">Select a block<p>Configure its options and connect it to the next step.</p></div></div><div class="deploy-tip"><span>BUILT TO GO</span><h3>From canvas to server.</h3><p>Export a ZIP, extract it, and run <code>node app.js</code>.</p><p>Your blocks and workspaces travel with your app.</p></div></aside>
-</div>
-<div id="toast" role="alert" hidden></div>
-<dialog id="form-dialog"><form method="dialog"><h2 id="dialog-title"></h2><div id="dialog-fields"></div><p id="dialog-error" role="alert"></p><div class="dialog-actions"><button value="cancel" formnovalidate>Cancel</button><button id="dialog-submit" value="default" class="primary">Continue</button></div></form></dialog>
-</body></html>
+  <div class="app">
+    <header class="toolbar" aria-label="Application toolbar">
+      <span class="toolbar-brand" title="OpacIT Omphalos Phidias"><span class="toolbar-logo">P</span><span class="brand-copy"><strong>OpacIT Omphalos</strong><small>Phidias</small></span></span>
+      <span class="toolbar-divider"></span>
+      <button id="new-project" title="New project" aria-label="New project">＋</button>
+      <button id="show-home" title="Home" aria-label="Home">⌂</button>
+      <span class="toolbar-divider"></span>
+      <button id="save" title="Save project (Ctrl+S)" aria-label="Save project" disabled>▣</button>
+      <button id="add-block" title="Add block" aria-label="Add block" disabled>◇＋</button>
+      <button id="export" title="Export application" aria-label="Export application" disabled>⇩</button>
+      <span id="save-state" role="status">Ready</span>
+      <span class="toolbar-spacer"></span>
+      <a id="sign-in-again" href="/login" target="_blank" rel="noopener" hidden>Sign in again</a>
+      <button id="theme-toggle" title="Change appearance" aria-label="Change appearance">◐</button>
+      <span id="account-name"></span>
+      <button id="logout" title="Sign out" aria-label="Sign out">↪</button>
+    </header>
+
+    <div class="app-body">
+      <aside class="project-rail" aria-label="Projects">
+        <div id="project-list" class="project-list">
+          <button class="home-orb active" data-home title="Home" aria-label="Home">⌂</button>
+          <span class="project-list-divider"></span>
+          <div id="project-orbs"></div>
+        </div>
+        <div class="rail-actions"><button id="rail-new-project" title="New project" aria-label="New project">＋</button></div>
+      </aside>
+
+      <aside id="workspace-sidebar" class="workspace-sidebar empty">
+        <div class="sidebar-empty"><span class="sidebar-logo">P</span><span class="brand-copy"><strong>OpacIT Omphalos</strong><small>Phidias</small></span></div>
+        <div class="sidebar-project" hidden>
+          <header><div><strong id="project-title"></strong><span>Automation project</span></div><button id="workspace-settings" title="Project and workspace settings" disabled>•••</button></header>
+          <div class="workspace-groups">
+            <div class="category-row"><span>⌄</span><strong>WORKSPACES</strong><button id="add-workspace" title="Add workspace" disabled>＋</button></div>
+            <div id="workspace-list"></div>
+          </div>
+          <footer><span id="workspace-status">No workspace</span><br><span class="app-version">Phidias v{{APP_VERSION}}</span></footer>
+        </div>
+      </aside>
+
+      <section id="home-screen" class="home-screen">
+        <div class="home-content">
+          <header class="home-header"><div class="product-mark"><span>P</span><span class="brand-copy"><strong>OpacIT Omphalos</strong><small>Phidias</small></span></div><div class="home-actions"><button id="home-new-project" class="primary">＋ New project</button></div></header>
+          <div class="home-grid">
+            <section class="home-panel"><header><h2>Projects</h2><span id="project-count">0 projects</span></header><div id="recent-projects" class="recent-projects"></div></section>
+          </div>
+        </div>
+      </section>
+
+      <main id="editor" class="editor" hidden>
+        <div class="tabbar"><div id="tabs"></div></div>
+        <div class="canvas-wrap">
+          <div id="viewport" tabindex="0" aria-label="Workflow canvas">
+            <div id="world"><svg id="wires" width="1" height="1" aria-label="Workflow connections"></svg><div id="nodes"></div></div>
+            <div id="canvas-empty" class="canvas-empty" hidden><span>◇</span><strong>This workspace is empty</strong><small>Right-click anywhere to add a block</small><button id="empty-add-block" class="primary">Add block</button></div>
+          </div>
+          <div class="canvas-hint" id="hint">Right-click to add a block · Drag the background to pan · Scroll to zoom</div>
+          <div class="canvas-controls" aria-label="Canvas controls"><button id="zoom-in" aria-label="Zoom in">＋</button><button id="zoom-out" aria-label="Zoom out">−</button><button id="fit" aria-label="Fit view">⌗</button><button id="reset-view">100%</button></div>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <div id="picker-shade" class="picker-shade" hidden></div>
+  <section id="block-picker" class="block-picker" hidden aria-label="Add a block">
+    <label><span>⌕</span><input id="search" type="search" placeholder="Search blocks" autocomplete="off" aria-label="Search blocks"></label>
+    <div id="library"></div>
+  </section>
+
+  <div id="context-shade" class="context-shade" hidden></div>
+  <div id="context-menu" class="context-menu" hidden><button id="duplicate-node">⧉ <span>Duplicate block</span></button><button id="remove-selection" class="danger">× <span>Delete</span></button></div>
+  <div id="toast" role="alert" hidden></div>
+
+  <dialog id="form-dialog"><form method="dialog"><h2 id="dialog-title"></h2><div id="dialog-fields"></div><p id="dialog-error" role="alert"></p><div class="dialog-actions"><button value="cancel" formnovalidate>Cancel</button><button id="dialog-submit" value="default" class="primary">Continue</button></div></form></dialog>
+</body>
+</html>

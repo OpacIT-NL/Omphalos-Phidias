@@ -2,7 +2,7 @@
 
 **Phidias** is the visual automation builder in the **OpacIT Omphalos** suite, hosted by a Node.js server. Create projects, arrange and connect blocks, configure multiple workspaces, and export each project as an independent Node.js application.
 
-Inspired by the block/workspace/export approach of [Discord App Builder](https://github.com/Perfectly-Plural/Discord-App-Builder). This is a new implementation with a browser editor and HTTP API instead of Electron, and general automation triggers instead of Discord. It uses its own versioned workspace and block format; existing Discord App Builder blocks and project files are **not directly compatible**.
+Inspired by the block/workspace/export approach of [Discord App Builder](https://github.com/Perfectly-Plural/Discord-App-Builder). This implementation has a browser editor and HTTP API instead of Electron, and general automation triggers instead of Discord. Phidias accepts its native block format plus trusted Discord App Builder-style block modules through a compatibility runtime. Discord client objects are intentionally unavailable; imported general-purpose data, file, network, database, event, and utility blocks run as server automations.
 
 ## Start the builder
 
@@ -83,7 +83,7 @@ Changes affect the running server but **do not survive restart until `copy run s
 
 Console enable passwords use Argon2id hashes in `config.json`. `show run` and `show start` hide those hashes. Three failed enable attempts temporarily block elevation for 30 seconds. Console access requires access to the server terminal and does not use the web account password.
 
-The console starts only when stdin and stdout are interactive terminals. Background/service launches still run the web server and use the saved configuration. Ctrl+C cancels a terminal command/password prompt (and leaves configuration mode when at its command prompt); use `shutdown` to stop interactively. Ctrl+D detaches the console without stopping the web server. SIGTERM still shuts down the server; unsaved changes are not automatically saved. Logs redraw the active prompt without exposing password input.
+The console accepts both an interactive terminal and line-based redirected stdin from process managers such as CubeCoders AMP. AMP commands therefore use the same prompts and modes as a local terminal. When stdin is unavailable or closes, the console detaches while the web server keeps running. Ctrl+C cancels a local terminal command/password prompt (and leaves configuration mode when at its command prompt); use `shutdown` to stop interactively. Ctrl+D detaches the console without stopping the web server. SIGTERM still shuts down the server; unsaved changes are not automatically saved. Logs redraw the active prompt without exposing password input.
 
 ## Startup configuration
 
@@ -127,7 +127,7 @@ The `logs/` directory is created automatically and excluded from Git and release
 
 ## Accounts and login
 
-Manage web accounts through the configuration console, then save with `copy run start`. Usernames are case-insensitive, 3–64 characters, and may contain letters, numbers, dots, underscores, and hyphens. Account and enable passwords must contain at least 12 characters and be at most 1,024 bytes; spaces are preserved.
+Manage web accounts through the configuration console, then save with `copy run start`. Usernames are case-insensitive, 3–64 characters, and may contain letters, numbers, dots, underscores, and hyphens. Web-account passwords must contain at least 12 characters and be at most 1,024 bytes; spaces are preserved. Console enable passwords have no length or complexity requirements.
 
 There is no default web account or public registration endpoint. Web authentication is always required, even before any accounts exist. All accounts currently share access to every project. Account credentials are salted **Argon2id** hashes (64 MiB memory, 3 iterations, parallelism 1) using [node-argon2](https://github.com/ranisalt/node-argon2). Saved account credentials, hashed session tokens, CSRF tokens, expiration timestamps, and login-rate-limit counters live in SQLite. Passwords and raw session tokens are not persisted.
 
@@ -143,26 +143,27 @@ Back up `config.json`, projects, and the authentication database. For a simple f
 
 1. Create a project. It starts with `GET /hello` connected to an HTTP response.
 2. Click a block in the library or drag it onto the canvas.
-3. Click an output port, then another block's input port to connect them. Connecting an already used output replaces its wire.
+3. Click an output port, then a compatible input port. Green ports carry actions and gold ports carry values. Action outputs have one wire; value outputs can feed multiple blocks. Each value input accepts one wire.
 4. Select a block to edit its configuration. Drag blocks to position them; drag the background to pan, scroll to zoom, or use **Fit**.
 5. Select a block or connection and press Delete to remove it. Blocks also have duplicate/delete buttons in the configuration panel.
 6. Add workspaces with **+**. Use **•••** to rename the project/workspace or pause a workspace. All active workspaces run in the exported application.
 7. Click **Save project** or press Ctrl/Cmd+S. Changes are saved explicitly, not automatically; closing the page with unsaved changes prompts you.
 8. Click **Export application**. This saves edits and downloads a ZIP of the current saved project.
 
-Invalid graphs, unknown blocks, loops, invalid options, and duplicate active HTTP routes are rejected on save and export. Each output connects to one block; a block can receive multiple incoming connections. Execution follows action wires sequentially. Conditions have separate `true` and `false` outputs. Use timer triggers for recurring work.
+Invalid graphs, unknown blocks, incompatible value types, loops, invalid options, and duplicate active HTTP routes are rejected on save and export. Execution follows action wires; connected value blocks are evaluated when their values are needed. Branching blocks expose separate action outputs. Use timer triggers for recurring work.
 
 ## Deploy independently
 
 Extract an exported ZIP into a new directory on your target Node.js server:
 
 ```sh
+npm install
 PORT=9000 node app.js
-# Or:
+# Or, after npm install:
 PORT=9000 npm start
 ```
 
-No `npm install` is needed for the supplied blocks. Visit `http://localhost:9000/hello` for the starter workflow. The application defaults to port `3001` and host `0.0.0.0`; these settings are independent from the builder. Stop it with SIGINT or SIGTERM. Run it under your normal process manager or service manager for unattended hosting.
+`npm install` installs the FTP, SSH, and MySQL clients used by the imported network/database blocks. Visit `http://localhost:9000/hello` for the starter workflow. The application defaults to port `3001` and host `0.0.0.0`; these settings are independent from the builder. Stop it with SIGINT or SIGTERM. Run it under your normal process manager or service manager for unattended hosting.
 
 Each server-side project and exported ZIP contains:
 
@@ -171,12 +172,13 @@ projects/<project-id>/
 ├── app.js             # Standalone runtime
 ├── workspaces.json    # Project, workspaces, blocks, connections, positions
 ├── blocks/            # Executable block definitions
+├── legacy.js          # Discord App Builder block compatibility
 ├── validate.js        # Runtime graph validation
 ├── package.json
 └── README.md
 ```
 
-You can also copy the entire project folder directly. The builder never starts project workflows on its own server. Edits to a builder project do not update an already deployed copy: export and deploy again, then restart that application. Runtime and block files are copied when a project is created, so changes to the builder's templates do not silently change existing projects.
+You can also copy the entire project folder directly. The builder never starts project workflows on its own server. Edits to a builder project do not update an already deployed copy: export and deploy again, run `npm install` when dependencies change, then restart that application. Existing managed projects use the current bundled definitions in the editor and receive the current bundled runtime/blocks when exported; their stored project folders are not overwritten. Project-only custom block types remain available.
 
 ## Included blocks
 
@@ -191,6 +193,8 @@ You can also copy the entire project folder directly. The builder never starts p
 | Wait | Delays execution |
 | HTTP request | Calls an HTTP(S) URL, storing status and response body |
 | HTTP response | Sends a text or JSON response to the incoming request |
+
+The imported library additionally includes text/number/list/object manipulation, comparisons, dates, files/folders, console input, emitters/receivers, arbitrary JavaScript, API requests, FTP/FTPS, SSH, and MySQL blocks. Network and database credentials are stored in exported `workspaces.json` when entered directly, so prefer protected files or environment-oriented custom blocks for secrets.
 
 Text fields support templates such as:
 
@@ -209,7 +213,7 @@ Built-in execution limits: 1 MB incoming/outgoing HTTP bodies, 30-second outboun
 
 ## Add blocks
 
-Add a trusted CommonJS `.js` module to the builder's `blocks/` directory for future projects, or to `projects/<id>/blocks/` for an existing project. Restart the builder and reload the editor after changing block modules. Project-specific block files are included in exports. Block modules are executable server code and should only be installed by the server administrator.
+Add a trusted CommonJS `.js` module to the builder's `blocks/` directory to make it available to every managed project and export, or add a uniquely named/type module to `projects/<id>/blocks/` for one project. Restart the builder and reload the editor after changing block modules. Project-specific block files are included in exports. Block modules are executable server code and should only be installed by the server administrator.
 
 ```js
 // blocks/uppercase.js
