@@ -11,6 +11,7 @@ let portDrag = null, suppressPortClick = false;
 const nodeResizeObserver = new ResizeObserver(() => scheduleNodeGeometry());
 const ws = () => project?.workspaces.find(item => item.id === workspaceID);
 const def = type => definitions.find(item => item.type === type);
+const nodeWidth = block => (def(block.type)?.fields.length ? 500 : 300);
 const icons = { Triggers: '↗', Actions: '↳', Logic: '◇', Data: '≡' };
 const typeColors = { action: '#23a559', string: '#e67e22', number: '#168df0', boolean: '#d42ee7', object: '#6f42c1', array: '#e83e8c', unspecified: '#8b949e' };
 
@@ -127,7 +128,7 @@ function renderGraph() {
     const outputHTML = outputs.map(port => `<div class="port-row output-row" data-port-kind="${port.kind}" data-field-link="${escapeHTML(port.id)}"><span>${escapeHTML(port.name)}</span><button class="port ${pending?.from === block.id && pending.output === port.id ? 'pending' : ''}" style="--port-color:${portColor(port)}" data-output="${escapeHTML(port.id)}" data-from="${block.id}" data-kind="${port.kind}" data-types="${escapeHTML((port.types || []).join(','))}" aria-label="Connect ${escapeHTML(port.name)} output"></button></div>`).join('');
     const optionHTML = definition.fields.map(field => optionEditor(field, block.options[field.key])).join('');
     const classes = [inputs.length && 'has-inputs', definition.fields.length && 'has-options', outputs.length && 'has-outputs'].filter(Boolean).join(' ');
-    return `<article class="node ${selected === block.id ? 'selected' : ''}" data-node="${block.id}" style="left:${block.x}px;top:${block.y}px"><div class="node-head"><span class="block-icon">${icons[definition.category] || '□'}</span><strong>${escapeHTML(definition.name)}</strong><span class="node-category">[${escapeHTML(definition.category)}]</span><span class="drag-grip">⠿</span></div><div class="node-body ${classes}" style="--port-row-count:${Math.max(inputs.length, outputs.length, 1)}"><div class="port-column input-ports">${inputHTML}</div><div class="option-column">${optionHTML || (!inputs.length && !outputs.length ? `<p>${escapeHTML(definition.description)}</p>` : '')}</div><div class="port-column output-ports">${outputHTML}</div></div></article>`;
+    return `<article class="node ${selected === block.id ? 'selected' : ''}" data-node="${block.id}" style="left:${block.x}px;top:${block.y}px;width:${nodeWidth(block)}px"><div class="node-head"><span class="block-icon">${icons[definition.category] || '□'}</span><strong>${escapeHTML(definition.name)}</strong><span class="node-category">[${escapeHTML(definition.category)}]</span><span class="drag-grip">⠿</span></div><div class="node-body ${classes}" style="--port-row-count:${Math.max(inputs.length, outputs.length, 1)}"><div class="port-column input-ports">${inputHTML}</div><div class="option-column">${optionHTML || (!inputs.length && !outputs.length ? `<p>${escapeHTML(definition.description)}</p>` : '')}</div><div class="port-column output-ports">${outputHTML}</div></div></article>`;
   }).join('');
   $('#nodes').querySelectorAll('[data-field]').forEach(input => {
     input.addEventListener('input', () => {
@@ -237,7 +238,8 @@ function addBlock(type, position = pickerWorldPosition) {
   if (!ws()) return;
   const definition = def(type); if (!definition) return;
   const rect = $('#viewport').getBoundingClientRect();
-  const block = { id: uid(), type, x: Math.round(position?.x ?? (rect.width / 2 - view.x) / view.zoom - 190), y: Math.round(position?.y ?? (rect.height / 2 - view.y) / view.zoom - 80), options: Object.fromEntries(definition.fields.map(field => [field.key, field.default])) };
+  const width = definition.fields.length ? 500 : 300;
+  const block = { id: uid(), type, x: Math.round(position?.x ?? (rect.width / 2 - view.x) / view.zoom - width / 2), y: Math.round(position?.y ?? (rect.height / 2 - view.y) / view.zoom - 80), options: Object.fromEntries(definition.fields.map(field => [field.key, field.default])) };
   ws().blocks.push(block); selected = block.id; selectedEdge = null; markDirty(); closePicker(); renderGraph();
 }
 function connect(to, input, kind, types) {
@@ -263,7 +265,7 @@ function zoom(amount, x = $('#viewport').clientWidth / 2, y = $('#viewport').cli
 function fit() {
   if (!ws()?.blocks.length) { view = { x: 0, y: 60, zoom: 1 }; updateView(); return; }
   const blocks = ws().blocks, left = Math.min(...blocks.map(b => b.x)), top = Math.min(...blocks.map(b => b.y));
-  const width = Math.max(...blocks.map(b => b.x + 370)) - left, height = Math.max(...blocks.map(b => b.y + 300)) - top, viewport = $('#viewport');
+  const width = Math.max(...blocks.map(block => block.x + nodeWidth(block))) - left, height = Math.max(...blocks.map(b => b.y + 300)) - top, viewport = $('#viewport');
   view.zoom = Math.max(.25, Math.min(1, (viewport.clientWidth - 80) / width, (viewport.clientHeight - 100) / height));
   view.x = (viewport.clientWidth - width * view.zoom) / 2 - left * view.zoom; view.y = (viewport.clientHeight - height * view.zoom) / 2 - top * view.zoom; updateView();
 }
