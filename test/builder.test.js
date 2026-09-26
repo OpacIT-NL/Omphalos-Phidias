@@ -56,7 +56,7 @@ test('project creation, atomic saves, conflicts, reload, and downloadable ZIP', 
   const address = await new Promise((resolve, reject) => {
     const timeout = setTimeout(() => { child.kill(); reject(new Error('Export did not start')); }, 5000);
     let output = '';
-    child.stdout.on('data', chunk => { output += chunk; const match = output.match(/127\.0\.0\.1:(\d+)/); if (match) { clearTimeout(timeout); resolve(match[1]); } });
+    child.stdout.on('data', chunk => { output += chunk; const match = output.match(/My project listening on 127\.0\.0\.1:(\d+)/); if (match) { clearTimeout(timeout); resolve(match[1]); } });
     child.once('error', reject); child.stderr.on('data', chunk => { clearTimeout(timeout); reject(new Error(String(chunk))); });
   });
   const runtimeResponse = await fetch(`http://127.0.0.1:${address}/hello`); assert.equal(runtimeResponse.status, 200); assert.equal(await runtimeResponse.text(), 'Updated application');

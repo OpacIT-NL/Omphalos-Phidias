@@ -129,6 +129,7 @@ function createApp({ directory = __dirname, document, definitions, onError = con
   });
   server.requestTimeout = 65000;
   return {
+    name: document.name,
     server,
     async start(port = Number(process.env.PORT || 3001), host = process.env.HOST || '0.0.0.0') {
       if (started) throw new Error('Application already started');
@@ -165,7 +166,7 @@ function createApp({ directory = __dirname, document, definitions, onError = con
 }
 if (require.main === module) {
   const app = createApp();
-  app.start().then(address => console.log(`Phidias application listening on ${address.address}:${address.port}`)).catch(error => { console.error(error); process.exitCode = 1; });
+  app.start().then(address => console.log(`${app.name} listening on ${address.address}:${address.port}`)).catch(error => { console.error(error); process.exitCode = 1; });
   for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => app.stop().catch(console.error));
 }
 module.exports = { createApp, loadDefinitions, render, readBody };
