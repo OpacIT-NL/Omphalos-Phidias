@@ -45,6 +45,7 @@ test('console modes, privilege boundaries, aliases, do, and redacted configurati
   await engine.execute('dis'); assert.equal(engine.prompt, 'Console$> ');
   answers.push('incorrect'); await engine.execute('enable'); assert.equal(engine.mode, 'disabled');
   answers.push(password); await engine.execute('enable'); assert.equal(engine.mode, 'enabled');
+  assert.ok(messages.includes('Enter the enable password at the hidden prompt below.'));
   await engine.execute('config terminal'); await engine.execute('do show status'); assert.equal(engine.mode, 'config');
   await engine.execute('do disable'); assert.equal(engine.mode, 'disabled');
 });

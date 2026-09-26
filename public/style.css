@@ -158,6 +158,7 @@ button.primary { min-height:32px;border:1px solid var(--accent);border-radius:5p
 .input-row .port { left:calc(4px + var(--connector-edge-inset) - var(--port-inset)); }
 .output-row .port { right:calc(4px + var(--connector-edge-inset) - var(--port-inset)); }
 .option-column { min-width:0;display:flex;flex-direction:column;gap:8px; }
+.option-column:empty { display:none; }
 .option-column>p { margin:3px 0;color:var(--muted);font-size:11px;line-height:1.45; }
 .option-field { display:flex;flex-direction:column;gap:3px;font-size:11px;font-weight:600; }
 .option-field>span { min-height:20px;display:flex;align-items:center;line-height:1.15; }

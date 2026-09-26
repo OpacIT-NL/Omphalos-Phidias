@@ -149,6 +149,19 @@ test('HTTP endpoint body output connects to HTTP response body input', async t =
   ];
   const definitions = store.definitions(project.id);
   assert.ok(definitions.get('http').outputPorts.find(port => port.id === 'body').types.includes('text'));
+  const responseBodyTypes = definitions.get('respond').inputPorts.find(port => port.id === 'body').types;
+  assert.ok(responseBodyTypes.includes('list'));
+  assert.ok(responseBodyTypes.includes('object'));
+  const mergeLists = definitions.get('merge_lists');
+  assert.doesNotThrow(() => validate({
+    version: 1, name: 'HTTP list compatibility', workspaces: [{ id: 'main', name: 'Main', active: false,
+      blocks: [
+        { id: 'lists', type: 'merge_lists', x: 0, y: 0, options: Object.fromEntries(mergeLists.fields.map(field => [field.key, field.default])) },
+        { id: 'response', type: 'respond', x: 0, y: 0, options: { status: 200, body: 'fallback' } }
+      ],
+      connections: [{ id: 'body', from: 'lists', output: 'list', to: 'response', input: 'body', kind: 'value' }]
+    }]
+  }, definitions));
   const merge = definitions.get('merge_texts');
   const textInputDocument = {
     version: 1, name: 'HTTP text compatibility', workspaces: [{ id: 'main', name: 'Main', active: true,
