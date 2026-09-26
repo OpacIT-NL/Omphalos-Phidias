@@ -141,3 +141,11 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
+
+# Server-owned automation projects
+/projects/
+
+# Authentication database and SQLite journals
+/data/
+*.sqlite
+*.sqlite-*

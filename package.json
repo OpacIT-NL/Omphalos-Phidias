@@ -1,0 +1,19 @@
+{
+  "name": "opacit-omphalos-phidias",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Phidias, the server-hosted visual automation builder in the OpacIT Omphalos suite",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test",
+    "user:create": "node scripts/manage-user.js",
+    "user:reset-password": "node scripts/manage-user.js --reset"
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "license": "GPL-3.0-only",
+  "dependencies": {
+    "argon2": "^0.45.1"
+  }
+}
