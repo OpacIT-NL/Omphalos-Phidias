@@ -186,14 +186,14 @@ git push origin v0.1.0
 
 The workflow installs dependencies on Node.js 24, runs the test suite, and publishes a GitHub release with generated release notes and these assets:
 
-- `OpacIT-Omphalos-Phidias-v0.1.0.zip`
-- `OpacIT-Omphalos-Phidias-v0.1.0.zip.sha256`
+- `amp-release.zip`
+- `amp-release.zip.sha256`
 
-All tag pushes trigger the workflow, but packaging requires a semantic version tag such as `v0.0.1`, `0.0.1`, or `v1.0.0-rc.1`. Invalid version tags fail before publishing. Characters unsuitable for filenames are replaced with hyphens in asset names. The workflow uses GitHub's built-in `GITHUB_TOKEN` with `contents: write`; no additional secret is needed. Re-running a tag's workflow uploads/replaces its assets on the existing release (repositories with immutable releases must use a new tag instead).
+All tag pushes trigger the workflow, but packaging requires a semantic version tag such as `v0.0.1`, `0.0.1`, or `v1.0.0-rc.1`. Invalid version tags fail before publishing. The workflow uses GitHub's built-in `GITHUB_TOKEN` with `contents: write`; no additional secret is needed. Re-running a tag's workflow uploads/replaces its assets on the existing release (repositories with immutable releases must use a new tag instead).
 
 The tag automatically sets the application version inside the ZIP: `v0.0.1` becomes `0.0.1` in `package.json` and both root version fields of `package-lock.json`. The login page, editor footer, and startup message read that version from `package.json`. Prerelease and build suffixes are preserved. Packaging stamps the archived files without modifying or committing the source checkout; local development displays the version in the local `package.json`.
 
-The ZIP contains the builder source, tests, account-management scripts, documentation, and fresh `config.json` defaults. It excludes installed dependencies, projects, accounts, and local environment files. Extract it, enter its directory, then run:
+The ZIP contains the builder source, tests, account-management scripts, documentation, and fresh `config.json` defaults. It excludes installed dependencies, projects, accounts, and local environment files. Application files sit directly at the ZIP root, with no enclosing directory. Extract it into your chosen application directory, enter that directory, then run:
 
 ```sh
 npm ci
@@ -209,7 +209,7 @@ Build the same ZIP locally without publishing:
 node scripts/package-release.js v0.1.0
 ```
 
-Output is written to the ignored `dist/` directory. On systems with `sha256sum`, verify a downloaded ZIP using `sha256sum -c OpacIT-Omphalos-Phidias-v0.1.0.zip.sha256`.
+Output is written to the ignored `dist/` directory. On systems with `sha256sum`, verify a downloaded ZIP using `sha256sum -c amp-release.zip.sha256`.
 
 ## Development
 
