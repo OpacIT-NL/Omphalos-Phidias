@@ -140,28 +140,9 @@ function renderGraph() {
   $('#nodes').querySelectorAll('.node').forEach(node => nodeResizeObserver.observe(node));
   updateView(); scheduleNodeGeometry();
 }
-function alignPorts() {
-  $('#nodes').querySelectorAll('.node').forEach(node => {
-    const fields = new Map([...node.querySelectorAll('[data-option-field]')].map(field => [field.dataset.optionField, field]));
-    const hasValueInputs = node.querySelector('.input-ports .port-row[data-port-kind="value"]') !== null;
-    node.querySelectorAll('.port-column').forEach(column => {
-      let next = 0;
-      const columnTop = column.getBoundingClientRect().top;
-      column.querySelectorAll('.port-row').forEach(row => {
-        const field = row.dataset.portKind === 'value' ? fields.get(row.dataset.fieldLink) : null;
-        const control = field?.querySelector('[data-field]');
-        const controlBox = control?.getBoundingClientRect();
-        const alignToField = Boolean(controlBox) && !(column.classList.contains('output-ports') && hasValueInputs);
-        const top = alignToField ? (controlBox.top - columnTop) / view.zoom + control.offsetHeight / 2 - row.offsetHeight / 2 : next;
-        row.style.top = `${Math.max(0, Math.round(top))}px`;
-        next = Math.max(next + 29, top + row.offsetHeight + 7);
-      });
-    });
-  });
-}
 function scheduleNodeGeometry() {
   if (geometryFrame) return;
-  geometryFrame = requestAnimationFrame(() => { geometryFrame = 0; alignPorts(); renderWires(); });
+  geometryFrame = requestAnimationFrame(() => { geometryFrame = 0; renderWires(); });
 }
 function wirePath(a, b) {
   const curve = Math.max(60, Math.abs(b.x - a.x) * .5);
