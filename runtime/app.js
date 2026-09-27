@@ -10,7 +10,9 @@ const { parseCron, matchesCron } = require('./cron');
 
 function loadDefinitions(directory) {
   return new Map(fs.readdirSync(directory).filter(name => /^[a-z0-9_-]+\.js$/.test(name)).map(name => {
-    const definition = normalizeDefinition(require(path.join(directory, name)), name);
+    const filename = require.resolve(path.join(directory, name));
+    delete require.cache[filename];
+    const definition = normalizeDefinition(require(filename), name);
     return [definition.type, definition];
   }));
 }

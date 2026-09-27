@@ -11,6 +11,18 @@ const definitions = () => loadDefinitions(path.resolve(__dirname, '../blocks'));
 const block = (id, type, options, x = 0, y = 0) => ({ id, type, x, y, options });
 const edge = (id, from, output, to, input = 'action', kind = 'action') => ({ id, from, output, to, input, kind });
 
+test('block definitions reload from disk instead of using stale module metadata', async t => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'phidias-block-cache-'));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const filename = path.join(directory, 'changing.js');
+  await fs.writeFile(filename, "module.exports = { type: 'changing', name: 'Old', fields: [], outputs: [] };\n");
+  assert.equal(loadDefinitions(directory).get('changing').name, 'Old');
+  await fs.writeFile(filename, "module.exports = { type: 'changing', name: 'New', fields: [{ key: 'format', label: 'Format', type: 'select', choices: ['JSON', 'HTML'], default: 'JSON' }], outputs: [] };\n");
+  const reloaded = loadDefinitions(directory).get('changing');
+  assert.equal(reloaded.name, 'New');
+  assert.deepEqual(reloaded.fields[0].choices, ['JSON', 'HTML']);
+});
+
 test('every imported block loads with normalized fields and typed ports', () => {
   const library = definitions();
   assert.ok(library.has('linux_command'));

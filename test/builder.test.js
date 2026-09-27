@@ -44,6 +44,9 @@ test('project creation, atomic saves, conflicts, reload, and downloadable ZIP', 
   const { store, call, directory } = await fixture(t);
   const response = await call('/api/projects', 'POST', { name: 'My project' }); assert.equal(response.status, 201);
   const project = await response.json(), endpoint = `/api/projects/${project.id}`;
+  const library = await (await call(endpoint + '/blocks')).json();
+  const replyFormat = library.find(block => block.type === 'respond').fields.find(field => field.key === 'format');
+  assert.equal(replyFormat.default, 'JSON'); assert.ok(replyFormat.choices.includes('HTML'));
   for (const file of ['app.js', 'workspaces.json', 'blocks/api_endpoint.js', 'blocks/get_sub_endpoint_by_name.js', 'blocks/linux_command.js', 'validate.js', 'cron.js', 'package.json']) await fs.access(path.join(directory, project.id, file));
   assert.equal(project.appConfig, null);
   assert.equal(zipEntries(await store.export(project.id)).has('config.json'), false);
