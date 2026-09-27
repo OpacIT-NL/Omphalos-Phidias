@@ -24,7 +24,8 @@ module.exports = {
   fields: [
     { key: 'url', label: 'URL', type: 'text', default: 'https://example.com' },
     { key: 'method', label: 'Method', type: 'select', choices: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'], default: 'GET' },
-    { key: 'body', label: 'Body (JSON or text)', type: 'text', default: '' },
+    { key: 'format', label: 'Body format', type: 'select', choices: ['JSON', 'HTML', 'Text'], default: 'JSON' },
+    { key: 'body', label: 'Body (JSON, HTML, or text)', type: 'text', default: '' },
     { key: 'headers', label: 'Headers (JSON object)', type: 'text', default: '{}' },
     { key: 'variable', label: 'Result variable', type: 'text', default: 'result' }
   ],
@@ -34,7 +35,9 @@ module.exports = {
     const body = ctx.render(options.body);
     const headers = parseHeaders(Object.hasOwn(inputs, 'headers') ? inputs.headers : ctx.render(options.headers));
     const hasContentType = Object.keys(headers).some(name => name.toLowerCase() === 'content-type');
-    if (options.method !== 'GET' && body !== '' && !hasContentType) headers['content-type'] = 'application/json';
+    const format = options.format || 'JSON';
+    const contentTypes = { JSON: 'application/json', HTML: 'text/html; charset=utf-8', Text: 'text/plain; charset=utf-8' };
+    if (options.method !== 'GET' && body !== '' && !hasContentType) headers['content-type'] = contentTypes[format];
     const response = await fetch(url, {
       method: options.method,
       headers,

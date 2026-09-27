@@ -159,9 +159,13 @@ test('runtime HTTP payloads, variables, conditions, outbound requests and failur
   assert.equal(ctx.vars.result.status, 201);
   assert.deepEqual(ctx.vars.result.body, { name: 'Sentinel' });
   assert.match(ctx.vars.result.headers['content-type'], /^application\/json/);
-  let receivedAPIKey = '';
-  const upstream = require('node:http').createServer((request, response) => {
+  let receivedAPIKey = '', receivedContentType = '', receivedBody = '';
+  const upstream = require('node:http').createServer(async (request, response) => {
     receivedAPIKey = request.headers['x-api-key'];
+    receivedContentType = request.headers['content-type'] || '';
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    receivedBody = Buffer.concat(chunks).toString();
     response.setHeader('x-upstream-header', 'available');
     response.end('upstream response');
   });
@@ -173,6 +177,9 @@ test('runtime HTTP payloads, variables, conditions, outbound requests and failur
   assert.equal(receivedAPIKey, 'configured');
   assert.equal(ctx.vars.upstream.headers['x-upstream-header'], 'available');
   assert.equal(outputValues.headers['x-upstream-header'], 'available');
+  assert.equal(await requestBlock.execute(ctx, { method: 'POST', format: 'HTML', url: upstreamURL, body: '<main>Hello</main>', headers: '{}', variable: 'html' }), 'next');
+  assert.equal(receivedContentType, 'text/html; charset=utf-8');
+  assert.equal(receivedBody, '<main>Hello</main>');
   assert.equal(errors.length, 1);
 });
 
@@ -215,16 +222,23 @@ test('HTTP endpoint body output connects to HTTP response body input', async t =
     { id: 'http', type: 'http', x: 0, y: 0, options: { method: 'POST', path: '/body' } },
     { id: 'response', type: 'respond', x: 0, y: 0, options: { status: 200, body: 'fallback', headers: '{"x-response-header":"present"}' } },
     { id: 'headers-http', type: 'http', x: 0, y: 0, options: { method: 'GET', path: '/headers' } },
-    { id: 'headers-response', type: 'respond', x: 0, y: 0, options: { status: 200, body: 'fallback', headers: '{}' } }
+    { id: 'headers-response', type: 'respond', x: 0, y: 0, options: { status: 200, body: 'fallback', headers: '{}' } },
+    { id: 'html-http', type: 'http', x: 0, y: 0, options: { method: 'GET', path: '/html' } },
+    { id: 'html-response', type: 'respond', x: 0, y: 0, options: { status: 200, format: 'HTML', body: '<main>Hello from HTML</main>', headers: '{}' } }
   ];
   workspace.connections = [
     { id: 'action', from: 'http', output: 'next', to: 'response', input: 'action', kind: 'action' },
     { id: 'body', from: 'http', output: 'body', to: 'response', input: 'body', kind: 'value' },
     { id: 'headers-action', from: 'headers-http', output: 'next', to: 'headers-response', input: 'action', kind: 'action' },
-    { id: 'headers-value', from: 'headers-http', output: 'headers', to: 'headers-response', input: 'body', kind: 'value' }
+    { id: 'headers-value', from: 'headers-http', output: 'headers', to: 'headers-response', input: 'body', kind: 'value' },
+    { id: 'html-action', from: 'html-http', output: 'next', to: 'html-response', input: 'action', kind: 'action' }
   ];
   const definitions = store.definitions(project.id);
   assert.ok(definitions.get('http').outputPorts.find(port => port.id === 'body').types.includes('text'));
+  const replyFormat = definitions.get('respond').fields.find(field => field.key === 'format');
+  const callFormat = definitions.get('request').fields.find(field => field.key === 'format');
+  assert.equal(replyFormat.default, 'JSON'); assert.ok(replyFormat.choices.includes('HTML'));
+  assert.equal(callFormat.default, 'JSON'); assert.ok(callFormat.choices.includes('HTML'));
   const responseBodyTypes = definitions.get('respond').inputPorts.find(port => port.id === 'body').types;
   assert.ok(responseBodyTypes.includes('list'));
   assert.ok(responseBodyTypes.includes('object'));
@@ -263,6 +277,39 @@ test('HTTP endpoint body output connects to HTTP response body input', async t =
   const reflectedHeaders = await fetch(base.replace('/body', '/headers'), { headers: { 'x-client-header': 'received' } });
   assert.equal(reflectedHeaders.status, 200);
   assert.equal((await reflectedHeaders.json())['x-client-header'], 'received');
+  const html = await fetch(base.replace('/body', '/html'));
+  assert.equal(html.headers.get('content-type'), 'text/html; charset=utf-8');
+  assert.equal(await html.text(), '<main>Hello from HTML</main>');
+});
+
+test('JSON-to-HTML table block converts objects and connects to file content', async () => {
+  const block = require('../blocks/convert_json_to_html_table');
+  const html = block.convertJSONToHTMLTable(JSON.stringify([
+    { Name: 'Alice', Access: '<admin>', Details: { active: true } },
+    { Name: 'Bob', Age: 42 }
+  ]));
+  assert.match(html, /^<table>/);
+  assert.match(html, /<th>Name<\/th><th>Access<\/th><th>Details<\/th><th>Age<\/th>/);
+  assert.match(html, /<td>&lt;admin&gt;<\/td>/);
+  assert.match(html, /<td>{&quot;active&quot;:true}<\/td>/);
+  assert.match(html, /<td>Bob<\/td><td><\/td><td><\/td><td>42<\/td>/);
+  assert.equal(block.convertJSONToHTMLTable([]), '<table>\n  <tbody></tbody>\n</table>');
+  assert.throws(() => block.convertJSONToHTMLTable('{broken'), /valid JSON text/);
+  const outputs = {};
+  assert.equal(await block.execute({}, {}, { json: { Key: 'Value' } }, (id, value) => { outputs[id] = value; }), 'next');
+  assert.match(outputs.html, /<th>Key<\/th>/);
+  assert.match(outputs.html, /<td>Value<\/td>/);
+
+  const definitions = loadDefinitions(path.resolve(__dirname, '../blocks'));
+  const write = definitions.get('write_file');
+  assert.doesNotThrow(() => validate({ version: 1, name: 'HTML file', workspaces: [{
+    id: 'main', name: 'Main', active: false,
+    blocks: [
+      { id: 'table', type: 'convert_json_to_html_table', x: 0, y: 0, options: {} },
+      { id: 'file', type: 'write_file', x: 0, y: 0, options: Object.fromEntries(write.fields.map(field => [field.key, field.default])) }
+    ],
+    connections: [{ id: 'html-file', from: 'table', output: 'html', to: 'file', input: 'content', kind: 'value' }]
+  }] }, definitions));
 });
 
 test('Linux commands run as the automation user and expose success and error output', async t => {

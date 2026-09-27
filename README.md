@@ -193,9 +193,10 @@ You can also copy the entire project folder directly. The builder never starts p
 | Set variable | Stores a value for the current execution |
 | Condition | Compares values and takes the true/false branch |
 | Wait | Delays execution |
-| HTTP request | Calls an HTTP(S) URL with configured or connected headers, storing status, response headers, and body |
-| HTTP response | Sends a text or JSON response with configured or connected response headers |
+| HTTP request | Calls an HTTP(S) URL with JSON, HTML, or text request bodies and stores status, response headers, and body |
+| HTTP response | Sends JSON by default, with HTML and text available from the Reply format menu |
 | Linux command | Runs `/bin/sh -c` as the deployed automation's OS user and exposes stdout, stderr, and exit code |
+| Convert JSON to HTML Table | Converts JSON text, an object, or a list of objects into escaped HTML table markup |
 
 Cron expressions use `minute hour day-of-month month weekday`; lists, ranges, and steps such as `*/15 * * * *` are supported. Schedules use the deployed application server's local time.
 
@@ -212,7 +213,7 @@ Hello {{request.query.name}}
 
 An entire field containing one template preserves its value's type, so `{{request.body}}` can pass a JSON object to the response block. Embedded templates stringify objects. Templates only read own properties; they do not evaluate JavaScript. Environment variables come from the **deployed application**. Keep secrets there instead of in workspaces, which are included in exports.
 
-HTTP endpoints expose `request.method`, `request.path`, `request.endpoint`, `request.subpath`, `request.query`, `request.headers`, and `request.body`. A request uses the longest endpoint prefix that ends on a path-segment boundary: `/systems/vhins` matches `/systems`, while `/systematic` does not. An exact endpoint takes priority over a shorter prefix. **Get sub-endpoint by name** outputs the unmatched part with a leading slash (`/vhins` in this example), or `/` when the endpoint itself was requested. Body carries the request body as text or parsed JSON, while Headers exposes incoming headers as an object. HTTP request and response blocks accept configured JSON headers or connected header objects. JSON request bodies are parsed when Content-Type contains `application/json`. An endpoint without an executed response block returns 204. Unmatched routes return 404; workflow failures are logged and return 500 if no response was sent. Outbound non-2xx HTTP statuses are stored in the result for branching, rather than automatically thrown.
+HTTP endpoints expose `request.method`, `request.path`, `request.endpoint`, `request.subpath`, `request.query`, `request.headers`, and `request.body`. A request uses the longest endpoint prefix that ends on a path-segment boundary: `/systems/vhins` matches `/systems`, while `/systematic` does not. An exact endpoint takes priority over a shorter prefix. **Get sub-endpoint by name** outputs the unmatched part with a leading slash (`/vhins` in this example), or `/` when the endpoint itself was requested. Body carries the request body as text or parsed JSON, while Headers exposes incoming headers as an object. HTTP request and response blocks accept configured JSON headers or connected header objects. API Call offers JSON, HTML, and Text body formats; API Reply offers the same formats and defaults to JSON. JSON request bodies are parsed when Content-Type contains `application/json`. An endpoint without an executed response block returns 204. Unmatched routes return 404; workflow failures are logged and return 500 if no response was sent. Outbound non-2xx HTTP statuses are stored in the result for branching, rather than automatically thrown.
 
 Built-in execution limits: 1 MB incoming/outgoing HTTP bodies, 1 MB Linux-command output, 30-second outbound HTTP timeout, 60-second workflow deadline, 1,000 blocks per workspace. Variables are isolated to a run and held in memory. HTTP triggers are public application routes; add the authentication your deployment needs before exposing sensitive workflows. There is no durable job queue, persistent variables, retry policy, or in-builder execution console.
 
