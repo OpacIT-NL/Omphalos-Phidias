@@ -294,10 +294,23 @@ test('JSON-to-HTML table block converts objects and connects to file content', a
   assert.match(html, /^<table>/);
   assert.match(html, /<th>Name<\/th><th>Access<\/th><th>Details<\/th><th>Age<\/th>/);
   assert.match(html, /<td>&lt;admin&gt;<\/td>/);
-  assert.match(html, /<td>{&quot;active&quot;:true}<\/td>/);
+  assert.equal((html.match(/<table>/g) || []).length, 2);
+  assert.match(html, /<th>active<\/th>/);
+  assert.match(html, /<td>true<\/td>/);
   assert.match(html, /<td>Bob<\/td><td><\/td><td><\/td><td>42<\/td>/);
   assert.equal(block.convertJSONToHTMLTable([]), '<table>\n  <tbody></tbody>\n</table>');
+  const layered = block.convertJSONToHTMLTable({
+    System: 'vhins',
+    Services: [{ Name: 'API', Ports: [3001, 3002] }, { Name: '<Admin>' }]
+  });
+  assert.equal((layered.match(/<table>/g) || []).length, 3);
+  assert.match(layered, /<th>Services<\/th>/);
+  assert.match(layered, /<th>Name<\/th><th>Ports<\/th>/);
+  assert.match(layered, /<th>Value<\/th>/);
+  assert.match(layered, /<td>&lt;Admin&gt;<\/td>/);
   assert.throws(() => block.convertJSONToHTMLTable('{broken'), /valid JSON text/);
+  const circular = {}; circular.self = circular;
+  assert.throws(() => block.convertJSONToHTMLTable(circular), /circular objects/);
   const outputs = {};
   assert.equal(await block.execute({}, {}, { json: { Key: 'Value' } }, (id, value) => { outputs[id] = value; }), 'next');
   assert.match(outputs.html, /<th>Key<\/th>/);

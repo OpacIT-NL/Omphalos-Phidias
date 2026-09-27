@@ -196,7 +196,7 @@ You can also copy the entire project folder directly. The builder never starts p
 | HTTP request | Calls an HTTP(S) URL with JSON, HTML, or text request bodies and stores status, response headers, and body |
 | HTTP response | Sends JSON by default, with HTML and text available from the Reply format menu |
 | Linux command | Runs `/bin/sh -c` as the deployed automation's OS user and exposes stdout, stderr, and exit code |
-| Convert JSON to HTML Table | Converts JSON text, an object, or a list of objects into escaped HTML table markup |
+| Convert JSON to HTML Table | Converts layered JSON into escaped HTML tables, with nested objects and lists rendered as tables inside cells |
 
 Cron expressions use `minute hour day-of-month month weekday`; lists, ranges, and steps such as `*/15 * * * *` are supported. Schedules use the deployed application server's local time.
 
