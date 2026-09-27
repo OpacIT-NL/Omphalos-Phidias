@@ -50,7 +50,6 @@ function validate(document, definitions) {
       const inputID = edge.input || targetDef.inputPorts.find(port => port.kind === 'action')?.id;
       const input = targetDef.inputPorts.find(port => port.id === inputID);
       if (!output || !input || output.kind !== input.kind || (edge.kind && edge.kind !== output.kind)) fail('Invalid connection or incompatible port');
-      if (targetDef.trigger && !(targetDef.trigger === 'receiver' && input.kind === 'value')) fail('Trigger blocks cannot have incoming connections');
       if (output.kind === 'value' && output.types.length && input.types.length &&
           !output.types.includes('unspecified') && !input.types.includes('unspecified') &&
           !output.types.some(type => input.types.includes(type))) fail('Connected value types are incompatible');
