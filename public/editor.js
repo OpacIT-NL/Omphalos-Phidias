@@ -48,7 +48,7 @@ function renderProjects() {
 }
 async function refreshProjects() { projects = await api('/api/projects'); renderProjects(); return projects; }
 function setProjectControls(enabled) {
-  for (const selector of ['#export', '#add-workspace', '#workspace-settings', '#add-block']) $(selector).disabled = !enabled;
+  for (const selector of ['#export', '#app-settings', '#add-workspace', '#workspace-settings', '#add-block']) $(selector).disabled = !enabled;
   $('#save').disabled = !enabled || !dirty;
 }
 function showHome() {
@@ -330,6 +330,21 @@ $('#add-workspace').onclick = handle(async () => {
 $('#workspace-settings').onclick = handle(async () => {
   const values = await modal('Project and workspace', [{ name: 'project', label: 'Project name', value: project.name }, { name: 'name', label: 'Workspace name', value: ws().name }, { name: 'active', label: 'Run this workspace in the exported application', type: 'checkbox', value: ws().active }], 'Apply'); if (!values) return;
   project.name = values.project; ws().name = values.name; ws().active = values.active; markDirty(); render();
+});
+$('#app-settings').onclick = handle(async () => {
+  if (!project) return;
+  const current = project.appConfig || { port: 3001, host: '0.0.0.0' };
+  const values = await modal('Application settings', [
+    { name: 'port', label: 'Port', type: 'number', value: current.port },
+    { name: 'host', label: 'Host IP address', value: current.host }
+  ], 'Apply');
+  if (!values) return;
+  const port = Number(values.port);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Port must be an integer between 1 and 65535.');
+  if (!values.host) throw new Error('Enter a host IP address.');
+  project.appConfig = { port, host: values.host };
+  markDirty();
+  toast('Application settings will be included in the export after saving.');
 });
 for (const selector of ['#new-project', '#rail-new-project', '#home-new-project']) $(selector).onclick = handle(createProject);
 for (const selector of ['#show-home', '[data-home]']) $(selector).onclick = showHome;

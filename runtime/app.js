@@ -3,6 +3,7 @@ const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
 const readline = require('node:readline');
+const net = require('node:net');
 const { validate } = require('./validate');
 const { normalizeDefinition, executeLegacy } = require('./legacy');
 const { parseCron, matchesCron } = require('./cron');
@@ -48,6 +49,28 @@ function findRoute(routes, method, pathname) {
     if (!match || basePath.length > match.path.length) match = route;
   }
   return match;
+}
+const DEFAULT_APP_CONFIG = Object.freeze({ port: 3001, host: '0.0.0.0' });
+function validateAppConfig(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('config.json must contain an object');
+  if (!Number.isInteger(value.port) || value.port < 1 || value.port > 65535) throw new Error('config.json: port must be an integer between 1 and 65535');
+  if (typeof value.host !== 'string' || !net.isIP(value.host)) throw new Error('config.json: host must be an IPv4 or IPv6 address');
+  return { port: value.port, host: value.host };
+}
+function loadAppConfig(directory = __dirname) {
+  const filename = path.join(directory, 'config.json');
+  try {
+    fs.writeFileSync(filename, JSON.stringify(DEFAULT_APP_CONFIG, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
+  } catch (error) {
+    if (error.code !== 'EEXIST') throw error;
+  }
+  let value;
+  try { value = JSON.parse(fs.readFileSync(filename, 'utf8')); }
+  catch (error) {
+    if (error instanceof SyntaxError) throw new Error(`Invalid config.json: ${error.message}`);
+    throw error;
+  }
+  return validateAppConfig(value);
 }
 function createApp({ directory = __dirname, document, definitions, onError = console.error, clock = () => new Date() } = {}) {
   definitions ||= loadDefinitions(path.join(directory, 'blocks'));
@@ -158,8 +181,13 @@ function createApp({ directory = __dirname, document, definitions, onError = con
   return {
     name: document.name,
     server,
-    async start(port = Number(process.env.PORT || 3001), host = process.env.HOST || '0.0.0.0') {
+    async start(port, host) {
       if (started) throw new Error('Application already started');
+      if (port === undefined || host === undefined) {
+        const config = loadAppConfig(directory);
+        port ??= process.env.PORT === undefined ? config.port : Number(process.env.PORT);
+        host ??= process.env.HOST || config.host;
+      }
       await new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, host, () => { server.off('error', reject); resolve(); }); });
       started = true;
       for (const ws of document.workspaces.filter(ws => ws.active)) for (const block of ws.blocks) {
@@ -207,4 +235,4 @@ if (require.main === module) {
   app.start().then(address => console.log(`${app.name} listening on ${address.address}:${address.port}`)).catch(error => { console.error(error); process.exitCode = 1; });
   for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => app.stop().catch(console.error));
 }
-module.exports = { createApp, loadDefinitions, render, readBody, findRoute, normalizeRoutePath };
+module.exports = { createApp, loadDefinitions, render, readBody, findRoute, normalizeRoutePath, loadAppConfig, validateAppConfig };

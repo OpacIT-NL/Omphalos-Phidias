@@ -77,7 +77,7 @@ Configuration commands:
 
 Quote paths containing spaces, for example `projects-directory "project storage"`. Relative storage paths resolve beside `server.js`, not against the terminal’s working directory. Storage path commands do not move existing files: account saves still target the active database until restart. Move/copy your database while the server is stopped if you intend to keep those accounts at a new path.
 
-Host and port changes reconnect the listener. If binding fails, the server attempts to restore its previous address and leaves the running configuration unchanged. Host, port, storage, and logging settings now come from `config.json`; the builder no longer uses `HOST`, `PORT`, `PROJECTS_DIR`, or `--port` overrides. Exported automation applications retain their own independent environment settings.
+Host and port changes reconnect the listener. If binding fails, the server attempts to restore its previous address and leaves the running configuration unchanged. Host, port, storage, and logging settings now come from `config.json`; the builder no longer uses `HOST`, `PORT`, `PROJECTS_DIR`, or `--port` overrides. Exported automation applications use their own independent `config.json`, with optional `PORT` and `HOST` overrides.
 
 Changes affect the running server but **do not survive restart until `copy run start`**. Account password hashes stay in SQLite, not in `config.json`; unsaved account changes and sessions for those accounts are held in memory. Saving persists both settings and accounts. New or reset accounts can log in before saving, and resets/deletions revoke sessions immediately. Restarting without saving restores the previously saved accounts/settings; revoked sessions remain revoked. Browser project saves are independent and still persist using the editor’s Save button.
 
@@ -158,12 +158,12 @@ Extract an exported ZIP into a new directory on your target Node.js server:
 
 ```sh
 npm install
-PORT=9000 node app.js
+node app.js
 # Or, after npm install:
-PORT=9000 npm start
+npm start
 ```
 
-`npm install` installs the FTP, SSH, and MySQL clients used by the imported network/database blocks. Visit `http://localhost:9000/hello` for the starter workflow. The application defaults to port `3001` and host `0.0.0.0`; these settings are independent from the builder. Stop it with SIGINT or SIGTERM. Run it under your normal process manager or service manager for unattended hosting.
+`npm install` installs the FTP, SSH, and MySQL clients used by the imported network/database blocks. Visit `http://localhost:3001/hello` for the starter workflow. Use **Application settings** in the builder toolbar to set a project's host and port before exporting; its ZIP will contain a ready-to-use `config.json`. Without saved application settings, first launch creates `config.json` with port `3001` and host `0.0.0.0`. `PORT` and `HOST` remain optional process-level overrides. A pre-generated config is included in every later export for that project, so review it before extracting an update over an existing deployment. Stop it with SIGINT or SIGTERM. Run it under your normal process manager or service manager for unattended hosting.
 
 Each server-side project and exported ZIP contains:
 

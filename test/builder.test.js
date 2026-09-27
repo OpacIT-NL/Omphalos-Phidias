@@ -8,7 +8,7 @@ const { spawn } = require('node:child_process');
 const { once } = require('node:events');
 const { createServer } = require('../server');
 const { createLogger } = require('../lib/logger');
-const { createApp, loadDefinitions, render } = require('../runtime/app');
+const { createApp, loadDefinitions, render, loadAppConfig } = require('../runtime/app');
 const { validate } = require('../runtime/validate');
 const { crc32 } = require('../lib/zip');
 
@@ -27,12 +27,31 @@ async function fixture(t) {
   const call = (route, method = 'GET', body, extra = {}) => rawCall(route, method, body, { ...headers, ...extra });
   return { directory, store, auth, call, rawCall, headers, base };
 }
+function zipEntries(zip) {
+  const extracted = new Map(); let offset = 0;
+  while (zip.readUInt32LE(offset) === 0x04034b50) {
+    const length = zip.readUInt32LE(offset + 18), nameLength = zip.readUInt16LE(offset + 26), extraLength = zip.readUInt16LE(offset + 28);
+    const filename = zip.subarray(offset + 30, offset + 30 + nameLength).toString(), start = offset + 30 + nameLength + extraLength;
+    const contents = zip.subarray(start, start + length);
+    assert.equal(crc32(contents), zip.readUInt32LE(offset + 14));
+    extracted.set(filename, contents); offset = start + length;
+  }
+  assert.equal(zip.readUInt32LE(offset), 0x02014b50);
+  return extracted;
+}
 
 test('project creation, atomic saves, conflicts, reload, and downloadable ZIP', async t => {
   const { store, call, directory } = await fixture(t);
   const response = await call('/api/projects', 'POST', { name: 'My project' }); assert.equal(response.status, 201);
   const project = await response.json(), endpoint = `/api/projects/${project.id}`;
   for (const file of ['app.js', 'workspaces.json', 'blocks/api_endpoint.js', 'blocks/get_sub_endpoint_by_name.js', 'blocks/linux_command.js', 'validate.js', 'cron.js', 'package.json']) await fs.access(path.join(directory, project.id, file));
+  assert.equal(project.appConfig, null);
+  assert.equal(zipEntries(await store.export(project.id)).has('config.json'), false);
+  const probe = require('node:net').createServer();
+  await new Promise(resolve => probe.listen(0, '127.0.0.1', resolve));
+  const configuredPort = probe.address().port;
+  await new Promise(resolve => probe.close(resolve));
+  project.appConfig = { port: configuredPort, host: '127.0.0.1' };
   project.workspaces[0].blocks[1].options.body = 'Updated application';
   const results = await Promise.all([call(endpoint, 'PUT', project), call(endpoint, 'PUT', project)]);
   assert.deepEqual(results.map(res => res.status).sort(), [200, 409]);
@@ -41,19 +60,16 @@ test('project creation, atomic saves, conflicts, reload, and downloadable ZIP', 
   await fs.copyFile(path.join(directory, project.id, 'blocks/api_endpoint.js'), path.join(directory, project.id, 'blocks/http.js'));
   const archive = await call(endpoint + '/export'); assert.equal(archive.headers.get('content-type'), 'application/zip');
   const zip = Buffer.from(await archive.arrayBuffer());
-  const extracted = new Map(); let offset = 0;
-  while (zip.readUInt32LE(offset) === 0x04034b50) {
-    const length = zip.readUInt32LE(offset + 18), nameLength = zip.readUInt16LE(offset + 26), extraLength = zip.readUInt16LE(offset + 28);
-    const filename = zip.subarray(offset + 30, offset + 30 + nameLength).toString(), start = offset + 30 + nameLength + extraLength;
-    const contents = zip.subarray(start, start + length); assert.equal(crc32(contents), zip.readUInt32LE(offset + 14)); extracted.set(filename, contents); offset = start + length;
-  }
-  assert.equal(zip.readUInt32LE(offset), 0x02014b50);
+  const extracted = zipEntries(zip);
   assert.equal(JSON.parse(extracted.get('workspaces.json')).revision, 2);
   for (const name of ['api_endpoint.js', 'api_call.js', 'api_reply.js']) assert.ok(extracted.has(`blocks/${name}`));
   for (const name of ['http.js', 'request.js', 'respond.js']) assert.equal(extracted.has(`blocks/${name}`), false);
+  const deployedConfig = JSON.stringify({ port: configuredPort, host: '127.0.0.1' }, null, 2) + '\n';
+  assert.equal(extracted.get('config.json').toString(), deployedConfig);
   const deployment = path.join(directory, 'isolated-export'); await fs.mkdir(deployment);
   for (const [filename, data] of extracted) { const destination = path.join(deployment, filename); await fs.mkdir(path.dirname(destination), { recursive: true }); await fs.writeFile(destination, data); }
-  const child = spawn(process.execPath, ['app.js'], { cwd: deployment, env: { ...process.env, PORT: '0', HOST: '127.0.0.1' }, stdio: ['ignore', 'pipe', 'pipe'] });
+  const childEnvironment = { ...process.env }; delete childEnvironment.PORT; delete childEnvironment.HOST;
+  const child = spawn(process.execPath, ['app.js'], { cwd: deployment, env: childEnvironment, stdio: ['ignore', 'pipe', 'pipe'] });
   t.after(() => child.kill());
   const address = await new Promise((resolve, reject) => {
     const timeout = setTimeout(() => { child.kill(); reject(new Error('Export did not start')); }, 5000);
@@ -61,6 +77,8 @@ test('project creation, atomic saves, conflicts, reload, and downloadable ZIP', 
     child.stdout.on('data', chunk => { output += chunk; const match = output.match(/My project listening on 127\.0\.0\.1:(\d+)/); if (match) { clearTimeout(timeout); resolve(match[1]); } });
     child.once('error', reject); child.stderr.on('data', chunk => { clearTimeout(timeout); reject(new Error(String(chunk))); });
   });
+  assert.equal(Number(address), configuredPort);
+  assert.equal(await fs.readFile(path.join(deployment, 'config.json'), 'utf8'), deployedConfig);
   const runtimeResponse = await fetch(`http://127.0.0.1:${address}/hello`); assert.equal(runtimeResponse.status, 200); assert.equal(await runtimeResponse.text(), 'Updated application');
   const exited = once(child, 'exit'); child.kill('SIGTERM'); await exited;
 });
@@ -76,6 +94,8 @@ test('password login, protected routes, CSRF, logout, malformed requests and tra
   assert.equal(page.status, 303); assert.equal(page.headers.get('location'), '/login');
   assert.match(await (await fetch(base + '/login')).text(), /autocomplete="current-password"/);
   assert.equal((await call('/api/projects')).status, 200);
+  const editorPage = await fetch(base + '/', { headers: { cookie: headers.cookie } });
+  assert.match(await editorPage.text(), /id="app-settings"/);
   assert.equal((await rawCall('/api/projects', 'POST', { name: 'Denied' }, { cookie: headers.cookie })).status, 403);
   assert.equal((await call('/api/projects', 'POST', { name: 'Denied' }, { 'x-csrf-token': 'wrong' })).status, 403);
   assert.equal((await call('/api/projects', 'POST', { name: 'Denied' }, { origin: 'https://attacker.invalid' })).status, 403);
@@ -107,6 +127,8 @@ test('validation rejects dangling wires, duplicate routes, loops, and invalid op
   }, /Loops/);
   reject(ws => { ws.connections.push({ ...ws.connections[0], id: 'second' }); }, /one connection/);
   const paused = structuredClone(project.workspaces[0]); paused.id = 'paused'; paused.active = false; project.workspaces.push(paused); assert.doesNotThrow(() => validate(project, definitions));
+  const invalidPort = structuredClone(project); invalidPort.appConfig = { port: 70000, host: '127.0.0.1' }; await assert.rejects(store.save(project.id, invalidPort), /Application port/);
+  const invalidHost = structuredClone(project); invalidHost.appConfig = { port: 3001, host: 'localhost' }; await assert.rejects(store.save(project.id, invalidHost), /Application host/);
 });
 
 test('runtime HTTP payloads, variables, conditions, outbound requests and failures', async t => {
@@ -306,6 +328,19 @@ test('cron triggers follow five-field local schedules and reject invalid express
   const invalid = structuredClone(document); invalid.workspaces[0].blocks[0].options.expression = 'not cron';
   assert.throws(() => validate(invalid, definitions), /Cron expression/);
   await app.stop();
+});
+
+test('generated app config is created once, validated, and preserved', async t => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'phidias-app-config-'));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  assert.deepEqual(loadAppConfig(directory), { port: 3001, host: '0.0.0.0' });
+  const filename = path.join(directory, 'config.json');
+  const configured = JSON.stringify({ port: 4321, host: '127.0.0.1' }, null, 2) + '\n';
+  await fs.writeFile(filename, configured);
+  assert.deepEqual(loadAppConfig(directory), { port: 4321, host: '127.0.0.1' });
+  assert.equal(await fs.readFile(filename, 'utf8'), configured);
+  await fs.writeFile(filename, '{broken');
+  assert.throws(() => loadAppConfig(directory), /Invalid config.json/);
 });
 
 test('templates preserve objects and do not traverse prototypes or evaluate code', () => {
