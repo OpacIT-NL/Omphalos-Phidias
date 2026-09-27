@@ -83,6 +83,46 @@ test('imported value wires and action branches execute in an exported app', asyn
   assert.deepEqual(errors, []);
 });
 
+test('Receiver accepts a connected ID and only runs for a matching Emitter', async t => {
+  const library = definitions();
+  const document = {
+    version: 1,
+    name: 'Emitter and receiver',
+    workspaces: [{
+      id: 'main', name: 'Main', active: true,
+      blocks: [
+        block('http', 'http', { method: 'GET', path: '/emit' }),
+        block('matching-id', 'text', { text: 'systems' }),
+        block('wrong-id', 'text', { text: 'other' }),
+        block('payload', 'text', { text: 'receiver ran' }),
+        block('emitter', 'emitter', { restriction_type: 'current', search_type: 'number' }),
+        block('receiver', 'receiver', {}),
+        block('wrong-receiver', 'receiver', {}),
+        block('response', 'respond', { status: 200, body: 'missing receiver value' })
+      ],
+      connections: [
+        edge('a1', 'http', 'next', 'emitter'),
+        edge('v1', 'matching-id', 'text', 'emitter', 'id', 'value'),
+        edge('v2', 'payload', 'text', 'emitter', 'value1', 'value'),
+        edge('v3', 'matching-id', 'text', 'receiver', 'id', 'value'),
+        edge('v4', 'wrong-id', 'text', 'wrong-receiver', 'id', 'value'),
+        edge('a2', 'receiver', 'action', 'response'),
+        edge('v5', 'receiver', 'value1', 'response', 'body', 'value')
+      ]
+    }]
+  };
+  assert.doesNotThrow(() => validate(structuredClone(document), library));
+  const errors = [];
+  const app = createApp({ document, definitions: library, onError: error => errors.push(error) });
+  const address = await app.start(0, '127.0.0.1');
+  t.after(() => app.stop());
+  const response = await fetch(`http://127.0.0.1:${address.port}/emit`);
+  const responseBody = await response.text();
+  assert.equal(response.status, 200, `${responseBody}: ${errors.map(error => error.stack || error.message).join(' | ')}`);
+  assert.equal(responseBody, 'receiver ran');
+  assert.deepEqual(errors, []);
+});
+
 test('imported write and read file blocks await action flow and expose output values', async t => {
   const folder = await fs.mkdtemp(path.join(os.tmpdir(), 'phidias-imported-'));
   const file = path.join(folder, 'nested', 'value.txt');

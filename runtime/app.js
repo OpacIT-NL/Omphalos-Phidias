@@ -117,6 +117,7 @@ function createApp({ directory = __dirname, document, definitions, onError = con
         const edge = incoming(block, input.id);
         if (edge) inputs[input.id] = await outputValue(edge, nextStack);
       }
+      if (def.trigger === 'receiver' && seed.receiverID !== undefined && String(inputs.id ?? block.options.id ?? '') !== String(seed.receiverID)) return;
       const follow = async output => {
         const edge = ws.connections.find(item => item.from === block.id && item.output === output && (item.kind || 'action') === 'action');
         if (edge) await executeBlock(nodes.get(edge.to), edge.input || 'action');
@@ -145,9 +146,7 @@ function createApp({ directory = __dirname, document, definitions, onError = con
       const tasks = [];
       for (const targetWorkspace of workspaces) {
         for (const receiver of targetWorkspace.blocks.filter(block => ['receiver', 'receiver_8x'].includes(block.type))) {
-          if (String(context.render(receiver.options.id ?? '')) === id) {
-            tasks.push(run(targetWorkspace, receiver, null, null, { legacyValues: details.values || [] }));
-          }
+          tasks.push(run(targetWorkspace, receiver, request, response, { receiverID: id, legacyValues: details.values || [] }));
         }
       }
       await Promise.all(tasks);
