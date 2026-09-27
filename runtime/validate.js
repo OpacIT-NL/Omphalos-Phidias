@@ -1,6 +1,7 @@
 'use strict';
 const safeID = /^[a-zA-Z0-9_-]{1,80}$/;
 const { parseCron } = require('./cron');
+const normalizeRoutePath = value => value.replace(/\/+$/, '') || '/';
 function validate(document, definitions) {
   const fail = message => { throw Object.assign(new Error(message), { status: 400 }); };
   if (!document || document.version !== 1 || typeof document.name !== 'string' || !document.name.trim() || document.name.length > 100) fail('Invalid project name or format version');
@@ -18,6 +19,7 @@ function validate(document, definitions) {
       if (!def) fail(`Unknown block: ${block.type}`);
       if (!Number.isFinite(block.x) || !Number.isFinite(block.y) || !block.options || typeof block.options !== 'object' || Array.isArray(block.options)) fail('Invalid block position or options');
       for (const field of def.fields) {
+        if (!Object.hasOwn(block.options, field.key) && field.default !== undefined) block.options[field.key] = structuredClone(field.default);
         const value = block.options[field.key];
         if (field.type === 'number') {
           if (typeof value !== 'number' || !Number.isFinite(value) || value < field.min || value > field.max || (block.type === 'respond' && !Number.isInteger(value))) fail(`Invalid ${def.name}: ${field.label}`);
@@ -26,7 +28,7 @@ function validate(document, definitions) {
       if (['set', 'request'].includes(block.type) && !/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(block.options.name ?? block.options.variable)) fail('Invalid variable name');
       if (block.type === 'http') {
         if (!/^\/[^?#\s]*$/.test(block.options.path)) fail('HTTP path must start with / and contain no query or whitespace');
-        const route = `${block.options.method} ${block.options.path}`;
+        const route = `${block.options.method} ${normalizeRoutePath(block.options.path)}`;
         if (ws.active && routes.has(route)) fail(`Duplicate HTTP endpoint: ${route}`);
         if (ws.active) routes.add(route);
       }

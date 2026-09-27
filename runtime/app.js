@@ -36,12 +36,25 @@ async function readBody(request) {
   }
   return text;
 }
+function normalizeRoutePath(value) {
+  return value.replace(/\/+$/, '') || '/';
+}
+function findRoute(routes, method, pathname) {
+  let match = null;
+  for (const route of routes) {
+    if (route.method !== method) continue;
+    const basePath = route.path;
+    if (pathname !== basePath && !(basePath === '/' ? pathname.startsWith('/') : pathname.startsWith(basePath + '/'))) continue;
+    if (!match || basePath.length > match.path.length) match = route;
+  }
+  return match;
+}
 function createApp({ directory = __dirname, document, definitions, onError = console.error, clock = () => new Date() } = {}) {
   definitions ||= loadDefinitions(path.join(directory, 'blocks'));
   for (const [type, definition] of definitions) definitions.set(type, normalizeDefinition(definition, `${type}.js`));
   document ||= JSON.parse(fs.readFileSync(path.join(directory, 'workspaces.json'), 'utf8'));
   validate(document, definitions);
-  const controller = new AbortController(), timers = [], stdinListeners = [], activeRuns = new Set(), routes = new Map();
+  const controller = new AbortController(), timers = [], stdinListeners = [], activeRuns = new Set(), routes = [];
   const shared = Object.create(null);
   let started = false, stdinInterface = null;
   for (const definition of definitions.values()) {
@@ -83,13 +96,22 @@ function createApp({ directory = __dirname, document, definitions, onError = con
         const edge = ws.connections.find(item => item.from === block.id && item.output === output && (item.kind || 'action') === 'action');
         if (edge) await executeBlock(nodes.get(edge.to), edge.input || 'action');
       };
+      const setOutput = (id, value) => {
+        context.values.set(block.id + ':' + id, value);
+        context.vars[block.id] ||= Object.create(null);
+        context.vars[block.id][id] = value;
+        context.vars[id] = value;
+      };
       if (def.legacy) {
         if (actionInput === null && context.evaluated.has(block.id)) return;
         await executeLegacy(def, context, block, inputs, follow);
         context.evaluated.add(block.id);
       } else {
-        if (def.trigger === 'http') context.values.set(block.id + ':body', request?.body ?? '');
-        const output = def.trigger ? 'next' : await def.execute(context, block.options, inputs);
+        if (def.trigger === 'http') {
+          setOutput('body', request?.body ?? '');
+          setOutput('headers', request?.headers ?? {});
+        }
+        const output = def.trigger ? 'next' : await def.execute(context, block.options, inputs, setOutput);
         if (output) await follow(output);
       }
     }
@@ -112,16 +134,19 @@ function createApp({ directory = __dirname, document, definitions, onError = con
     activeRuns.add(promise); promise.then(() => activeRuns.delete(promise), () => activeRuns.delete(promise)); return promise;
   }
   for (const ws of document.workspaces.filter(ws => ws.active)) {
-    for (const block of ws.blocks.filter(block => block.type === 'http')) routes.set(`${block.options.method} ${block.options.path}`, { ws, block });
+    for (const block of ws.blocks.filter(block => block.type === 'http')) {
+      routes.push({ method: block.options.method, path: normalizeRoutePath(block.options.path), ws, block });
+    }
   }
   const server = http.createServer(async (req, res) => {
     const deadline = setTimeout(() => { if (!res.writableEnded) { res.writeHead(504); res.end('Workflow timed out'); } }, 60000);
     res.on('close', () => clearTimeout(deadline));
     try {
       const url = new URL(req.url, 'http://localhost');
-      const route = routes.get(`${req.method} ${url.pathname}`);
+      const route = findRoute(routes, req.method, url.pathname);
       if (!route) { res.writeHead(404); res.end('Not found'); return; }
-      const request = { method: req.method, path: url.pathname, query: Object.fromEntries(url.searchParams), headers: req.headers, body: await readBody(req) };
+      const subpath = route.path === '/' ? url.pathname : url.pathname.slice(route.path.length) || '/';
+      const request = { method: req.method, path: url.pathname, endpoint: route.path, subpath, query: Object.fromEntries(url.searchParams), headers: req.headers, body: await readBody(req) };
       await track(run(route.ws, route.block, request, res));
       if (!res.writableEnded) { res.writeHead(204); res.end(); }
     } catch (error) {
@@ -182,4 +207,4 @@ if (require.main === module) {
   app.start().then(address => console.log(`${app.name} listening on ${address.address}:${address.port}`)).catch(error => { console.error(error); process.exitCode = 1; });
   for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => app.stop().catch(console.error));
 }
-module.exports = { createApp, loadDefinitions, render, readBody };
+module.exports = { createApp, loadDefinitions, render, readBody, findRoute, normalizeRoutePath };

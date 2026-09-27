@@ -32,12 +32,13 @@ test('project creation, atomic saves, conflicts, reload, and downloadable ZIP', 
   const { store, call, directory } = await fixture(t);
   const response = await call('/api/projects', 'POST', { name: 'My project' }); assert.equal(response.status, 201);
   const project = await response.json(), endpoint = `/api/projects/${project.id}`;
-  for (const file of ['app.js', 'workspaces.json', 'blocks/http.js', 'validate.js', 'cron.js', 'package.json']) await fs.access(path.join(directory, project.id, file));
+  for (const file of ['app.js', 'workspaces.json', 'blocks/api_endpoint.js', 'blocks/get_sub_endpoint_by_name.js', 'blocks/linux_command.js', 'validate.js', 'cron.js', 'package.json']) await fs.access(path.join(directory, project.id, file));
   project.workspaces[0].blocks[1].options.body = 'Updated application';
   const results = await Promise.all([call(endpoint, 'PUT', project), call(endpoint, 'PUT', project)]);
   assert.deepEqual(results.map(res => res.status).sort(), [200, 409]);
   const stored = await store.get(project.id); assert.equal(stored.revision, 2); assert.equal(stored.workspaces[0].blocks[1].options.body, 'Updated application');
   assert.equal((await (await call('/api/projects')).json()).length, 1);
+  await fs.copyFile(path.join(directory, project.id, 'blocks/api_endpoint.js'), path.join(directory, project.id, 'blocks/http.js'));
   const archive = await call(endpoint + '/export'); assert.equal(archive.headers.get('content-type'), 'application/zip');
   const zip = Buffer.from(await archive.arrayBuffer());
   const extracted = new Map(); let offset = 0;
@@ -48,7 +49,8 @@ test('project creation, atomic saves, conflicts, reload, and downloadable ZIP', 
   }
   assert.equal(zip.readUInt32LE(offset), 0x02014b50);
   assert.equal(JSON.parse(extracted.get('workspaces.json')).revision, 2);
-  assert.ok(extracted.has('blocks/respond.js'));
+  for (const name of ['api_endpoint.js', 'api_call.js', 'api_reply.js']) assert.ok(extracted.has(`blocks/${name}`));
+  for (const name of ['http.js', 'request.js', 'respond.js']) assert.equal(extracted.has(`blocks/${name}`), false);
   const deployment = path.join(directory, 'isolated-export'); await fs.mkdir(deployment);
   for (const [filename, data] of extracted) { const destination = path.join(deployment, filename); await fs.mkdir(path.dirname(destination), { recursive: true }); await fs.writeFile(destination, data); }
   const child = spawn(process.execPath, ['app.js'], { cwd: deployment, env: { ...process.env, PORT: '0', HOST: '127.0.0.1' }, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -129,11 +131,59 @@ test('runtime HTTP payloads, variables, conditions, outbound requests and failur
   assert.equal((await fetch(base + '/echo', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })).status, 400);
   assert.equal((await fetch(base + '/unknown')).status, 404);
   assert.equal((await fetch(base + '/echo', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{bad' })).status, 400);
-  const requestBlock = require('../blocks/request');
+  const requestBlock = require('../blocks/api_call');
   const ctx = { vars: {}, render: value => value, signal: new AbortController().signal };
-  assert.equal(await requestBlock.execute(ctx, { method: 'POST', url: base + '/echo', body: '{"name":"Sentinel"}', variable: 'result' }), 'next');
-  assert.deepEqual(ctx.vars.result, { status: 201, body: { name: 'Sentinel' } });
+  assert.equal(await requestBlock.execute(ctx, { method: 'POST', url: base + '/echo', body: '{"name":"Sentinel"}', headers: '{}', variable: 'result' }), 'next');
+  assert.equal(ctx.vars.result.status, 201);
+  assert.deepEqual(ctx.vars.result.body, { name: 'Sentinel' });
+  assert.match(ctx.vars.result.headers['content-type'], /^application\/json/);
+  let receivedAPIKey = '';
+  const upstream = require('node:http').createServer((request, response) => {
+    receivedAPIKey = request.headers['x-api-key'];
+    response.setHeader('x-upstream-header', 'available');
+    response.end('upstream response');
+  });
+  await new Promise(resolve => upstream.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => { upstream.close(resolve); upstream.closeAllConnections(); }));
+  const outputValues = {};
+  const upstreamURL = 'http://127.0.0.1:' + upstream.address().port;
+  assert.equal(await requestBlock.execute(ctx, { method: 'GET', url: upstreamURL, body: '', headers: '{"x-api-key":"configured"}', variable: 'upstream' }, {}, (id, value) => { outputValues[id] = value; }), 'next');
+  assert.equal(receivedAPIKey, 'configured');
+  assert.equal(ctx.vars.upstream.headers['x-upstream-header'], 'available');
+  assert.equal(outputValues.headers['x-upstream-header'], 'available');
   assert.equal(errors.length, 1);
+});
+
+test('HTTP endpoints match sub-paths and expose the unmatched sub-endpoint', async t => {
+  const definitions = loadDefinitions(path.resolve(__dirname, '../blocks'));
+  const document = { version: 1, name: 'Sub-endpoints', workspaces: [{
+    id: 'main', name: 'Main', active: true,
+    blocks: [
+      { id: 'systems', type: 'http', x: 0, y: 0, options: { method: 'GET', path: '/systems' } },
+      { id: 'subpath', type: 'get_sub_endpoint_by_name', x: 0, y: 0, options: {} },
+      { id: 'response', type: 'respond', x: 0, y: 0, options: { status: 200, body: 'fallback', headers: '{}' } },
+      { id: 'exact', type: 'http', x: 0, y: 0, options: { method: 'GET', path: '/systems/exact' } },
+      { id: 'exact-response', type: 'respond', x: 0, y: 0, options: { status: 200, body: 'exact endpoint', headers: '{}' } }
+    ],
+    connections: [
+      { id: 'a', from: 'systems', output: 'next', to: 'subpath', input: 'action', kind: 'action' },
+      { id: 'b', from: 'subpath', output: 'next', to: 'response', input: 'action', kind: 'action' },
+      { id: 'c', from: 'subpath', output: 'sub_endpoint', to: 'response', input: 'body', kind: 'value' },
+      { id: 'd', from: 'exact', output: 'next', to: 'exact-response', input: 'action', kind: 'action' }
+    ]
+  }] };
+  const app = createApp({ document, definitions });
+  const address = await app.start(0, '127.0.0.1'); t.after(() => app.stop());
+  const base = `http://127.0.0.1:${address.port}`;
+  for (const [requestPath, expected] of [['/systems', '/'], ['/systems/vhins', '/vhins'], ['/systems/vhins/status?full=true', '/vhins/status']]) {
+    const response = await fetch(base + requestPath);
+    assert.equal(response.status, 200);
+    assert.equal(await response.text(), expected);
+  }
+  const exact = await fetch(base + '/systems/exact');
+  assert.equal(exact.status, 200);
+  assert.equal(await exact.text(), 'exact endpoint');
+  assert.equal((await fetch(base + '/systematic')).status, 404);
 });
 
 test('HTTP endpoint body output connects to HTTP response body input', async t => {
@@ -141,11 +191,15 @@ test('HTTP endpoint body output connects to HTTP response body input', async t =
   const workspace = project.workspaces[0];
   workspace.blocks = [
     { id: 'http', type: 'http', x: 0, y: 0, options: { method: 'POST', path: '/body' } },
-    { id: 'response', type: 'respond', x: 0, y: 0, options: { status: 200, body: 'fallback' } }
+    { id: 'response', type: 'respond', x: 0, y: 0, options: { status: 200, body: 'fallback', headers: '{"x-response-header":"present"}' } },
+    { id: 'headers-http', type: 'http', x: 0, y: 0, options: { method: 'GET', path: '/headers' } },
+    { id: 'headers-response', type: 'respond', x: 0, y: 0, options: { status: 200, body: 'fallback', headers: '{}' } }
   ];
   workspace.connections = [
     { id: 'action', from: 'http', output: 'next', to: 'response', input: 'action', kind: 'action' },
-    { id: 'body', from: 'http', output: 'body', to: 'response', input: 'body', kind: 'value' }
+    { id: 'body', from: 'http', output: 'body', to: 'response', input: 'body', kind: 'value' },
+    { id: 'headers-action', from: 'headers-http', output: 'next', to: 'headers-response', input: 'action', kind: 'action' },
+    { id: 'headers-value', from: 'headers-http', output: 'headers', to: 'headers-response', input: 'body', kind: 'value' }
   ];
   const definitions = store.definitions(project.id);
   assert.ok(definitions.get('http').outputPorts.find(port => port.id === 'body').types.includes('text'));
@@ -157,7 +211,7 @@ test('HTTP endpoint body output connects to HTTP response body input', async t =
     version: 1, name: 'HTTP list compatibility', workspaces: [{ id: 'main', name: 'Main', active: false,
       blocks: [
         { id: 'lists', type: 'merge_lists', x: 0, y: 0, options: Object.fromEntries(mergeLists.fields.map(field => [field.key, field.default])) },
-        { id: 'response', type: 'respond', x: 0, y: 0, options: { status: 200, body: 'fallback' } }
+        { id: 'response', type: 'respond', x: 0, y: 0, options: { status: 200, body: 'fallback', headers: '{"x-response-header":"present"}' } }
       ],
       connections: [{ id: 'body', from: 'lists', output: 'list', to: 'response', input: 'body', kind: 'value' }]
     }]
@@ -178,10 +232,49 @@ test('HTTP endpoint body output connects to HTTP response body input', async t =
   const base = `http://127.0.0.1:${address.port}/body`;
   const text = await fetch(base, { method: 'POST', headers: { 'content-type': 'text/plain' }, body: 'plain text' });
   assert.equal(text.headers.get('content-type'), 'text/plain; charset=utf-8');
+  assert.equal(text.headers.get('x-response-header'), 'present');
   assert.equal(await text.text(), 'plain text');
   const json = await fetch(base, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ok: true }) });
   assert.equal(json.headers.get('content-type'), 'application/json; charset=utf-8');
+
   assert.deepEqual(await json.json(), { ok: true });
+  const reflectedHeaders = await fetch(base.replace('/body', '/headers'), { headers: { 'x-client-header': 'received' } });
+  assert.equal(reflectedHeaders.status, 200);
+  assert.equal((await reflectedHeaders.json())['x-client-header'], 'received');
+});
+
+test('Linux commands run as the automation user and expose success and error output', async t => {
+  const { store } = await fixture(t), project = await store.create('Linux commands');
+  const workspace = project.workspaces[0];
+  workspace.blocks = [
+    { id: 'success-http', type: 'http', x: 0, y: 0, options: { method: 'GET', path: '/success' } },
+    { id: 'success-command', type: 'linux_command', x: 0, y: 0, options: { command: 'id -u', directory: '', timeout: 5 } },
+    { id: 'success-response', type: 'respond', x: 0, y: 0, options: { status: 200, body: 'missing output' } },
+    { id: 'error-http', type: 'http', x: 0, y: 0, options: { method: 'GET', path: '/error' } },
+    { id: 'error-command', type: 'linux_command', x: 0, y: 0, options: { command: 'printf failure >&2; exit 7', directory: '', timeout: 5 } },
+    { id: 'error-response', type: 'respond', x: 0, y: 0, options: { status: 500, body: 'missing error' } }
+  ];
+  workspace.connections = [
+    { id: 's1', from: 'success-http', output: 'next', to: 'success-command', input: 'action', kind: 'action' },
+    { id: 's2', from: 'success-command', output: 'success', to: 'success-response', input: 'action', kind: 'action' },
+    { id: 's3', from: 'success-command', output: 'stdout', to: 'success-response', input: 'body', kind: 'value' },
+    { id: 'e1', from: 'error-http', output: 'next', to: 'error-command', input: 'action', kind: 'action' },
+    { id: 'e2', from: 'error-command', output: 'error', to: 'error-response', input: 'action', kind: 'action' },
+    { id: 'e3', from: 'error-command', output: 'stderr', to: 'error-response', input: 'body', kind: 'value' }
+  ];
+  const definitions = store.definitions(project.id);
+  const app = createApp({ document: project, definitions });
+  const address = await app.start(0, '127.0.0.1'); t.after(() => app.stop());
+  const base = `http://127.0.0.1:${address.port}`;
+  const success = await fetch(base + '/success');
+  assert.equal(success.status, 200);
+  assert.equal((await success.text()).trim(), String(process.getuid()));
+  const failure = await fetch(base + '/error');
+  assert.equal(failure.status, 500);
+  assert.equal(await failure.text(), 'failure');
+  const direct = await require('../blocks/linux_command').runCommand('exit 7', '', 5, new AbortController().signal);
+  assert.equal(direct.exitCode, 7);
+  assert.equal(direct.failed, true);
 });
 
 test('startup and interval triggers, disabled workspaces, clean shutdown', async t => {
