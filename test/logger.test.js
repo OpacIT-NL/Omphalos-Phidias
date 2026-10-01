@@ -29,6 +29,13 @@ for (let level = 0; level <= 4; level++) {
     assert.match(file, /^2026-09-26T12:34:56\.000Z \[CRITICAL\] Message critical/);
   });
 }
+test('lifecycle notices remain visible to AMP when Info logging is disabled', async t => {
+  const folder = await directory(t), output = capture();
+  const logger = createLogger({ level: 0, fileLevel: 0, directory: folder, ...output, now: () => new Date('2026-09-26T12:34:56.000Z') });
+  logger.notice('Automation listening on 0.0.0.0:3001');
+  assert.match(output.lines.join(''), /\[INFO\] Automation listening on 0\.0\.0\.0:3001/);
+  assert.equal(await fs.readFile(logger.filename, 'utf8'), '');
+});
 test('console and file levels filter independently and can change while running', async t => {
   const folder = await directory(t), output = capture();
   const logger = createLogger({ level: 1, fileLevel: 4, directory: folder, ...output, now: () => new Date('2026-09-26T12:34:56.000Z') });

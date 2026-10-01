@@ -26,23 +26,29 @@ function createLogger({ level = 3, fileLevel = level, directory = path.join(proc
   validateLogLevel(level);
   validateLogLevel(fileLevel, 'file-log-level');
   const filename = createLogFile(directory, now().toISOString().slice(0, 10));
+  const makeLine = (name, values) => {
+    const timestamp = now().toISOString();
+    const message = format(...values).replace(/[\x00-\x1f\x7f]/g, character => character === '\n' ? '\\n' : character === '\r' ? '\\r' : `\\u${character.charCodeAt(0).toString(16).padStart(4, '0')}`);
+    return { timestamp, line: `${timestamp} [${name.toUpperCase()}] ${message}\n` };
+  };
+  const append = ({ timestamp, line }) => {
+    try { fs.appendFileSync(filename, line, { encoding: 'utf8', mode: 0o600 }); }
+    catch (error) { stderr.write(`${timestamp} [CRITICAL] Cannot write log file (${error.code || 'unknown error'}).\n`); }
+  };
   function write(name, values) {
     const severity = LEVELS[name];
     if (severity > level && severity > fileLevel) return;
-    const timestamp = now().toISOString();
-    const message = format(...values).replace(/[\x00-\x1f\x7f]/g, character => character === '\n' ? '\\n' : character === '\r' ? '\\r' : `\\u${character.charCodeAt(0).toString(16).padStart(4, '0')}`);
-    const line = `${timestamp} [${name.toUpperCase()}] ${message}\n`;
-    if (severity <= level) (severity <= LEVELS.warning ? stderr : stdout).write(line);
-    if (severity <= fileLevel) {
-      try {
-        fs.appendFileSync(filename, line, { encoding: 'utf8', mode: 0o600 });
-      } catch (error) {
-        stderr.write(`${timestamp} [CRITICAL] Cannot write log file (${error.code || 'unknown error'}).\n`);
-      }
-    }
+    const rendered = makeLine(name, values);
+    if (severity <= level) (severity <= LEVELS.warning ? stderr : stdout).write(rendered.line);
+    if (severity <= fileLevel) append(rendered);
   }
   return Object.freeze({
     filename,
+    notice(...values) {
+      const rendered = makeLine('info', values);
+      stdout.write(rendered.line);
+      if (LEVELS.info <= fileLevel) append(rendered);
+    },
     ...Object.fromEntries(Object.keys(LEVELS).map(name => [name, (...values) => write(name, values)])),
     setLevel(value) { level = validateLogLevel(value); },
     setFileLevel(value) { fileLevel = validateLogLevel(value, 'file-log-level'); }

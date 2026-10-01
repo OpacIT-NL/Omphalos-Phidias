@@ -42,10 +42,10 @@ async function readBody(request) {
 function normalizeRoutePath(value) {
   return value.replace(/\/+$/, '') || '/';
 }
-function findRoute(routes, method, pathname) {
+function findRoute(routes, method, pathname, predicate = () => true) {
   let match = null;
   for (const route of routes) {
-    if (route.method !== method && route.method !== 'ANY') continue;
+    if (!predicate(route) || (route.method !== method && route.method !== 'ANY')) continue;
     const basePath = route.path;
     if (pathname !== basePath && !(basePath === '/' ? pathname.startsWith('/') : pathname.startsWith(basePath + '/'))) continue;
     if (!match || basePath.length > match.path.length || (basePath.length === match.path.length && route.method === method && match.method === 'ANY')) match = route;
@@ -169,9 +169,22 @@ function createApp({ directory = __dirname, document, definitions, onError, logg
   function track(promise) {
     activeRuns.add(promise); promise.then(() => activeRuns.delete(promise), () => activeRuns.delete(promise)); return promise;
   }
+  function reachableLogin(ws, trigger) {
+    const nodes = new Map(ws.blocks.map(block => [block.id, block]));
+    const queue = [trigger.id], visited = new Set();
+    while (queue.length) {
+      const id = queue.shift();
+      if (visited.has(id)) continue;
+      visited.add(id);
+      const current = nodes.get(id);
+      if (current?.type === 'display_login') return current;
+      for (const edge of ws.connections) if (edge.from === id && (edge.kind || 'action') === 'action') queue.push(edge.to);
+    }
+    return null;
+  }
   for (const ws of document.workspaces.filter(ws => ws.active)) {
     for (const block of ws.blocks.filter(block => block.type === 'http')) {
-      routes.push({ method: block.options.method, path: normalizeRoutePath(block.options.path), ws, block });
+      routes.push({ method: block.options.method, path: normalizeRoutePath(block.options.path), ws, block, loginBlock: reachableLogin(ws, block) });
     }
   }
   const server = http.createServer(async (req, res) => {
@@ -187,11 +200,15 @@ function createApp({ directory = __dirname, document, definitions, onError, logg
       const url = new URL(req.url, 'http://localhost');
       requestPath = url.pathname;
       logger?.debug('Request received: %s %s', req.method, requestPath);
-      const route = findRoute(routes, req.method, url.pathname);
+      let route = findRoute(routes, req.method, url.pathname), loginSubmission = false;
+      if (!route && req.method === 'POST') {
+        route = findRoute(routes, 'GET', url.pathname, candidate => candidate.method === 'GET' && candidate.loginBlock);
+        loginSubmission = Boolean(route);
+      }
       if (!route) { res.writeHead(404); res.end('Not found'); return; }
       const subpath = route.path === '/' ? url.pathname : url.pathname.slice(route.path.length) || '/';
-      const request = { method: req.method, path: url.pathname, endpoint: route.path, subpath, query: Object.fromEntries(url.searchParams), headers: req.headers, body: await readBody(req), ip: req.socket.remoteAddress };
-      await track(run(route.ws, route.block, request, res));
+      const request = { method: req.method, path: url.pathname, endpoint: route.path, subpath, query: Object.fromEntries(url.searchParams), headers: req.headers, body: await readBody(req), ip: req.socket.remoteAddress, loginSubmission };
+      await track(run(route.ws, loginSubmission ? route.loginBlock : route.block, request, res));
       if (!res.writableEnded) { res.writeHead(204); res.end(); }
     } catch (error) {
       reportError(error);
@@ -258,18 +275,21 @@ if (require.main === module) {
   const { createLogger, installConsoleLogger } = require('./logger');
   const logger = createLogger({ level: config['log-level'], directory: path.join(__dirname, 'log') });
   installConsoleLogger(logger);
+  const lifecycle = (...values) => typeof logger.notice === 'function'
+    ? logger.notice(...values)
+    : process.stdout.write(require('node:util').format(...values) + '\n');
   const app = createApp({ logger });
   let stopping = false;
   const stop = async signal => {
     if (stopping) return;
     stopping = true;
-    logger.info('Stopping %s (%s)', app.name, signal);
-    try { await app.stop(); logger.info('%s stopped', app.name); }
+    lifecycle('Stopping %s (%s)', app.name, signal);
+    try { await app.stop(); lifecycle('%s stopped', app.name); }
     catch (error) { logger.critical('Shutdown failed: %s', error?.stack || error); process.exitCode = 1; }
   };
   process.once('uncaughtException', error => { logger.critical('Uncaught exception: %s', error?.stack || error); process.exit(1); });
   process.once('unhandledRejection', error => { logger.critical('Unhandled rejection: %s', error?.stack || error); process.exit(1); });
-  app.start().then(address => logger.info('%s listening on %s:%d', app.name, address.address, address.port)).catch(error => { logger.critical('Could not start application: %s', error?.stack || error); process.exitCode = 1; });
+  app.start().then(address => lifecycle('%s listening on %s:%d', app.name, address.address, address.port)).catch(error => { logger.critical('Could not start application: %s', error?.stack || error); process.exitCode = 1; });
   for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => { stop(signal); });
 }
 module.exports = { createApp, loadDefinitions, render, readBody, findRoute, normalizeRoutePath, loadAppConfig, validateAppConfig };

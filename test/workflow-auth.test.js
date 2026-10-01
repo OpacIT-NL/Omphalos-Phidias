@@ -19,7 +19,7 @@ test('workflow browser sessions and API bearer tokens use a builder-compatible a
   builderAuth.close();
 
   const blocks = [
-    node('browser-endpoint', 'http', { method: 'ANY', path: '/protected' }),
+    node('browser-endpoint', 'http', { method: 'GET', path: '/protected' }),
     node('browser-check', 'check_if_logged_in', { database }),
     node('browser-login', 'display_login', { database }),
     node('browser-user', 'get_current_logged_in_user', { database, sessionType: 'Browser' }),
@@ -112,6 +112,9 @@ test('workflow browser sessions and API bearer tokens use a builder-compatible a
   const protectedPage = await fetch(base + '/protected', { headers: { cookie: browserCookie } });
   assert.equal(protectedPage.status, 200);
   assert.equal(await protectedPage.text(), 'alice');
+  const nonLoginPost = await fetch(base + '/protected', { method: 'POST', headers: { cookie: browserCookie, 'content-type': 'application/x-www-form-urlencoded' }, body: '' });
+  assert.equal(nonLoginPost.status, 401);
+  assert.match(await nonLoginPost.text(), /Invalid username or password/);
 
   const browserLogout = await fetch(base + '/browser-logout', { method: 'POST', headers: { cookie: browserCookie } });
   assert.equal(browserLogout.status, 200);

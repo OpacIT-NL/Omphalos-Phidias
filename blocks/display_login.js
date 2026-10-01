@@ -29,8 +29,10 @@ module.exports = {
     if (!ctx.request || !ctx.response) throw new Error('Display Login requires an HTTP endpoint trigger');
     if (ctx.response.writableEnded) return null;
     const authentication = ctx.authentication(ctx.render(options.database));
-    if (authentication.browserSession(ctx.request)) return 'authenticated';
-    if (ctx.request.method !== 'POST') { sendPage(ctx, 200); return null; }
+    if (ctx.request.method !== 'POST') {
+      if (authentication.browserSession(ctx.request)) return 'authenticated';
+      sendPage(ctx, 200); return null;
+    }
     const values = credentials(ctx.request.body);
     try {
       const session = await authentication.login(values.username, values.password, 'browser', ctx.request.ip);
