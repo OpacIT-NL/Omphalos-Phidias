@@ -45,19 +45,21 @@ function normalizeRoutePath(value) {
 function findRoute(routes, method, pathname) {
   let match = null;
   for (const route of routes) {
-    if (route.method !== method) continue;
+    if (route.method !== method && route.method !== 'ANY') continue;
     const basePath = route.path;
     if (pathname !== basePath && !(basePath === '/' ? pathname.startsWith('/') : pathname.startsWith(basePath + '/'))) continue;
-    if (!match || basePath.length > match.path.length) match = route;
+    if (!match || basePath.length > match.path.length || (basePath.length === match.path.length && route.method === method && match.method === 'ANY')) match = route;
   }
   return match;
 }
-const DEFAULT_APP_CONFIG = Object.freeze({ port: 3001, host: '0.0.0.0' });
+const DEFAULT_APP_CONFIG = Object.freeze({ port: 3001, host: '0.0.0.0', 'log-level': 3 });
 function validateAppConfig(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('config.json must contain an object');
+  value = { ...DEFAULT_APP_CONFIG, ...value };
   if (!Number.isInteger(value.port) || value.port < 1 || value.port > 65535) throw new Error('config.json: port must be an integer between 1 and 65535');
   if (typeof value.host !== 'string' || !net.isIP(value.host)) throw new Error('config.json: host must be an IPv4 or IPv6 address');
-  return { port: value.port, host: value.host };
+  if (!Number.isInteger(value['log-level']) || value['log-level'] < 0 || value['log-level'] > 4) throw new Error('config.json: log-level must be an integer between 0 and 4');
+  return { port: value.port, host: value.host, 'log-level': value['log-level'] };
 }
 function loadAppConfig(directory = __dirname) {
   const filename = path.join(directory, 'config.json');
@@ -74,12 +76,13 @@ function loadAppConfig(directory = __dirname) {
   }
   return validateAppConfig(value);
 }
-function createApp({ directory = __dirname, document, definitions, onError = console.error, clock = () => new Date() } = {}) {
+function createApp({ directory = __dirname, document, definitions, onError, logger = null, clock = () => new Date() } = {}) {
+  const reportError = onError || (error => logger ? logger.error('Workflow failed: %s', error?.stack || error) : console.error(error));
   definitions ||= loadDefinitions(path.join(directory, 'blocks'));
   for (const [type, definition] of definitions) definitions.set(type, normalizeDefinition(definition, `${type}.js`));
   document ||= JSON.parse(fs.readFileSync(path.join(directory, 'workspaces.json'), 'utf8'));
   validate(document, definitions);
-  const controller = new AbortController(), timers = [], stdinListeners = [], activeRuns = new Set(), routes = [];
+  const controller = new AbortController(), timers = [], stdinListeners = [], activeRuns = new Set(), routes = [], authenticationStores = new Map();
   const shared = Object.create(null);
   let started = false, stdinInterface = null;
   for (const definition of definitions.values()) {
@@ -89,10 +92,19 @@ function createApp({ directory = __dirname, document, definitions, onError = con
     const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(60000)]);
     const context = {
       vars: Object.create(null), values: new Map(), evaluated: new Set(),
-      request, response, env: process.env, signal, shared,
+      request, response, env: process.env, signal, shared, appName: document.name, logger,
       legacyValues: seed.legacyValues || []
     };
     context.render = value => render(value, context);
+    context.authentication = filename => {
+      const resolved = path.resolve(directory, String(filename || '').trim());
+      if (!String(filename || '').trim()) throw new Error('Select an authentication SQLite database');
+      if (!authenticationStores.has(resolved)) {
+        const { WorkflowAuth } = require('./auth');
+        authenticationStores.set(resolved, new WorkflowAuth(resolved));
+      }
+      return authenticationStores.get(resolved);
+    };
     const nodes = new Map(ws.blocks.map(block => [block.id, block]));
     const incoming = (block, port) => ws.connections.find(edge => edge.to === block.id && (edge.input || 'action') === port);
     let steps = 0;
@@ -163,18 +175,26 @@ function createApp({ directory = __dirname, document, definitions, onError = con
     }
   }
   const server = http.createServer(async (req, res) => {
+    const requestStarted = Date.now();
+    let requestPath = '(invalid URL)';
+    res.on('finish', () => {
+      if (res.statusCode >= 400 && res.statusCode < 500) logger?.warning('Request rejected: %s %s (%d)', req.method, requestPath, res.statusCode);
+      logger?.debug('Request completed: %s %s (%d, %d ms)', req.method, requestPath, res.statusCode, Date.now() - requestStarted);
+    });
     const deadline = setTimeout(() => { if (!res.writableEnded) { res.writeHead(504); res.end('Workflow timed out'); } }, 60000);
     res.on('close', () => clearTimeout(deadline));
     try {
       const url = new URL(req.url, 'http://localhost');
+      requestPath = url.pathname;
+      logger?.debug('Request received: %s %s', req.method, requestPath);
       const route = findRoute(routes, req.method, url.pathname);
       if (!route) { res.writeHead(404); res.end('Not found'); return; }
       const subpath = route.path === '/' ? url.pathname : url.pathname.slice(route.path.length) || '/';
-      const request = { method: req.method, path: url.pathname, endpoint: route.path, subpath, query: Object.fromEntries(url.searchParams), headers: req.headers, body: await readBody(req) };
+      const request = { method: req.method, path: url.pathname, endpoint: route.path, subpath, query: Object.fromEntries(url.searchParams), headers: req.headers, body: await readBody(req), ip: req.socket.remoteAddress };
       await track(run(route.ws, route.block, request, res));
       if (!res.writableEnded) { res.writeHead(204); res.end(); }
     } catch (error) {
-      onError(error);
+      reportError(error);
       if (!res.writableEnded) { res.writeHead(error.status || 500); res.end(error.status ? error.message : 'Workflow failed'); }
     }
   });
@@ -193,9 +213,9 @@ function createApp({ directory = __dirname, document, definitions, onError = con
       started = true;
       for (const ws of document.workspaces.filter(ws => ws.active)) for (const block of ws.blocks) {
         const trigger = definitions.get(block.type).trigger;
-        if (trigger === 'startup') track(run(ws, block)).catch(onError);
+        if (trigger === 'startup') track(run(ws, block)).catch(reportError);
         if (trigger === 'stdin') {
-          const listener = line => track(run(ws, block, null, null, { legacyValues: [line] })).catch(onError);
+          const listener = line => track(run(ws, block, null, null, { legacyValues: [line] })).catch(reportError);
           stdinInterface ||= readline.createInterface({ input: process.stdin, terminal: false, crlfDelay: Infinity });
           stdinListeners.push(listener);
           stdinInterface.on('line', listener);
@@ -205,7 +225,7 @@ function createApp({ directory = __dirname, document, definitions, onError = con
           timers.push(setInterval(async () => {
             if (running) return;
             running = true;
-            try { await track(run(ws, block)); } catch (error) { onError(error); } finally { running = false; }
+            try { await track(run(ws, block)); } catch (error) { reportError(error); } finally { running = false; }
           }, block.options.seconds * 1000));
         }
         if (trigger === 'cron') {
@@ -215,7 +235,7 @@ function createApp({ directory = __dirname, document, definitions, onError = con
             const now = clock(), minute = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}-${now.getHours()}-${now.getMinutes()}`;
             if (matchesCron(schedule, now) && minute !== lastMinute) {
               lastMinute = minute;
-              track(run(ws, block)).catch(onError);
+              track(run(ws, block)).catch(reportError);
             }
           }, 1000));
         }
@@ -228,12 +248,28 @@ function createApp({ directory = __dirname, document, definitions, onError = con
       await Promise.allSettled([...activeRuns]);
       stdinListeners.forEach(listener => stdinInterface?.off('line', listener));
       stdinInterface?.close();
+      for (const authentication of authenticationStores.values()) authentication.close();
+      authenticationStores.clear();
     }
   };
 }
 if (require.main === module) {
-  const app = createApp();
-  app.start().then(address => console.log(`${app.name} listening on ${address.address}:${address.port}`)).catch(error => { console.error(error); process.exitCode = 1; });
-  for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => app.stop().catch(console.error));
+  const config = loadAppConfig(__dirname);
+  const { createLogger, installConsoleLogger } = require('./logger');
+  const logger = createLogger({ level: config['log-level'], directory: path.join(__dirname, 'log') });
+  installConsoleLogger(logger);
+  const app = createApp({ logger });
+  let stopping = false;
+  const stop = async signal => {
+    if (stopping) return;
+    stopping = true;
+    logger.info('Stopping %s (%s)', app.name, signal);
+    try { await app.stop(); logger.info('%s stopped', app.name); }
+    catch (error) { logger.critical('Shutdown failed: %s', error?.stack || error); process.exitCode = 1; }
+  };
+  process.once('uncaughtException', error => { logger.critical('Uncaught exception: %s', error?.stack || error); process.exit(1); });
+  process.once('unhandledRejection', error => { logger.critical('Unhandled rejection: %s', error?.stack || error); process.exit(1); });
+  app.start().then(address => logger.info('%s listening on %s:%d', app.name, address.address, address.port)).catch(error => { logger.critical('Could not start application: %s', error?.stack || error); process.exitCode = 1; });
+  for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => { stop(signal); });
 }
 module.exports = { createApp, loadDefinitions, render, readBody, findRoute, normalizeRoutePath, loadAppConfig, validateAppConfig };

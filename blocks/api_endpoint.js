@@ -8,7 +8,7 @@ module.exports = {
     { id: 'headers', name: 'Headers', kind: 'value', types: ['object'] }
   ],
   fields: [
-    { key: 'method', label: 'Method', type: 'select', choices: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'], default: 'GET' },
+    { key: 'method', label: 'Method', type: 'select', choices: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'ANY'], default: 'GET' },
     { key: 'path', label: 'Path', type: 'text', default: '/hello' }
   ]
 };

@@ -139,7 +139,7 @@ async function executeLegacy(definition, ctx, block, connectedInputs, follow) {
       return match ? new RegExp(match[1], match[2]) : new RegExp(text);
     },
     end(error) { throw error; },
-    console(level, message) { console.log(`[${level}] ${message}`); },
+    console(level, message) { (ctx.logger?.info || console.log)(`[${level}] ${message}`); },
     client: undefined
   };
   if (definition.type === 'bot_input') {
@@ -174,16 +174,18 @@ async function executeLegacy(definition, ctx, block, connectedInputs, follow) {
   if (definition.type === 'request_api') {
     const method = String(api.GetOptionValue('method_type', null, 'get')).toUpperCase();
     const body = getInput('body');
-    const headers = getInput('headers');
+    const headers = source.mergeSessionHeaders(getInput('headers'), getInput('session'));
     const response = await fetch(String(getInput('url', '')), {
       method, signal: AbortSignal.any([ctx.signal, AbortSignal.timeout(30000)]),
-      ...(headers && typeof headers === 'object' ? { headers } : {}),
+      ...(Object.keys(headers).length ? { headers } : {}),
       ...(body != null && body !== '' && method !== 'GET' ? { body: typeof body === 'object' ? JSON.stringify(body) : String(body) } : {})
     });
     if (!response.ok) throw new Error(`API request failed with HTTP ${response.status}`);
     const dataType = api.GetOptionValue('data_type', null, 'text');
     const data = dataType === 'json' ? await response.json() : dataType === 'buffer' ? Buffer.from(await response.arrayBuffer()) : await response.text();
     api.StoreOutputValue(data, 'data');
+    api.StoreOutputValue(source.readResponseSession(response.headers), 'session');
+    api.StoreOutputValue(source.readSessionToken(response.headers, data), 'session_token');
     api.RunNextBlock('action');
     await Promise.all(branches);
     return stored;

@@ -17,39 +17,58 @@ function capture() {
   return { lines, stdout: { write: line => lines.push(line) }, stderr: { write: line => lines.push(line) } };
 }
 for (let level = 0; level <= 4; level++) {
-  test(`log level ${level} writes exactly the cumulative levels to console and file`, async t => {
+  test(`log level ${level} writes exactly the cumulative levels to console and its launch file`, async t => {
     const folder = await directory(t), output = capture();
     const logger = createLogger({ level, directory: folder, ...output, now: () => new Date('2026-09-26T12:34:56.000Z') });
     for (const name of Object.keys(LEVELS)) logger[name]('Message %s', name);
-    const file = await fs.readFile(path.join(folder, '2026-09-26.log'), 'utf8');
+    assert.equal(path.basename(logger.filename), '2026-09-26-1.txt');
+    const file = await fs.readFile(logger.filename, 'utf8');
     assert.equal(file, output.lines.join(''));
     assert.equal(output.lines.length, level + 1);
     for (const [name, severity] of Object.entries(LEVELS)) assert.equal(file.includes(`[${name.toUpperCase()}]`), severity <= level);
     assert.match(file, /^2026-09-26T12:34:56\.000Z \[CRITICAL\] Message critical/);
   });
 }
-test('daily rotation, append after restart, and escaped multiline entries', async t => {
+test('console and file levels filter independently and can change while running', async t => {
+  const folder = await directory(t), output = capture();
+  const logger = createLogger({ level: 1, fileLevel: 4, directory: folder, ...output, now: () => new Date('2026-09-26T12:34:56.000Z') });
+  logger.error('Both destinations');
+  logger.info('File only');
+  logger.debug('Debug file only');
+  assert.doesNotMatch(output.lines.join(''), /File only|Debug file only/);
+  let file = await fs.readFile(logger.filename, 'utf8');
+  assert.match(file, /Both destinations/); assert.match(file, /File only/); assert.match(file, /Debug file only/);
+  logger.setLevel(4); logger.setFileLevel(0);
+  logger.info('Console only');
+  assert.match(output.lines.join(''), /Console only/);
+  file = await fs.readFile(logger.filename, 'utf8');
+  assert.doesNotMatch(file, /Console only/);
+});
+test('each logger launch gets the next daily file and keeps multiline entries on one line', async t => {
   const folder = await directory(t), output = capture();
   let time = new Date('2026-09-26T23:59:59Z');
   const options = { directory: folder, ...output, now: () => time };
-  const logger = createLogger(options);
-  logger.info('First entry');
-  createLogger(options).warning('Second entry\nforged log\r\u001b');
+  const firstLogger = createLogger(options);
+  firstLogger.info('First entry');
+  const secondLogger = createLogger(options);
+  secondLogger.warning('Second entry\nforged log\r\u001b');
   time = new Date('2026-09-27T00:00:00Z');
-  logger.error(new Error('Third entry'));
-  const first = await fs.readFile(path.join(folder, '2026-09-26.log'), 'utf8');
-  const second = await fs.readFile(path.join(folder, '2026-09-27.log'), 'utf8');
-  assert.equal(first.split('\n').length, 3);
-  assert.match(first, /Second entry\\nforged log\\r\\u001b/);
-  assert.match(second, /\[ERROR\] Error: Third entry/);
-  assert.equal(second.split('\n').length, 2);
+  firstLogger.error(new Error('Third entry'));
+  const thirdLogger = createLogger(options);
+  thirdLogger.info('New date');
+  assert.equal(path.basename(firstLogger.filename), '2026-09-26-1.txt');
+  assert.equal(path.basename(secondLogger.filename), '2026-09-26-2.txt');
+  assert.equal(path.basename(thirdLogger.filename), '2026-09-27-1.txt');
+  assert.match(await fs.readFile(firstLogger.filename, 'utf8'), /First entry[\s\S]*\[ERROR\] Error: Third entry/);
+  assert.match(await fs.readFile(secondLogger.filename, 'utf8'), /Second entry\\nforged log\\r\\u001b/);
+  assert.match(await fs.readFile(thirdLogger.filename, 'utf8'), /New date/);
 });
 test('invalid log levels are rejected; file failures still report to console', async t => {
   const folder = await directory(t), output = capture();
   for (const level of [-1, 5, 2.5, '3', null, NaN]) assert.throws(() => createLogger({ level, directory: folder }), /integer between 0 and 4/);
   const logger = createLogger({ directory: folder, ...output, now: () => new Date('2026-09-26T00:00:00Z') });
-  // A directory in place of the log file reliably exercises append failure.
-  await fs.mkdir(path.join(folder, '2026-09-26.log'));
+  await fs.rm(logger.filename);
+  await fs.mkdir(logger.filename);
   assert.doesNotThrow(() => logger.info('Console stays available'));
   assert.match(output.lines.join(''), /\[INFO\] Console stays available/);
   assert.match(output.lines.join(''), /\[CRITICAL\] Cannot write log file/);

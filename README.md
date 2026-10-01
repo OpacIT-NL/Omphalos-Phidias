@@ -64,7 +64,8 @@ Configuration commands:
 | --- | --- |
 | `host <IPv4-or-IPv6>` | Change the listening address immediately |
 | `port <1-65535>` | Change the listening port immediately |
-| `log-level <0-4>` | Change log filtering immediately |
+| `log-level <0-4>` | Change console log filtering immediately |
+| `file-log-level <0-4>` | Change file log filtering immediately |
 | `username <name>` | Create or reset an account using hidden password prompts |
 | `user create <name>` | Create a new account; rejects an existing username |
 | `user password <name>` | Reset an existing account’s password |
@@ -94,6 +95,7 @@ Generated defaults:
   "port": 3000,
   "host": "127.0.0.1",
   "log-level": 3,
+  "file-log-level": 3,
   "projects-directory": "projects",
   "auth": {
     "database": "data/auth.sqlite",
@@ -109,7 +111,7 @@ Settings can also be edited while the server is stopped. Missing fields in older
 
 ## Server logging
 
-Use `log-level <0-4>` in configuration mode to change filtering immediately, then save with `copy run start`. Editing `"log-level"` in `config.json` takes effect on the next launch. The default is `3`.
+Use `log-level <0-4>` in configuration mode to control console filtering and `file-log-level <0-4>` to control file filtering. Both change immediately; save them with `copy run start`. The corresponding `"log-level"` and `"file-log-level"` fields can also be edited in `config.json` while the builder is stopped. Both default to `3`. Older configs without `file-log-level` inherit their existing `log-level`.
 
 | Level | Messages included |
 | --- | --- |
@@ -119,11 +121,11 @@ Use `log-level <0-4>` in configuration mode to change filtering immediately, the
 | `3` | Critical, Error, Warning, Info |
 | `4` | Critical, Error, Warning, Info, Debug |
 
-Every enabled event is written to both the console and `logs/YYYY-MM-DD.log` beside `server.js`. Files append across restarts and switch automatically at midnight UTC. Entries include a UTC timestamp and severity; multiline errors are escaped into one log entry. Critical/Error/Warning go to stderr, and Info/Debug go to stdout. Console prompts and command replies are always shown, independently of log level.
+Each event is independently filtered for the console and the launch-specific file such as `log/2026-10-01-1.txt` beside `server.js`. The date is the UTC date on which the process started. A second start on the same date creates `2026-10-01-2.txt`, then `-3.txt`, and so on; an existing launch file is never reused. Entries include a UTC timestamp and severity; multiline errors are escaped into one log entry. Enabled console Critical/Error/Warning messages go to stderr, and Info/Debug messages go to stdout. Console prompts and command replies are always shown, independently of log level.
 
 Info records startup, shutdown, sign-in/sign-out, and project create/save/export activity. Warning records rejected requests, Error records unexpected request failures, and Debug records request paths, status codes, and durations. Startup failures and uncaught failures are Critical. Request bodies, query strings, authorization headers, cookies, and passwords are not included in request logs.
 
-The `logs/` directory is created automatically and excluded from Git and release ZIPs. Files are not automatically deleted; manage retention on your server. If a file write fails, the original console entry remains available along with a Critical diagnostic. These settings control the builder server; exported automations run independently.
+The `log/` directory is created automatically and excluded from Git and release ZIPs. Files are not automatically deleted; manage retention on your server. If a file write fails, the original console entry remains available along with a Critical diagnostic. Exported automations use the same severity levels and launch-file naming in their own `log/` directory; their application `log-level` currently controls both destinations.
 
 ## Accounts and login
 
@@ -163,7 +165,7 @@ node app.js
 npm start
 ```
 
-`npm install` installs the FTP, SSH, and MySQL clients used by the imported network/database blocks. Visit `http://localhost:3001/hello` for the starter workflow. Use **Application settings** in the builder toolbar to set a project's host and port before exporting; its ZIP will contain a ready-to-use `config.json`. Without saved application settings, first launch creates `config.json` with port `3001` and host `0.0.0.0`. `PORT` and `HOST` remain optional process-level overrides. A pre-generated config is included in every later export for that project, so review it before extracting an update over an existing deployment. Stop it with SIGINT or SIGTERM. Run it under your normal process manager or service manager for unattended hosting.
+`npm install` installs Argon2 plus the FTP, SSH, and MySQL clients used by authentication and imported network/database blocks. Visit `http://localhost:3001/hello` for the starter workflow. Use **Application settings** in the builder toolbar to set a project's host, port, and log level before exporting; its ZIP will contain a ready-to-use `config.json`. Without saved application settings, first launch creates `config.json` with port `3001`, host `0.0.0.0`, and log level `3`. `PORT` and `HOST` remain optional process-level overrides. A pre-generated config is included in every later export for that project, so review it before extracting an update over an existing deployment. Stop it with SIGINT or SIGTERM. Run it under your normal process manager or service manager for unattended hosting.
 
 Each server-side project and exported ZIP contains:
 
@@ -172,11 +174,15 @@ projects/<project-id>/
 ├── app.js             # Standalone runtime
 ├── workspaces.json    # Project, workspaces, blocks, connections, positions
 ├── blocks/            # Executable block definitions
+├── auth.js            # Browser-session and API-token authentication runtime
+├── logger.js          # Console and per-launch file logger
 ├── legacy.js          # Discord App Builder block compatibility
 ├── validate.js        # Runtime graph validation
 ├── package.json
 └── README.md
 ```
+
+Standalone automations create `log/yyyy-mm-dd-N.txt` when `node app.js` starts. `N` begins at `1` each UTC date and increases for every restart that day. Startup, shutdown, workflow errors, HTTP request diagnostics, **Write to log**, and console output from blocks use the automation's configured log level. Level meanings are the same as the builder table above.
 
 You can also copy the entire project folder directly. The builder never starts project workflows on its own server. Edits to a builder project do not update an already deployed copy: export and deploy again, run `npm install` when dependencies change, then restart that application. Existing managed projects use the current bundled definitions in the editor and receive the current bundled runtime/blocks when exported; their stored project folders are not overwritten. Project-only custom block types remain available.
 
@@ -187,7 +193,7 @@ You can also copy the entire project folder directly. The builder never starts p
 | On startup | Runs once when the application starts |
 | On interval | Runs every N seconds; skips overlapping ticks |
 | On cron | Runs once per matching minute using a five-field local-time cron expression |
-| HTTP endpoint | Starts the longest matching method/path workflow; Body and Headers outputs expose the incoming request |
+| HTTP endpoint | Starts the longest matching method/path workflow; Body and Headers outputs expose the incoming request; ANY accepts every HTTP method |
 | Get sub-endpoint by name | Outputs the path following the matched HTTP endpoint, such as `/vhins` for `/systems/vhins` |
 | Write to log | Writes to standard output |
 | Set variable | Stores a value for the current execution |
@@ -196,11 +202,18 @@ You can also copy the entire project folder directly. The builder never starts p
 | HTTP request | Calls an HTTP(S) URL with JSON, HTML, or text request bodies and stores status, response headers, and body |
 | HTTP response | Sends JSON by default, with HTML and text available from the Reply format menu |
 | Linux command | Runs `/bin/sh -c` as the deployed automation's OS user and exposes stdout, stderr, and exit code |
+| List Folder Contents | Accepts a connected text folder path and outputs detailed entries, file paths, and subfolder paths, optionally including nested contents |
+| Display Login | Shows the Phidias-style browser login page, creates a session-only browser cookie, and redirects back to the requested page |
+| Check If Logged In | Branches on a valid browser session and outputs its username |
+| Login Through API | Validates JSON/form or connected credentials and outputs a bearer token, authorization header, username, and login-result object |
+| Check API Token | Branches on a valid `Authorization: Bearer …` token and outputs its username |
+| Logout | Revokes either the browser session or API token selected in the block and clears browser cookies when applicable |
+| Get Current Logged In User | Outputs the current Browser or API username and branches on whether a user was found |
 | Convert JSON to HTML Table | Converts layered JSON into escaped HTML tables, with nested objects and lists rendered as tables inside cells |
 
 Cron expressions use `minute hour day-of-month month weekday`; lists, ranges, and steps such as `*/15 * * * *` are supported. Schedules use the deployed application server's local time.
 
-The imported library additionally includes text/number/list/object manipulation, comparisons, dates, files/folders, console input, emitters/receivers, arbitrary JavaScript, API requests, FTP/FTPS, SSH, and MySQL blocks. Network and database credentials are stored in exported `workspaces.json` when entered directly, so prefer protected files or environment-oriented custom blocks for secrets.
+The imported library additionally includes text/number/list/object manipulation, comparisons, dates, files/folders, console input, emitters/receivers, arbitrary JavaScript, API requests with reusable session-cookie input/output and returned session-token output, FTP/FTPS, SSH, and MySQL blocks. Network and database credentials are stored in exported `workspaces.json` when entered directly, so prefer protected files or environment-oriented custom blocks for secrets.
 
 Text fields support templates such as:
 
@@ -214,6 +227,10 @@ Hello {{request.query.name}}
 An entire field containing one template preserves its value's type, so `{{request.body}}` can pass a JSON object to the response block. Embedded templates stringify objects. Templates only read own properties; they do not evaluate JavaScript. Environment variables come from the **deployed application**. Keep secrets there instead of in workspaces, which are included in exports.
 
 HTTP endpoints expose `request.method`, `request.path`, `request.endpoint`, `request.subpath`, `request.query`, `request.headers`, and `request.body`. A request uses the longest endpoint prefix that ends on a path-segment boundary: `/systems/vhins` matches `/systems`, while `/systematic` does not. An exact endpoint takes priority over a shorter prefix. **Get sub-endpoint by name** outputs the unmatched part with a leading slash (`/vhins` in this example), or `/` when the endpoint itself was requested. Body carries the request body as text or parsed JSON, while Headers exposes incoming headers as an object. HTTP request and response blocks accept configured JSON headers or connected header objects. API Call offers JSON, HTML, and Text body formats; API Reply offers the same formats and defaults to JSON. JSON request bodies are parsed when Content-Type contains `application/json`. An endpoint without an executed response block returns 204. Unmatched routes return 404; workflow failures are logged and return 500 if no response was sent. Outbound non-2xx HTTP statuses are stored in the result for branching, rather than automatically thrown.
+
+Authentication blocks use the SQLite path configured in each block. Relative paths resolve from the deployed application's directory; absolute paths can point at the builder's authentication database when both processes can securely access it. The `users` table and Argon2id password hashes are compatible with the builder. Workflow browser sessions and API tokens use separate `automation_sessions` records, so they do not reuse editor sessions. Raw session tokens are returned only to the client and only SHA-256 token hashes are stored in SQLite.
+
+**Display Login** must follow an HTTP endpoint whose method is **ANY** if the same route should show the form on GET and accept it on POST. A successful login sends a `303` redirect to the same path. Its `phidias_session` cookie is `HttpOnly`, `SameSite=Strict`, and has no `Expires` or `Max-Age`, so it is a browser-session cookie. Browser sessions also expire server-side after 24 hours. **Login Through API** accepts `username` and `password` from connected inputs or a JSON/form request body. Its API token expires after eight hours and must be sent as `Authorization: Bearer <token>`. Use **Logout** with Session type set to Browser or API to revoke the current credential.
 
 Built-in execution limits: 1 MB incoming/outgoing HTTP bodies, 1 MB Linux-command output, 30-second outbound HTTP timeout, 60-second workflow deadline, 1,000 blocks per workspace. Variables are isolated to a run and held in memory. HTTP triggers are public application routes; add the authentication your deployment needs before exposing sensitive workflows. There is no durable job queue, persistent variables, retry policy, or in-builder execution console.
 
@@ -275,7 +292,7 @@ All tag pushes trigger the workflow, but packaging requires a semantic version t
 
 The tag automatically sets the application version inside the ZIP: `v0.0.1` becomes `0.0.1` in `package.json` and both root version fields of `package-lock.json`. The login page, editor footer, and startup message read that version from `package.json`. Prerelease and build suffixes are preserved. Packaging stamps the archived files without modifying or committing the source checkout; local development displays the version in the local `package.json`.
 
-The ZIP contains the builder source, tests, account-management scripts, and documentation. It excludes `config.json`, installed dependencies, projects, accounts, logs, and local environment files. First launch creates a startup configuration only if it is missing, so extracting a new ZIP over an installation preserves its configuration. Application files sit directly at the ZIP root, with no enclosing directory. Extract it into your chosen application directory, enter that directory, then run:
+The ZIP contains the builder source, tests, account-management scripts, and documentation. It excludes `config.json`, installed dependencies, projects, accounts, the `log/` directory, and local environment files. First launch creates a startup configuration only if it is missing, so extracting a new ZIP over an installation preserves its configuration. Application files sit directly at the ZIP root, with no enclosing directory. Extract it into your chosen application directory, enter that directory, then run:
 
 ```sh
 npm ci

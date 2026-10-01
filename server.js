@@ -10,7 +10,7 @@ const { readBody } = require('./runtime/app');
 const { version } = require('./package.json');
 const htmlVersion = version.replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
 const assets = new Map([['/', ['index.html', 'text/html']], ['/login', ['login.html', 'text/html']], ['/login.js', ['login.js', 'text/javascript']], ['/editor.js', ['editor.js', 'text/javascript']], ['/style.css', ['style.css', 'text/css']]]);
-async function createServer({ directory = loadConfig().directory, authDatabase = loadConfig().authDatabase, secureCookies = loadConfig().secureCookies, logger = createLogger({ level: loadConfig().logLevel }), closeResourcesOnClose = true } = {}) {
+async function createServer({ directory = loadConfig().directory, authDatabase = loadConfig().authDatabase, secureCookies = loadConfig().secureCookies, logger = createLogger({ level: loadConfig().logLevel, fileLevel: loadConfig().fileLogLevel, directory: path.join(__dirname, 'log') }), closeResourcesOnClose = true } = {}) {
   const store = new Store(directory); await store.init();
   const auth = new Auth(authDatabase, { secureCookies });
   const server = http.createServer(async (req, res) => {
@@ -122,7 +122,7 @@ async function closeListener(server) {
 if (require.main === module) {
   let logger, terminal, application, state, stopping = false;
   function critical(message, error) {
-    try { (logger || createLogger({ level: 0 })).critical('%s: %s', message, error?.stack || error); }
+    try { (logger || createLogger({ level: 0, directory: path.join(__dirname, 'log') })).critical('%s: %s', message, error?.stack || error); }
     catch { process.stderr.write(`${new Date().toISOString()} [CRITICAL] ${message}: ${String(error?.message || error).replace(/[\r\n]/g, ' ')}\n`); }
   }
   process.once('uncaughtException', error => { critical('Uncaught exception', error); process.exit(1); });
@@ -138,7 +138,7 @@ if (require.main === module) {
   }
   (async () => {
     const config = loadConfig(undefined, { create: true });
-    logger = createLogger({ level: config.logLevel,
+    logger = createLogger({ level: config.logLevel, fileLevel: config.fileLogLevel, directory: path.join(__dirname, 'log'),
       stdout: { write: line => terminal ? terminal.log(line) : process.stdout.write(line) },
       stderr: { write: line => terminal ? terminal.log(line, process.stderr) : process.stderr.write(line) }
     });
@@ -155,6 +155,7 @@ if (require.main === module) {
         logger.info('Server listener changed to %s:%d', next.host, next.port);
       }
       logger.setLevel(next['log-level']);
+      logger.setFileLevel(next['file-log-level']);
       application.auth.secureCookies = next.auth.secureCookies;
     });
     await listen(application.server, config.host, config.port);

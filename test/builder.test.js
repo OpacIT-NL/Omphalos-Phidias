@@ -47,14 +47,14 @@ test('project creation, atomic saves, conflicts, reload, and downloadable ZIP', 
   const library = await (await call(endpoint + '/blocks')).json();
   const replyFormat = library.find(block => block.type === 'respond').fields.find(field => field.key === 'format');
   assert.equal(replyFormat.default, 'JSON'); assert.ok(replyFormat.choices.includes('HTML'));
-  for (const file of ['app.js', 'workspaces.json', 'blocks/api_endpoint.js', 'blocks/get_sub_endpoint_by_name.js', 'blocks/linux_command.js', 'validate.js', 'cron.js', 'package.json']) await fs.access(path.join(directory, project.id, file));
+  for (const file of ['app.js', 'workspaces.json', 'blocks/api_endpoint.js', 'blocks/get_sub_endpoint_by_name.js', 'blocks/linux_command.js', 'validate.js', 'cron.js', 'auth.js', 'logger.js', 'package.json']) await fs.access(path.join(directory, project.id, file));
   assert.equal(project.appConfig, null);
   assert.equal(zipEntries(await store.export(project.id)).has('config.json'), false);
   const probe = require('node:net').createServer();
   await new Promise(resolve => probe.listen(0, '127.0.0.1', resolve));
   const configuredPort = probe.address().port;
   await new Promise(resolve => probe.close(resolve));
-  project.appConfig = { port: configuredPort, host: '127.0.0.1' };
+  project.appConfig = { port: configuredPort, host: '127.0.0.1', 'log-level': 4 };
   project.workspaces[0].blocks[1].options.body = 'Updated application';
   const results = await Promise.all([call(endpoint, 'PUT', project), call(endpoint, 'PUT', project)]);
   assert.deepEqual(results.map(res => res.status).sort(), [200, 409]);
@@ -65,9 +65,12 @@ test('project creation, atomic saves, conflicts, reload, and downloadable ZIP', 
   const zip = Buffer.from(await archive.arrayBuffer());
   const extracted = zipEntries(zip);
   assert.equal(JSON.parse(extracted.get('workspaces.json')).revision, 2);
+  assert.ok(extracted.has('auth.js'));
+  assert.ok(extracted.has('logger.js'));
+  assert.equal(JSON.parse(extracted.get('package.json')).dependencies.argon2, '^0.45.1');
   for (const name of ['api_endpoint.js', 'api_call.js', 'api_reply.js']) assert.ok(extracted.has(`blocks/${name}`));
   for (const name of ['http.js', 'request.js', 'respond.js']) assert.equal(extracted.has(`blocks/${name}`), false);
-  const deployedConfig = JSON.stringify({ port: configuredPort, host: '127.0.0.1' }, null, 2) + '\n';
+  const deployedConfig = JSON.stringify({ port: configuredPort, host: '127.0.0.1', 'log-level': 4 }, null, 2) + '\n';
   assert.equal(extracted.get('config.json').toString(), deployedConfig);
   const deployment = path.join(directory, 'isolated-export'); await fs.mkdir(deployment);
   for (const [filename, data] of extracted) { const destination = path.join(deployment, filename); await fs.mkdir(path.dirname(destination), { recursive: true }); await fs.writeFile(destination, data); }
@@ -84,6 +87,12 @@ test('project creation, atomic saves, conflicts, reload, and downloadable ZIP', 
   assert.equal(await fs.readFile(path.join(deployment, 'config.json'), 'utf8'), deployedConfig);
   const runtimeResponse = await fetch(`http://127.0.0.1:${address}/hello`); assert.equal(runtimeResponse.status, 200); assert.equal(await runtimeResponse.text(), 'Updated application');
   const exited = once(child, 'exit'); child.kill('SIGTERM'); await exited;
+  const runtimeLogs = await fs.readdir(path.join(deployment, 'log'));
+  assert.equal(runtimeLogs.length, 1); assert.match(runtimeLogs[0], /^\d{4}-\d{2}-\d{2}-1\.txt$/);
+  const runtimeLog = await fs.readFile(path.join(deployment, 'log', runtimeLogs[0]), 'utf8');
+  assert.match(runtimeLog, /\[INFO\] My project listening on 127\.0\.0\.1:/);
+  assert.match(runtimeLog, /\[INFO\] My project stopped/);
+  assert.match(runtimeLog, /\[DEBUG\] Request completed: GET \/hello \(200,/);
 });
 
 test('password login, protected routes, CSRF, logout, malformed requests and traversal', async t => {
@@ -131,7 +140,8 @@ test('validation rejects dangling wires, duplicate routes, loops, and invalid op
   reject(ws => { ws.connections.push({ ...ws.connections[0], id: 'second' }); }, /one connection/);
   const paused = structuredClone(project.workspaces[0]); paused.id = 'paused'; paused.active = false; project.workspaces.push(paused); assert.doesNotThrow(() => validate(project, definitions));
   const invalidPort = structuredClone(project); invalidPort.appConfig = { port: 70000, host: '127.0.0.1' }; await assert.rejects(store.save(project.id, invalidPort), /Application port/);
-  const invalidHost = structuredClone(project); invalidHost.appConfig = { port: 3001, host: 'localhost' }; await assert.rejects(store.save(project.id, invalidHost), /Application host/);
+  const invalidHost = structuredClone(project); invalidHost.appConfig = { port: 3001, host: 'localhost', 'log-level': 3 }; await assert.rejects(store.save(project.id, invalidHost), /Application host/);
+  const invalidLogLevel = structuredClone(project); invalidLogLevel.appConfig = { port: 3001, host: '127.0.0.1', 'log-level': 5 }; await assert.rejects(store.save(project.id, invalidLogLevel), /Application log level/);
 });
 
 test('runtime HTTP payloads, variables, conditions, outbound requests and failures', async t => {
@@ -396,11 +406,11 @@ test('cron triggers follow five-field local schedules and reject invalid express
 test('generated app config is created once, validated, and preserved', async t => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'phidias-app-config-'));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
-  assert.deepEqual(loadAppConfig(directory), { port: 3001, host: '0.0.0.0' });
+  assert.deepEqual(loadAppConfig(directory), { port: 3001, host: '0.0.0.0', 'log-level': 3 });
   const filename = path.join(directory, 'config.json');
   const configured = JSON.stringify({ port: 4321, host: '127.0.0.1' }, null, 2) + '\n';
   await fs.writeFile(filename, configured);
-  assert.deepEqual(loadAppConfig(directory), { port: 4321, host: '127.0.0.1' });
+  assert.deepEqual(loadAppConfig(directory), { port: 4321, host: '127.0.0.1', 'log-level': 3 });
   assert.equal(await fs.readFile(filename, 'utf8'), configured);
   await fs.writeFile(filename, '{broken');
   assert.throws(() => loadAppConfig(directory), /Invalid config.json/);

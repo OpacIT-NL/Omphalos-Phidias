@@ -333,16 +333,19 @@ $('#workspace-settings').onclick = handle(async () => {
 });
 $('#app-settings').onclick = handle(async () => {
   if (!project) return;
-  const current = project.appConfig || { port: 3001, host: '0.0.0.0' };
+  const current = { port: 3001, host: '0.0.0.0', 'log-level': 3, ...(project.appConfig || {}) };
   const values = await modal('Application settings', [
     { name: 'port', label: 'Port', type: 'number', value: current.port },
-    { name: 'host', label: 'Host IP address', value: current.host }
+    { name: 'host', label: 'Host IP address', value: current.host },
+    { name: 'log-level', label: 'Log level (0–4)', type: 'number', value: current['log-level'] }
   ], 'Apply');
   if (!values) return;
   const port = Number(values.port);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Port must be an integer between 1 and 65535.');
   if (!values.host) throw new Error('Enter a host IP address.');
-  project.appConfig = { port, host: values.host };
+  const logLevel = Number(values['log-level']);
+  if (!Number.isInteger(logLevel) || logLevel < 0 || logLevel > 4) throw new Error('Log level must be an integer between 0 and 4.');
+  project.appConfig = { port, host: values.host, 'log-level': logLevel };
   markDirty();
   toast('Application settings will be included in the export after saving.');
 });

@@ -54,15 +54,15 @@ test('running settings are validated, applied, explicitly saved, and loaded with
   const { engine, config, file } = await fixture(t, async next => { if (next.port === 9999) throw new Error('Port in use'); applied.push(next); });
   await engine.execute('enable'); await engine.execute('configure terminal');
   await engine.execute('port 9999'); assert.equal(config.running.port, 3000);
-  for (const command of ['port 0', 'port 65536', 'host localhost', 'log-level 5', 'log-level 1.5', 'auth secure-cookies maybe']) await engine.execute(command);
+  for (const command of ['port 0', 'port 65536', 'host localhost', 'log-level 5', 'log-level 1.5', 'file-log-level 5', 'file-log-level 1.5', 'auth secure-cookies maybe']) await engine.execute(command);
   assert.deepEqual(config.running, defaultConfig());
-  await engine.execute('host ::1'); await engine.execute('port 8081'); await engine.execute('log-level 4');
+  await engine.execute('host ::1'); await engine.execute('port 8081'); await engine.execute('log-level 4'); await engine.execute('file-log-level 2');
   await engine.execute('projects-directory "project storage"'); await engine.execute('auth database "private data/users.sqlite"'); await engine.execute('auth secure-cookies true');
   assert.equal(config.running.host, '::1'); assert.equal(config.running['projects-directory'], 'project storage');
   assert.equal(config.running.auth.secureCookies, true); assert.ok(applied.length >= 6);
   assert.equal(loadConfig(file).port, 3000);
   await engine.execute('exit'); await engine.execute('copy running-config startup-config');
-  assert.equal(loadConfig(file).port, 8081); assert.equal(loadConfig(file).logLevel, 4); assert.equal(config.dirty(), false);
+  assert.equal(loadConfig(file).port, 8081); assert.equal(loadConfig(file).logLevel, 4); assert.equal(loadConfig(file).fileLogLevel, 2); assert.equal(config.dirty(), false);
   assert.equal(new ConfigState(file).running.auth.database, 'private data/users.sqlite');
 });
 test('accounts run before save, remain outside config.json, and persist with their sessions on copy run start', async t => {

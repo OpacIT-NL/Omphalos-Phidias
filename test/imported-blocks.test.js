@@ -123,6 +123,73 @@ test('Receiver accepts a connected ID and only runs for a matching Emitter', asy
   assert.deepEqual(errors, []);
 });
 
+test('Request API sends session cookies and returns cookies and session tokens', async t => {
+  const requestAPI = require('../blocks/request_api');
+  assert.equal(requestAPI.toCookieHeader({ PHPSESSID: 'abc123', theme: 'lilac' }), 'PHPSESSID=abc123; theme=lilac');
+  assert.equal(requestAPI.toCookieHeader(['PHPSESSID=abc123; Path=/', 'theme=lilac; Secure']), 'PHPSESSID=abc123; theme=lilac');
+  assert.deepEqual(requestAPI.mergeSessionHeaders({ Cookie: 'existing=yes' }, 'PHPSESSID=abc123'), { Cookie: 'existing=yes; PHPSESSID=abc123' });
+  const responseHeaders = values => ({ get: name => values[name.toLowerCase()] || null });
+  assert.equal(requestAPI.readSessionToken(responseHeaders({ 'x-session-token': 'header-session' }), {}), 'header-session');
+  assert.equal(requestAPI.readSessionToken(responseHeaders({ authorization: 'Bearer bearer-session' }), {}), 'bearer-session');
+  assert.equal(requestAPI.readSessionToken(responseHeaders({}), { session_token: 'json-session' }), 'json-session');
+  assert.equal(requestAPI.readSessionToken(responseHeaders({}), { session: { token: 'nested-session' } }), 'nested-session');
+
+  let receivedCookie = '';
+  const upstream = require('node:http').createServer((request, response) => {
+    receivedCookie = request.headers.cookie || '';
+    if (request.url === '/token') {
+      response.setHeader('Content-Type', 'application/json');
+      response.end(JSON.stringify({ session_token: 'returned-session-token' }));
+      return;
+    }
+    response.setHeader('Set-Cookie', ['PHPSESSID=new-session; Path=/; HttpOnly', 'theme=lilac; Path=/']);
+    response.end('ok');
+  });
+  await new Promise(resolve => upstream.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => { upstream.close(resolve); upstream.closeAllConnections(); }));
+
+  const library = definitions();
+  const document = {
+    version: 1,
+    name: 'API sessions',
+    workspaces: [{
+      id: 'main', name: 'Main', active: true,
+      blocks: [
+        block('http', 'http', { method: 'GET', path: '/session' }),
+        block('url', 'text', { text: `http://127.0.0.1:${upstream.address().port}` }),
+        block('session', 'text', { text: 'PHPSESSID=old-session; preference=compact' }),
+        block('request', 'request_api', { method_type: 'get', data_type: 'text' }),
+        block('response', 'respond', { status: 200, body: 'missing session' }),
+        block('token-http', 'http', { method: 'GET', path: '/token' }),
+        block('token-url', 'text', { text: `http://127.0.0.1:${upstream.address().port}/token` }),
+        block('token-request', 'request_api', { method_type: 'get', data_type: 'json' }),
+        block('token-response', 'respond', { status: 200, body: 'missing token' })
+      ],
+      connections: [
+        edge('a1', 'http', 'next', 'request'),
+        edge('v1', 'url', 'text', 'request', 'url', 'value'),
+        edge('v2', 'session', 'text', 'request', 'session', 'value'),
+        edge('a2', 'request', 'action', 'response'),
+        edge('v3', 'request', 'session', 'response', 'body', 'value'),
+        edge('a3', 'token-http', 'next', 'token-request'),
+        edge('v4', 'token-url', 'text', 'token-request', 'url', 'value'),
+        edge('a4', 'token-request', 'action', 'token-response'),
+        edge('v5', 'token-request', 'session_token', 'token-response', 'body', 'value')
+      ]
+    }]
+  };
+  const app = createApp({ document, definitions: library });
+  const address = await app.start(0, '127.0.0.1');
+  t.after(() => app.stop());
+  const response = await fetch(`http://127.0.0.1:${address.port}/session`);
+  assert.equal(response.status, 200);
+  assert.equal(receivedCookie, 'PHPSESSID=old-session; preference=compact');
+  assert.equal(await response.text(), 'PHPSESSID=new-session; theme=lilac');
+  const tokenResponse = await fetch(`http://127.0.0.1:${address.port}/token`);
+  assert.equal(tokenResponse.status, 200);
+  assert.equal(await tokenResponse.text(), 'returned-session-token');
+});
+
 test('imported write and read file blocks await action flow and expose output values', async t => {
   const folder = await fs.mkdtemp(path.join(os.tmpdir(), 'phidias-imported-'));
   const file = path.join(folder, 'nested', 'value.txt');
