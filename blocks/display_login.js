@@ -21,14 +21,18 @@ function sendPage(ctx, status, error = '', username = '') {
 module.exports = {
   type: 'display_login', name: 'Display Login', category: 'Authentication',
   description: 'Shows a browser login page backed by a selected SQLite authentication database.',
-  inputPorts: [{ id: 'action', name: 'Action', kind: 'action', types: [] }],
+  inputPorts: [
+    { id: 'action', name: 'Action', kind: 'action', types: [] },
+    { id: 'database', name: 'SQLite Database Path', kind: 'value', types: ['text'] }
+  ],
   outputs: ['authenticated'],
   outputPorts: [{ id: 'authenticated', name: 'Already Logged In', kind: 'action', types: [] }],
   fields: [{ key: 'database', label: 'SQLite authentication database', type: 'text', default: './data/auth.sqlite' }],
-  async execute(ctx, options) {
+  async execute(ctx, options, inputs = {}) {
     if (!ctx.request || !ctx.response) throw new Error('Display Login requires an HTTP endpoint trigger');
     if (ctx.response.writableEnded) return null;
-    const authentication = ctx.authentication(ctx.render(options.database));
+    const database = Object.hasOwn(inputs, 'database') ? inputs.database : ctx.render(options.database);
+    const authentication = ctx.authentication(database);
     if (ctx.request.method !== 'POST') {
       if (authentication.browserSession(ctx.request)) return 'authenticated';
       sendPage(ctx, 200); return null;

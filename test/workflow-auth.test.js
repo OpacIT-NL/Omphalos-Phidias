@@ -19,32 +19,41 @@ test('workflow browser sessions and API bearer tokens use a builder-compatible a
   builderAuth.close();
 
   const blocks = [
+    node('database-path', 'text', { text: database }),
     node('browser-endpoint', 'http', { method: 'GET', path: '/protected' }),
-    node('browser-check', 'check_if_logged_in', { database }),
-    node('browser-login', 'display_login', { database }),
-    node('browser-user', 'get_current_logged_in_user', { database, sessionType: 'Browser' }),
+    node('browser-check', 'check_if_logged_in', { database: './unused-auth.sqlite' }),
+    node('browser-login', 'display_login', { database: './unused-auth.sqlite' }),
+    node('browser-user', 'get_current_logged_in_user', { database: './unused-auth.sqlite', sessionType: 'Browser' }),
     reply('browser-ok', 200, 'Text', 'missing user'),
 
     node('browser-logout-endpoint', 'http', { method: 'POST', path: '/browser-logout' }),
-    node('browser-logout', 'logout', { database, sessionType: 'Browser' }),
+    node('browser-logout', 'logout', { database: './unused-auth.sqlite', sessionType: 'Browser' }),
     reply('browser-logout-ok', 200, 'Text', 'logged out'),
 
     node('api-login-endpoint', 'http', { method: 'POST', path: '/api-login' }),
-    node('api-login', 'login_through_api', { database }),
+    node('api-login', 'login_through_api', { database: './unused-auth.sqlite' }),
     reply('api-login-ok', 200, 'JSON', '{}'),
     reply('api-login-error', 401, 'JSON', 'login failed'),
 
     node('api-protected-endpoint', 'http', { method: 'GET', path: '/api-protected' }),
-    node('api-check', 'check_api_token', { database }),
-    node('api-user', 'get_current_logged_in_user', { database, sessionType: 'API' }),
+    node('api-check', 'check_api_token', { database: './unused-auth.sqlite' }),
+    node('api-user', 'get_current_logged_in_user', { database: './unused-auth.sqlite', sessionType: 'API' }),
     reply('api-protected-ok', 200, 'Text', 'missing user'),
     reply('api-protected-denied', 401, 'JSON', 'unauthorized'),
 
     node('api-logout-endpoint', 'http', { method: 'POST', path: '/api-logout' }),
-    node('api-logout', 'logout', { database, sessionType: 'API' }),
+    node('api-logout', 'logout', { database: './unused-auth.sqlite', sessionType: 'API' }),
     reply('api-logout-ok', 200, 'Text', 'logged out')
   ];
   const connections = [
+    edge('db1', 'database-path', 'text', 'browser-check', 'database', 'value'),
+    edge('db2', 'database-path', 'text', 'browser-login', 'database', 'value'),
+    edge('db3', 'database-path', 'text', 'browser-user', 'database', 'value'),
+    edge('db4', 'database-path', 'text', 'browser-logout', 'database', 'value'),
+    edge('db5', 'database-path', 'text', 'api-login', 'database', 'value'),
+    edge('db6', 'database-path', 'text', 'api-check', 'database', 'value'),
+    edge('db7', 'database-path', 'text', 'api-user', 'database', 'value'),
+    edge('db8', 'database-path', 'text', 'api-logout', 'database', 'value'),
     edge('b1', 'browser-endpoint', 'next', 'browser-check'),
     edge('b2', 'browser-check', 'false', 'browser-login'),
     edge('b3', 'browser-check', 'true', 'browser-user'),
