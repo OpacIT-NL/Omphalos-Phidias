@@ -62,10 +62,10 @@
         <div class="tabbar"><div id="tabs"></div></div>
         <div class="canvas-wrap">
           <div id="viewport" tabindex="0" aria-label="Workflow canvas">
-            <div id="world"><svg id="wires" width="1" height="1" aria-label="Workflow connections"></svg><div id="nodes"></div></div>
+            <div id="world"><svg id="wires" width="1" height="1" aria-label="Workflow connections"></svg><div id="nodes"></div></div><div id="selection-box" class="selection-box" hidden></div>
             <div id="canvas-empty" class="canvas-empty" hidden><span>◇</span><strong>This workspace is empty</strong><small>Right-click anywhere to add a block</small><button id="empty-add-block" class="primary">Add block</button></div>
           </div>
-          <div class="canvas-hint" id="hint">Ctrl/Shift-click to select blocks · Ctrl+C/Ctrl+V to copy and paste · Right-click to add a block</div>
+          <div class="canvas-hint" id="hint">Ctrl/Shift-click or Shift-drag to select · Ctrl+C/Ctrl+V to copy and paste · Right-click to add a block</div>
           <div class="canvas-controls" aria-label="Canvas controls"><button id="zoom-in" aria-label="Zoom in">＋</button><button id="zoom-out" aria-label="Zoom out">−</button><button id="fit" aria-label="Fit view">⌗</button><button id="reset-view">100%</button></div>
         </div>
       </main>
@@ -80,6 +80,12 @@
 
   <div id="context-shade" class="context-shade" hidden></div>
   <div id="context-menu" class="context-menu" hidden><button id="duplicate-node">⧉ <span>Duplicate block</span></button><button id="remove-selection" class="danger">× <span>Delete</span></button></div>
+  <div id="workspace-context-menu" class="context-menu" hidden>
+    <button id="workspace-context-settings">⚙ <span>Workspace settings</span></button>
+    <button id="workspace-context-duplicate">⧉ <span>Duplicate workspace</span></button>
+    <button id="workspace-context-toggle">○ <span>Deactivate workspace</span></button>
+    <button id="workspace-context-delete" class="danger">× <span>Delete workspace</span></button>
+  </div>
   <div id="toast" role="alert" hidden></div>
 
   <dialog id="form-dialog"><form method="dialog"><h2 id="dialog-title"></h2><div id="dialog-fields"></div><p id="dialog-error" role="alert"></p><div class="dialog-actions"><button id="dialog-cancel" type="button">Cancel</button><button id="dialog-submit" type="submit" value="default" class="primary">Continue</button></div></form></dialog>

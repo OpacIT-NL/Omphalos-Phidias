@@ -5,8 +5,8 @@ const uid = () => crypto.randomUUID ? crypto.randomUUID() : 'id-' + Array.from(c
 const initials = name => String(name || 'Project').split(/[\s_-]+/).filter(Boolean).slice(0, 2).map(part => part[0]).join('').toUpperCase();
 let project = null, projects = [], definitions = [], workspaceID = null, selectedEdge = null, pending = null;
 let csrfToken = '', dirty = false, generation = 0, saving = null, view = { x: 0, y: 60, zoom: 1 }, toastTimer;
-const selectedBlocks = new Set();
-let blockClipboard = null, pasteSequence = 0;
+const selectedBlocks = new Set(), openWorkspaceIDs = new Set();
+let blockClipboard = null, workspaceClipboard = null, clipboardKind = null, pasteSequence = 0, workspaceContextID = null, draggedWorkspaceID = null;
 let pickerWorldPosition = null;
 let geometryFrame = 0;
 let portDrag = null, suppressPortClick = false;
@@ -48,6 +48,11 @@ function modal(title, fields, submit = 'Continue') {
     const dialog = $('#form-dialog'); $('#dialog-title').textContent = title; $('#dialog-submit').textContent = submit; $('#dialog-error').textContent = '';
     $('#dialog-fields').innerHTML = fields.map(modalField).join('');
     dialog.returnValue = ''; dialog.showModal();
+    const selectedField = fields.find(field => field.selectOnOpen);
+    if (selectedField) requestAnimationFrame(() => {
+      const input = dialog.querySelector('[name="' + CSS.escape(selectedField.name) + '"]');
+      input?.focus(); input?.select?.();
+    });
     dialog.addEventListener('close', () => {
       if (dialog.returnValue !== 'default') return resolve(null);
       resolve(Object.fromEntries(fields.map(field => { const input = dialog.querySelector('[name="' + CSS.escape(field.name) + '"]'); return [field.name, field.type === 'checkbox' ? input.checked : input.value.trim()]; })));
@@ -91,16 +96,54 @@ function pasteSnapshot(snapshot, offsetX, offsetY) {
 function copySelection() {
   const snapshot = selectionSnapshot();
   if (!snapshot) return false;
-  blockClipboard = snapshot; pasteSequence = 0;
+  blockClipboard = snapshot; clipboardKind = 'blocks'; pasteSequence = 0;
   toast('Copied ' + snapshot.blocks.length + ' block' + (snapshot.blocks.length === 1 ? '' : 's') + ' and ' + snapshot.connections.length + ' wire' + (snapshot.connections.length === 1 ? '' : 's') + '.');
   return true;
 }
 function pasteSelection() {
-  if (!blockClipboard || !ws()) return false;
+  if (clipboardKind !== 'blocks' || !blockClipboard || !ws()) return false;
   pasteSequence += 1;
   const count = pasteSnapshot(blockClipboard, pasteSequence * 40, pasteSequence * 40);
   if (count) toast('Pasted ' + count + ' block' + (count === 1 ? '' : 's') + '.');
   return count > 0;
+}
+function copyWorkspace() {
+  const workspace = ws();
+  if (!workspace) return false;
+  workspaceClipboard = { projectId: project.id, workspace: structuredClone(workspace) };
+  clipboardKind = 'workspace';
+  toast('Copied workspace ' + workspace.name + '.');
+  return true;
+}
+function copiedWorkspaceName(name) {
+  const names = new Set(project.workspaces.map(item => item.name.toLocaleLowerCase()));
+  const root = (name + ' copy').slice(0, 100);
+  if (!names.has(root.toLocaleLowerCase())) return root;
+  for (let number = 2; number < 1000; number++) {
+    const suffix = ' copy ' + number;
+    const candidate = name.slice(0, 100 - suffix.length) + suffix;
+    if (!names.has(candidate.toLocaleLowerCase())) return candidate;
+  }
+  return ('Workspace ' + uid()).slice(0, 100);
+}
+function pasteWorkspace() {
+  if (clipboardKind !== 'workspace' || !workspaceClipboard || !project) return false;
+  const source = workspaceClipboard.workspace;
+  const missing = source.blocks.find(block => !def(block.type));
+  if (missing) { toast('Cannot paste this workspace because block type ' + missing.type + ' is not available in this project.', true); return false; }
+  const blockIDs = new Map(source.blocks.map(block => [block.id, uid()]));
+  const categoryIDs = new Set((project.workspaceCategories || []).map(category => category.id));
+  const workspace = {
+    ...structuredClone(source),
+    id: uid(),
+    name: copiedWorkspaceName(source.name),
+    categoryId: workspaceClipboard.projectId === project.id && categoryIDs.has(source.categoryId) ? source.categoryId : null,
+    blocks: source.blocks.map(block => ({ ...structuredClone(block), id: blockIDs.get(block.id) })),
+    connections: source.connections.map(edge => ({ ...structuredClone(edge), id: uid(), from: blockIDs.get(edge.from), to: blockIDs.get(edge.to) }))
+  };
+  project.workspaces.push(workspace); openWorkspaceIDs.add(workspace.id); workspaceID = workspace.id; clearSelection(true); markDirty(); render(); requestAnimationFrame(fit);
+  toast('Pasted workspace ' + workspace.name + '.');
+  return true;
 }
 function renderProjects() {
   $('#project-orbs').innerHTML = projects.map((item, index) => `<button class="project-orb color-${index % 7} ${project?.id === item.id && $('#home-screen').hidden ? 'active' : ''}" data-project="${escapeHTML(item.id)}" title="${escapeHTML(item.name)}">${escapeHTML(initials(item.name))}</button>`).join('');
@@ -109,7 +152,8 @@ function renderProjects() {
 }
 async function refreshProjects() { projects = await api('/api/projects'); renderProjects(); return projects; }
 function setProjectControls(enabled) {
-  for (const selector of ['#export', '#app-settings', '#add-workspace', '#add-workspace-category', '#workspace-settings', '#add-block']) $(selector).disabled = !enabled;
+  for (const selector of ['#export', '#app-settings', '#add-workspace', '#add-workspace-category']) $(selector).disabled = !enabled;
+  for (const selector of ['#workspace-settings', '#add-block']) $(selector).disabled = !enabled || !ws();
   $('#save').disabled = !enabled || !dirty;
 }
 function showHome() {
@@ -124,6 +168,7 @@ async function openProject(id) {
   if (dirty && !confirm('Discard unsaved changes and open another project?')) return;
   const [document, library] = await Promise.all([api(`/api/projects/${id}`), api(`/api/projects/${id}/blocks`)]);
   project = document; definitions = library; workspaceID = document.workspaces[0]?.id || null;
+  openWorkspaceIDs.clear(); document.workspaces.forEach(workspace => openWorkspaceIDs.add(workspace.id));
   dirty = false; generation = 0; clearSelection(true); view = { x: 0, y: 60, zoom: 1 };
   $('#save-state').textContent = 'Saved to server'; setProjectControls(true);
   $('#home-screen').hidden = true; $('#editor').hidden = false;
@@ -156,21 +201,24 @@ function workspaceCategoryChoices() {
   return [{ value: '', label: 'Uncategorized' }, ...(project?.workspaceCategories || []).map(category => ({ value: category.id, label: category.name }))];
 }
 function workspaceRow(item) {
-  return '<button class="workspace-row ' + (item.id === workspaceID ? 'active ' : '') + (item.active ? '' : 'disabled') + '" data-workspace="' + escapeHTML(item.id) + '"><span>#</span><span>' + escapeHTML(item.name) + '</span>' + (item.active ? '' : '<i>PAUSED</i>') + '</button>';
+  return '<button class="workspace-row ' + (item.id === workspaceID ? 'active ' : '') + (item.active ? '' : 'disabled') + '" data-workspace="' + escapeHTML(item.id) + '" draggable="true" title="Drag to reorder or move to another category"><span>#</span><span>' + escapeHTML(item.name) + '</span>' + (item.active ? '' : '<i>PAUSED</i>') + '</button>';
 }
-function workspaceGroup(name, items) {
-  return '<section class="workspace-category"><div class="workspace-category-title"><span>⌄</span><strong>' + escapeHTML(name) + '</strong><small>' + items.length + '</small></div>' + items.map(workspaceRow).join('') + '</section>';
+function workspaceGroup(category, items) {
+  const id = category?.id || '', name = category?.name || 'Uncategorized';
+  return '<section class="workspace-category" data-workspace-category="' + escapeHTML(id) + '"><div class="workspace-category-title"><span>⌄</span><strong>' + escapeHTML(name) + '</strong><small>' + items.length + '</small><button data-add-workspace-to-category="' + escapeHTML(id) + '" title="Add workspace to ' + escapeHTML(name) + '" aria-label="Add workspace to ' + escapeHTML(name) + '">＋</button></div>' + items.map(workspaceRow).join('') + '</section>';
 }
 function render() {
   $('#project-title').textContent = project?.name || '';
-  $('#workspace-status').textContent = ws() ? (ws().active ? 'Workspace active' : 'Workspace paused') : 'No workspace';
+  const currentWorkspace = ws();
+  $('#workspace-status').textContent = currentWorkspace ? (currentWorkspace.active ? 'Workspace active' : 'Workspace paused') : 'No workspace open';
+  $('#workspace-settings').disabled = !currentWorkspace; $('#add-block').disabled = !currentWorkspace;
   const categories = project?.workspaceCategories || [];
   const knownCategories = new Set(categories.map(category => category.id));
-  const groups = categories.map(category => workspaceGroup(category.name, project.workspaces.filter(item => item.categoryId === category.id)));
+  const groups = categories.map(category => workspaceGroup(category, project.workspaces.filter(item => item.categoryId === category.id)));
   const uncategorized = (project?.workspaces || []).filter(item => !item.categoryId || !knownCategories.has(item.categoryId));
-  if (uncategorized.length || !categories.length) groups.push(workspaceGroup('Uncategorized', uncategorized));
+  groups.push(workspaceGroup(null, uncategorized));
   $('#workspace-list').innerHTML = groups.join('');
-  $('#tabs').innerHTML = (project?.workspaces || []).map(item => `<button class="${item.id === workspaceID ? 'active' : ''}" data-workspace="${item.id}"><span>◇</span><span>${escapeHTML(item.name)}</span><span>${item.active ? '' : '○'}</span></button>`).join('');
+  $('#tabs').innerHTML = (project?.workspaces || []).filter(item => openWorkspaceIDs.has(item.id)).map(item => '<div class="workspace-tab ' + (item.id === workspaceID ? 'active' : '') + '"><button class="workspace-tab-select" data-workspace="' + escapeHTML(item.id) + '"><span>◇</span><span>' + escapeHTML(item.name) + '</span><span>' + (item.active ? '' : '○') + '</span></button><button class="workspace-tab-close" data-close-workspace="' + escapeHTML(item.id) + '" title="Close workspace tab" aria-label="Close ' + escapeHTML(item.name) + ' tab">×</button></div>').join('');
   renderProjects(); renderLibrary(); renderGraph();
 }
 function renderLibrary() {
@@ -363,12 +411,41 @@ function openPicker(clientX, clientY) {
 function closePicker() { $('#picker-shade').hidden = true; $('#block-picker').hidden = true; pickerWorldPosition = null; }
 function openContextMenu(x, y, allowDuplicate = true) {
   const menu = $('#context-menu'), duplicate = $('#duplicate-node');
+  $('#workspace-context-menu').hidden = true;
   duplicate.hidden = !allowDuplicate;
   duplicate.querySelector('span').textContent = selectedBlocks.size > 1 ? 'Duplicate selected blocks' : 'Duplicate block';
   menu.style.left = Math.min(innerWidth - 220, x) + 'px'; menu.style.top = Math.min(innerHeight - 90, y) + 'px'; $('#context-shade').hidden = false; menu.hidden = false;
 }
-function closeContextMenu() { $('#context-shade').hidden = true; $('#context-menu').hidden = true; }
-function selectWorkspace(id) { workspaceID = id; clearSelection(true); render(); requestAnimationFrame(fit); }
+function openWorkspaceContextMenu(id, x, y) {
+  const workspace = project?.workspaces.find(item => item.id === id);
+  if (!workspace) return;
+  workspaceContextID = id; closePicker(); $('#context-menu').hidden = true;
+  const menu = $('#workspace-context-menu');
+  $('#workspace-context-toggle span').textContent = workspace.active ? 'Deactivate workspace' : 'Activate workspace';
+  $('#workspace-context-toggle').firstChild.textContent = workspace.active ? '○ ' : '● ';
+  menu.style.left = Math.min(innerWidth - 245, x) + 'px'; menu.style.top = Math.min(innerHeight - 165, y) + 'px';
+  $('#context-shade').hidden = false; menu.hidden = false;
+}
+function closeContextMenu() {
+  $('#context-shade').hidden = true; $('#context-menu').hidden = true; $('#workspace-context-menu').hidden = true; workspaceContextID = null;
+}
+function selectWorkspace(id) {
+  if (!project?.workspaces.some(workspace => workspace.id === id)) return;
+  openWorkspaceIDs.add(id); workspaceID = id; clearSelection(true); render(); requestAnimationFrame(fit);
+}
+function closeWorkspaceTab(id) {
+  if (!openWorkspaceIDs.has(id)) return;
+  const open = project.workspaces.filter(workspace => openWorkspaceIDs.has(workspace.id));
+  const index = open.findIndex(workspace => workspace.id === id);
+  openWorkspaceIDs.delete(id);
+  if (workspaceID === id) {
+    const remaining = project.workspaces.filter(workspace => openWorkspaceIDs.has(workspace.id));
+    workspaceID = remaining[Math.min(index, remaining.length - 1)]?.id || null;
+    clearSelection(true);
+  }
+  render();
+  if (workspaceID) requestAnimationFrame(fit);
+}
 
 $('#library').addEventListener('click', event => { const button = event.target.closest('[data-type]'); if (button) addBlock(button.dataset.type); });
 $('#search').oninput = renderLibrary;
@@ -393,11 +470,38 @@ $('#viewport').addEventListener('click', event => {
   if (output || input) clickPort(output || input);
   else if (edge) { selectedBlocks.clear(); selectedEdge = edge.dataset.edge; renderGraph(); }
 });
+function startMarqueeSelection(event) {
+  const viewport = $('#viewport'), box = $('#selection-box'), viewportRect = viewport.getBoundingClientRect();
+  const origin = { x: event.clientX, y: event.clientY }, existing = new Set(selectedBlocks);
+  let moved = false;
+  viewport.setPointerCapture(event.pointerId);
+  const move = current => {
+    const dx = current.clientX - origin.x, dy = current.clientY - origin.y;
+    if (!moved && Math.hypot(dx, dy) < 4) return;
+    moved = true;
+    const left = Math.min(origin.x, current.clientX), right = Math.max(origin.x, current.clientX);
+    const top = Math.min(origin.y, current.clientY), bottom = Math.max(origin.y, current.clientY);
+    box.hidden = false; box.style.left = left - viewportRect.left + 'px'; box.style.top = top - viewportRect.top + 'px';
+    box.style.width = right - left + 'px'; box.style.height = bottom - top + 'px';
+    selectedBlocks.clear(); existing.forEach(id => selectedBlocks.add(id));
+    document.querySelectorAll('.node').forEach(node => {
+      const rect = node.getBoundingClientRect();
+      if (rect.right >= left && rect.left <= right && rect.bottom >= top && rect.top <= bottom) selectedBlocks.add(node.dataset.node);
+    });
+    selectedEdge = null; updateBlockSelection(); renderWires();
+  };
+  const stop = () => {
+    viewport.removeEventListener('pointermove', move); viewport.removeEventListener('pointerup', stop); viewport.removeEventListener('pointercancel', stop);
+    box.hidden = true; box.removeAttribute('style');
+  };
+  viewport.addEventListener('pointermove', move); viewport.addEventListener('pointerup', stop); viewport.addEventListener('pointercancel', stop);
+}
 $('#viewport').addEventListener('pointerdown', event => {
   const port = event.target.closest('[data-output], [data-input]');
   if (port && event.button === 0) { startPortDrag(event, port); return; }
   if (event.button !== 0 || event.target.closest('button,input,textarea,select,[data-edge]')) return;
   const node = event.target.closest('[data-node]'), workspace = ws(), block = node ? workspace?.blocks.find(item => item.id === node.dataset.node) : null;
+  if (!block && event.shiftKey) { startMarqueeSelection(event); return; }
   const additive = event.ctrlKey || event.metaKey || event.shiftKey;
   if (block) {
     if (additive) selectBlock(block.id, true);
@@ -428,20 +532,122 @@ $('#viewport').addEventListener('pointerdown', event => {
   viewport.addEventListener('pointermove', move); viewport.addEventListener('pointerup', stop); viewport.addEventListener('pointercancel', stop);
 });
 $('#viewport').addEventListener('wheel', event => { event.preventDefault(); const rect = $('#viewport').getBoundingClientRect(); zoom(event.deltaY < 0 ? 1.08 : 1 / 1.08, event.clientX - rect.x, event.clientY - rect.y); }, { passive: false });
-for (const selector of ['#tabs', '#workspace-list']) $(selector).addEventListener('click', event => { const button = event.target.closest('[data-workspace]'); if (button) selectWorkspace(button.dataset.workspace); });
+function clearWorkspaceDropIndicators() {
+  document.querySelectorAll('.workspace-row.drop-before,.workspace-row.drop-after').forEach(row => row.classList.remove('drop-before', 'drop-after'));
+  document.querySelectorAll('.workspace-category.drop-category').forEach(category => category.classList.remove('drop-category'));
+}
+function moveWorkspace(draggedID, categoryID, targetID = null, after = false) {
+  const workspace = project?.workspaces.find(item => item.id === draggedID);
+  if (!workspace || draggedID === targetID) return;
+  const category = categoryID && project.workspaceCategories?.some(item => item.id === categoryID) ? categoryID : null;
+  project.workspaces = project.workspaces.filter(item => item.id !== draggedID);
+  workspace.categoryId = category;
+  if (targetID) {
+    const targetIndex = project.workspaces.findIndex(item => item.id === targetID);
+    project.workspaces.splice(targetIndex + (after ? 1 : 0), 0, workspace);
+  } else {
+    let lastCategoryIndex = -1;
+    for (let index = 0; index < project.workspaces.length; index++) {
+      if ((project.workspaces[index].categoryId || null) === category) lastCategoryIndex = index;
+    }
+    project.workspaces.splice(lastCategoryIndex + 1, 0, workspace);
+  }
+  markDirty(); render();
+}
+$('#workspace-list').addEventListener('dragstart', event => {
+  const row = event.target.closest('[data-workspace]');
+  if (!row) return;
+  draggedWorkspaceID = row.dataset.workspace; row.classList.add('dragging');
+  event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', draggedWorkspaceID);
+});
+$('#workspace-list').addEventListener('dragover', event => {
+  if (!draggedWorkspaceID) return;
+  const category = event.target.closest('[data-workspace-category]');
+  if (!category) return;
+  event.preventDefault(); event.dataTransfer.dropEffect = 'move'; clearWorkspaceDropIndicators();
+  const row = event.target.closest('[data-workspace]');
+  if (row && row.dataset.workspace !== draggedWorkspaceID) {
+    row.classList.add(event.clientY > row.getBoundingClientRect().top + row.offsetHeight / 2 ? 'drop-after' : 'drop-before');
+  } else category.classList.add('drop-category');
+});
+$('#workspace-list').addEventListener('drop', event => {
+  if (!draggedWorkspaceID) return;
+  const category = event.target.closest('[data-workspace-category]');
+  if (!category) return;
+  event.preventDefault();
+  const row = event.target.closest('[data-workspace]');
+  const after = Boolean(row && row.classList.contains('drop-after'));
+  const targetID = row?.dataset.workspace || null, categoryID = category.dataset.workspaceCategory || null;
+  const draggedID = draggedWorkspaceID; draggedWorkspaceID = null; clearWorkspaceDropIndicators();
+  moveWorkspace(draggedID, categoryID, targetID, after);
+});
+$('#workspace-list').addEventListener('dragend', event => {
+  event.target.closest('[data-workspace]')?.classList.remove('dragging');
+  draggedWorkspaceID = null; clearWorkspaceDropIndicators();
+});
+$('#workspace-list').addEventListener('click', event => {
+  const add = event.target.closest('[data-add-workspace-to-category]');
+  if (add) handle(() => addWorkspace(add.dataset.addWorkspaceToCategory || ''))();
+});
+$('#tabs').addEventListener('click', event => {
+  const close = event.target.closest('[data-close-workspace]');
+  if (close) { event.stopPropagation(); closeWorkspaceTab(close.dataset.closeWorkspace); }
+});
+for (const selector of ['#tabs', '#workspace-list']) {
+  $(selector).addEventListener('click', event => { const button = event.target.closest('[data-workspace]'); if (button) selectWorkspace(button.dataset.workspace); });
+  $(selector).addEventListener('contextmenu', event => {
+    const button = event.target.closest('[data-workspace]');
+    if (!button) return;
+    event.preventDefault(); event.stopPropagation(); openWorkspaceContextMenu(button.dataset.workspace, event.clientX, event.clientY);
+  });
+}
 for (const selector of ['#project-orbs', '#recent-projects']) $(selector).addEventListener('click', event => { const button = event.target.closest('[data-project]'); if (button) handle(openProject)(button.dataset.project); });
+function contextWorkspace() {
+  return project?.workspaces.find(item => item.id === workspaceContextID);
+}
+$('#workspace-context-settings').onclick = () => {
+  const id = workspaceContextID;
+  closeContextMenu();
+  if (!id) return;
+  selectWorkspace(id); $('#workspace-settings').click();
+};
+$('#workspace-context-duplicate').onclick = () => {
+  const workspace = contextWorkspace();
+  if (!workspace) return;
+  workspaceClipboard = { projectId: project.id, workspace: structuredClone(workspace) }; clipboardKind = 'workspace';
+  closeContextMenu(); pasteWorkspace();
+};
+$('#workspace-context-toggle').onclick = () => {
+  const workspace = contextWorkspace();
+  if (!workspace) return;
+  workspace.active = !workspace.active;
+  const active = workspace.active;
+  closeContextMenu(); markDirty(); render();
+  toast((active ? 'Activated ' : 'Deactivated ') + workspace.name + '.');
+};
+$('#workspace-context-delete').onclick = () => {
+  const workspace = contextWorkspace();
+  if (!workspace) return;
+  if (project.workspaces.length === 1) { closeContextMenu(); toast('A project must keep at least one workspace.', true); return; }
+  if (!confirm('Delete workspace "' + workspace.name + '" and all of its blocks and wires?')) return;
+  const index = project.workspaces.indexOf(workspace);
+  project.workspaces.splice(index, 1); openWorkspaceIDs.delete(workspace.id);
+  if (workspaceID === workspace.id) { workspaceID = project.workspaces[Math.min(index, project.workspaces.length - 1)].id; openWorkspaceIDs.add(workspaceID); }
+  closeContextMenu(); clearSelection(true); markDirty(); render(); requestAnimationFrame(fit);
+  toast('Deleted workspace ' + workspace.name + '.');
+};
 async function addWorkspace(categoryId = '') {
   const values = await modal('Add workspace', [
-    { name: 'name', label: 'Workspace name', value: 'New workspace' },
-    { name: 'categoryId', label: 'Workspace category', type: 'select', value: categoryId, choices: workspaceCategoryChoices() }
+    { name: 'name', label: 'Workspace name', value: 'New workspace', selectOnOpen: true }
   ], 'Add workspace');
   if (!values) return;
-  const workspace = { id: uid(), name: values.name, categoryId: values.categoryId || null, active: true, blocks: [], connections: [] };
-  project.workspaces.push(workspace); workspaceID = workspace.id; clearSelection(true); markDirty(); render(); fit();
+  const validCategory = project.workspaceCategories?.some(category => category.id === categoryId) ? categoryId : null;
+  const workspace = { id: uid(), name: values.name, categoryId: validCategory, active: true, blocks: [], connections: [] };
+  project.workspaces.push(workspace); openWorkspaceIDs.add(workspace.id); workspaceID = workspace.id; clearSelection(true); markDirty(); render(); fit();
 }
 $('#add-workspace').onclick = handle(() => addWorkspace());
 $('#add-workspace-category').onclick = handle(async () => {
-  const values = await modal('Add workspace category', [{ name: 'name', label: 'Category name', value: 'New category' }], 'Add category');
+  const values = await modal('Add workspace category', [{ name: 'name', label: 'Category name', value: 'New category', selectOnOpen: true }], 'Add category');
   if (!values) return;
   project.workspaceCategories ||= [];
   project.workspaceCategories.push({ id: uid(), name: values.name });
@@ -497,8 +703,12 @@ window.addEventListener('keydown', event => {
   const editing = event.target.closest?.('input,textarea,select,[contenteditable]');
   const key = event.key.toLowerCase();
   if (command && key === 's') { event.preventDefault(); handle(save)(); }
-  if (command && key === 'c' && !editing && selectedBlocks.size) { event.preventDefault(); copySelection(); }
-  if (command && key === 'v' && !editing && blockClipboard) { event.preventDefault(); pasteSelection(); }
+  if (command && key === 'c' && !editing && (selectedBlocks.size || (!selectedEdge && ws()))) {
+    event.preventDefault(); if (selectedBlocks.size) copySelection(); else copyWorkspace();
+  }
+  if (command && key === 'v' && !editing && clipboardKind) {
+    event.preventDefault(); if (clipboardKind === 'blocks') pasteSelection(); else pasteWorkspace();
+  }
   if (event.key === 'Escape') { if (!$('#block-picker').hidden) closePicker(); else if (!$('#context-menu').hidden) closeContextMenu(); else { pending = null; renderGraph(); } }
   if (['Delete', 'Backspace'].includes(event.key) && !editing) { event.preventDefault(); deleteSelection(); }
 });
