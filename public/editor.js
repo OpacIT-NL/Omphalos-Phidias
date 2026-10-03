@@ -13,8 +13,8 @@ let portDrag = null, suppressPortClick = false;
 const nodeResizeObserver = new ResizeObserver(() => scheduleNodeGeometry());
 const ws = () => project?.workspaces.find(item => item.id === workspaceID);
 const def = type => definitions.find(item => item.type === type);
+const nextNumberId = items => Math.max(0, ...items.map(item => Number.isInteger(item.numberId) && item.numberId > 0 ? item.numberId : 0)) + 1;
 const nodeWidth = block => (def(block.type)?.fields.length ? 500 : 300);
-const icons = { Triggers: '↗', Actions: '↳', Logic: '◇', Data: '≡' };
 const typeColors = { action: '#23a559', string: '#e67e22', number: '#168df0', boolean: '#d42ee7', object: '#6f42c1', array: '#e83e8c', unspecified: '#8b949e' };
 
 function toast(message, error = false) {
@@ -86,7 +86,8 @@ function pasteSnapshot(snapshot, offsetX, offsetY) {
   const workspace = ws();
   if (!workspace || !snapshot?.blocks.length) return 0;
   const idMap = new Map(snapshot.blocks.map(block => [block.id, uid()]));
-  const blocks = snapshot.blocks.map(block => ({ ...structuredClone(block), id: idMap.get(block.id), x: block.x + offsetX, y: block.y + offsetY }));
+  let numberId = nextNumberId(workspace.blocks);
+  const blocks = snapshot.blocks.map(block => ({ ...structuredClone(block), id: idMap.get(block.id), numberId: numberId++, x: block.x + offsetX, y: block.y + offsetY }));
   const connections = snapshot.connections.map(edge => ({ ...structuredClone(edge), id: uid(), from: idMap.get(edge.from), to: idMap.get(edge.to) }));
   workspace.blocks.push(...blocks); workspace.connections.push(...connections);
   selectedBlocks.clear(); blocks.forEach(block => selectedBlocks.add(block.id)); selectedEdge = pending = null;
@@ -136,6 +137,7 @@ function pasteWorkspace() {
   const workspace = {
     ...structuredClone(source),
     id: uid(),
+    numberId: nextNumberId(project.workspaces),
     name: copiedWorkspaceName(source.name),
     categoryId: workspaceClipboard.projectId === project.id && categoryIDs.has(source.categoryId) ? source.categoryId : null,
     blocks: source.blocks.map(block => ({ ...structuredClone(block), id: blockIDs.get(block.id) })),
@@ -201,7 +203,7 @@ function workspaceCategoryChoices() {
   return [{ value: '', label: 'Uncategorized' }, ...(project?.workspaceCategories || []).map(category => ({ value: category.id, label: category.name }))];
 }
 function workspaceRow(item) {
-  return '<button class="workspace-row ' + (item.id === workspaceID ? 'active ' : '') + (item.active ? '' : 'disabled') + '" data-workspace="' + escapeHTML(item.id) + '" draggable="true" title="Drag to reorder or move to another category"><span>#</span><span>' + escapeHTML(item.name) + '</span>' + (item.active ? '' : '<i>PAUSED</i>') + '</button>';
+  return '<button class="workspace-row ' + (item.id === workspaceID ? 'active ' : '') + (item.active ? '' : 'disabled') + '" data-workspace="' + escapeHTML(item.id) + '" draggable="true" title="Drag to reorder or move to another category"><span class="workspace-number">#' + escapeHTML(item.numberId) + '</span><span>' + escapeHTML(item.name) + '</span>' + (item.active ? '' : '<i>PAUSED</i>') + '</button>';
 }
 function workspaceGroup(category, items) {
   const id = category?.id || '', name = category?.name || 'Uncategorized';
@@ -218,7 +220,7 @@ function render() {
   const uncategorized = (project?.workspaces || []).filter(item => !item.categoryId || !knownCategories.has(item.categoryId));
   groups.push(workspaceGroup(null, uncategorized));
   $('#workspace-list').innerHTML = groups.join('');
-  $('#tabs').innerHTML = (project?.workspaces || []).filter(item => openWorkspaceIDs.has(item.id)).map(item => '<div class="workspace-tab ' + (item.id === workspaceID ? 'active' : '') + '"><button class="workspace-tab-select" data-workspace="' + escapeHTML(item.id) + '"><span>◇</span><span>' + escapeHTML(item.name) + '</span><span>' + (item.active ? '' : '○') + '</span></button><button class="workspace-tab-close" data-close-workspace="' + escapeHTML(item.id) + '" title="Close workspace tab" aria-label="Close ' + escapeHTML(item.name) + ' tab">×</button></div>').join('');
+  $('#tabs').innerHTML = (project?.workspaces || []).filter(item => openWorkspaceIDs.has(item.id)).map(item => '<div class="workspace-tab ' + (item.id === workspaceID ? 'active' : '') + '"><button class="workspace-tab-select" data-workspace="' + escapeHTML(item.id) + '"><span>◇</span><span>' + escapeHTML(item.name) + ' #' + escapeHTML(item.numberId) + '</span><span>' + (item.active ? '' : '○') + '</span></button><button class="workspace-tab-close" data-close-workspace="' + escapeHTML(item.id) + '" title="Close workspace tab" aria-label="Close ' + escapeHTML(item.name) + ' tab">×</button></div>').join('');
   renderProjects(); renderLibrary(); renderGraph();
 }
 function renderLibrary() {
@@ -250,7 +252,7 @@ function renderGraph() {
     const outputHTML = outputs.map(port => `<div class="port-row output-row" data-port-kind="${port.kind}" data-field-link="${escapeHTML(port.id)}"><span>${escapeHTML(port.name)}</span><button class="port ${pending?.from === block.id && pending.output === port.id ? 'pending' : ''}" style="--port-color:${portColor(port)}" data-output="${escapeHTML(port.id)}" data-from="${block.id}" data-kind="${port.kind}" data-types="${escapeHTML((port.types || []).join(','))}" aria-label="Connect ${escapeHTML(port.name)} output"></button></div>`).join('');
     const optionHTML = definition.fields.map(field => optionEditor(field, block.options[field.key])).join('');
     const classes = [inputs.length && 'has-inputs', definition.fields.length && 'has-options', outputs.length && 'has-outputs'].filter(Boolean).join(' ');
-    return `<article class="node ${selectedBlocks.has(block.id) ? 'selected' : ''}" data-node="${block.id}" style="left:${block.x}px;top:${block.y}px;width:${nodeWidth(block)}px"><div class="node-head"><span class="block-icon">${icons[definition.category] || '□'}</span><strong>${escapeHTML(definition.name)}</strong><span class="node-category">[${escapeHTML(definition.category)}]</span><span class="drag-grip">⠿</span></div><div class="node-body ${classes}" style="--port-row-count:${Math.max(inputs.length, outputs.length, 1)}"><div class="port-column input-ports">${inputHTML}</div><div class="option-column">${optionHTML || (!inputs.length && !outputs.length ? `<p>${escapeHTML(definition.description)}</p>` : '')}</div><div class="port-column output-ports">${outputHTML}</div></div></article>`;
+    return `<article class="node ${selectedBlocks.has(block.id) ? 'selected' : ''}" data-node="${block.id}" style="left:${block.x}px;top:${block.y}px;width:${nodeWidth(block)}px"><div class="node-head"><span class="block-number">#${escapeHTML(block.numberId)}</span><strong>${escapeHTML(definition.name)}</strong><span class="node-category">[${escapeHTML(definition.category)}]</span><span class="drag-grip">⠿</span></div><div class="node-body ${classes}" style="--port-row-count:${Math.max(inputs.length, outputs.length, 1)}"><div class="port-column input-ports">${inputHTML}</div><div class="option-column">${optionHTML || (!inputs.length && !outputs.length ? `<p>${escapeHTML(definition.description)}</p>` : '')}</div><div class="port-column output-ports">${outputHTML}</div></div></article>`;
   }).join('');
   $('#nodes').querySelectorAll('[data-field]').forEach(input => {
     input.addEventListener('input', () => {
@@ -369,7 +371,7 @@ function addBlock(type, position = pickerWorldPosition) {
   const definition = def(type); if (!definition) return;
   const rect = $('#viewport').getBoundingClientRect();
   const width = definition.fields.length ? 500 : 300;
-  const block = { id: uid(), type, x: Math.round(position?.x ?? (rect.width / 2 - view.x) / view.zoom - width / 2), y: Math.round(position?.y ?? (rect.height / 2 - view.y) / view.zoom - 80), options: Object.fromEntries(definition.fields.map(field => [field.key, field.default])) };
+  const block = { id: uid(), numberId: nextNumberId(ws().blocks), type, x: Math.round(position?.x ?? (rect.width / 2 - view.x) / view.zoom - width / 2), y: Math.round(position?.y ?? (rect.height / 2 - view.y) / view.zoom - 80), options: Object.fromEntries(definition.fields.map(field => [field.key, field.default])) };
   ws().blocks.push(block); selectBlock(block.id); markDirty(); closePicker(); renderGraph();
 }
 function connect(to, input, kind, types) {
@@ -642,7 +644,7 @@ async function addWorkspace(categoryId = '') {
   ], 'Add workspace');
   if (!values) return;
   const validCategory = project.workspaceCategories?.some(category => category.id === categoryId) ? categoryId : null;
-  const workspace = { id: uid(), name: values.name, categoryId: validCategory, active: true, blocks: [], connections: [] };
+  const workspace = { id: uid(), numberId: nextNumberId(project.workspaces), name: values.name, categoryId: validCategory, active: true, blocks: [], connections: [] };
   project.workspaces.push(workspace); openWorkspaceIDs.add(workspace.id); workspaceID = workspace.id; clearSelection(true); markDirty(); render(); fit();
 }
 $('#add-workspace').onclick = handle(() => addWorkspace());

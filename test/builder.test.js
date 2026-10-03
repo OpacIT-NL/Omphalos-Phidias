@@ -50,6 +50,8 @@ test('project creation, atomic saves, conflicts, reload, and downloadable ZIP', 
   for (const file of ['app.js', 'workspaces.json', 'blocks/api_endpoint.js', 'blocks/get_sub_endpoint_by_name.js', 'blocks/linux_command.js', 'validate.js', 'cron.js', 'auth.js', 'logger.js', 'package.json']) await fs.access(path.join(directory, project.id, file));
   assert.equal(project.appConfig, null);
   assert.deepEqual(project.workspaceCategories, []);
+  assert.equal(project.workspaces[0].numberId, 1);
+  assert.deepEqual(project.workspaces[0].blocks.map(block => block.numberId), [1, 2]);
   assert.equal(zipEntries(await store.export(project.id)).has('config.json'), false);
   const probe = require('node:net').createServer();
   await new Promise(resolve => probe.listen(0, '127.0.0.1', resolve));
@@ -70,6 +72,7 @@ test('project creation, atomic saves, conflicts, reload, and downloadable ZIP', 
   const extracted = zipEntries(zip);
   const exportedProject = JSON.parse(extracted.get('workspaces.json'));
   assert.equal(exportedProject.revision, 2); assert.equal(exportedProject.workspaceCategories[0].name, 'Public API'); assert.equal(exportedProject.workspaces[0].categoryId, 'public-api');
+  assert.equal(exportedProject.workspaces[0].numberId, 1); assert.deepEqual(exportedProject.workspaces[0].blocks.map(block => block.numberId), [1, 2]);
   assert.ok(extracted.has('auth.js'));
   assert.ok(extracted.has('logger.js'));
   assert.equal(JSON.parse(extracted.get('package.json')).dependencies.argon2, '^0.45.1');
@@ -135,7 +138,7 @@ test('validation rejects dangling wires, duplicate routes, loops, and invalid op
   const definitions = store.definitions(project.id);
   const reject = (modify, pattern) => { const copy = structuredClone(project); modify(copy.workspaces[0], copy); assert.throws(() => validate(copy, definitions), pattern); };
   reject(ws => { ws.connections[0].to = 'missing'; }, /Invalid connection/);
-  reject(ws => { ws.blocks.push({ ...structuredClone(ws.blocks[0]), id: 'duplicate' }); }, /Duplicate HTTP/);
+  reject(ws => { ws.blocks.push({ ...structuredClone(ws.blocks[0]), id: 'duplicate', numberId: 3 }); }, /Duplicate HTTP/);
   reject(ws => { ws.blocks[1].options.status = 999; }, /Status code/);
   reject(ws => { ws.blocks[1].type = '../server'; }, /Unknown block/);
   reject(ws => {
@@ -145,10 +148,45 @@ test('validation rejects dangling wires, duplicate routes, loops, and invalid op
   reject(ws => { ws.connections.push({ ...ws.connections[0], id: 'second' }); }, /one connection/);
   reject((ws, document) => { document.workspaceCategories = [{ id: 'api', name: 'API' }]; ws.categoryId = 'missing'; }, /workspace category/);
   reject((ws, document) => { document.workspaceCategories = [{ id: 'api', name: 'API' }, { id: 'api', name: 'Duplicate' }]; }, /duplicate workspace category/);
-  const paused = structuredClone(project.workspaces[0]); paused.id = 'paused'; paused.active = false; project.workspaces.push(paused); assert.doesNotThrow(() => validate(project, definitions));
+  reject(ws => { ws.blocks[1].numberId = ws.blocks[0].numberId; }, /duplicate block number ID/);
+  reject((ws, document) => { const duplicate = structuredClone(ws); duplicate.id = 'other'; document.workspaces.push(duplicate); }, /duplicate workspace number ID/);
+  const legacy = structuredClone(project);
+  delete legacy.workspaces[0].numberId;
+  legacy.workspaces[0].blocks.forEach(block => delete block.numberId);
+  assert.doesNotThrow(() => validate(legacy, definitions));
+  assert.equal(legacy.workspaces[0].numberId, 1); assert.deepEqual(legacy.workspaces[0].blocks.map(block => block.numberId), [1, 2]);
+  const paused = structuredClone(project.workspaces[0]); paused.id = 'paused'; paused.numberId = 2; paused.active = false; project.workspaces.push(paused); assert.doesNotThrow(() => validate(project, definitions));
   const invalidPort = structuredClone(project); invalidPort.appConfig = { port: 70000, host: '127.0.0.1' }; await assert.rejects(store.save(project.id, invalidPort), /Application port/);
   const invalidHost = structuredClone(project); invalidHost.appConfig = { port: 3001, host: 'localhost', 'log-level': 3 }; await assert.rejects(store.save(project.id, invalidHost), /Application host/);
   const invalidLogLevel = structuredClone(project); invalidLogLevel.appConfig = { port: 3001, host: '127.0.0.1', 'log-level': 5 }; await assert.rejects(store.save(project.id, invalidLogLevel), /Application log level/);
+});
+
+test('runtime logs the workspace and block numeric IDs for workflow errors', async t => {
+  const definitions = loadDefinitions(path.resolve(__dirname, '../blocks'));
+  definitions.set('failing_request', {
+    type: 'failing_request', name: 'Request API', category: 'Actions', description: 'Test failure', fields: [], outputs: [],
+    async execute() { throw new Error('upstream unavailable'); }
+  });
+  const document = { version: 1, name: 'Errors', workspaces: [{
+    id: 'main', numberId: 1, name: 'MyWorkspace', active: true,
+    blocks: [
+      { id: 'endpoint', numberId: 1, type: 'http', x: 0, y: 0, options: { method: 'GET', path: '/fail' } },
+      { id: 'request', numberId: 14, type: 'failing_request', x: 0, y: 0, options: {} }
+    ],
+    connections: [{ id: 'next', from: 'endpoint', output: 'next', to: 'request', input: 'action', kind: 'action' }]
+  }] };
+  const messages = [];
+  const logger = {
+    error: (...values) => messages.push(require('node:util').format(...values)),
+    warning() {}, debug() {}
+  };
+  const app = createApp({ document, definitions, logger });
+  const address = await app.start(0, '127.0.0.1'); t.after(() => app.stop());
+  const response = await fetch(`http://127.0.0.1:${address.port}/fail`);
+  assert.equal(response.status, 500); assert.equal(await response.text(), 'Workflow failed');
+  assert.equal(messages.length, 1);
+  assert.match(messages[0], /Block triggered error \(Workspace #1: MyWorkspace > Block #14: Request API\):/);
+  assert.match(messages[0], /upstream unavailable/);
 });
 
 test('runtime HTTP payloads, variables, conditions, outbound requests and failures', async t => {

@@ -88,11 +88,12 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-vis
 .workspace-row.drop-before { box-shadow:inset 0 2px 0 var(--accent); }
 .workspace-row.drop-after { box-shadow:inset 0 -2px 0 var(--accent); }
 .workspace-category.drop-category>.workspace-category-title { border-radius:4px;background:var(--accent-soft);color:var(--text); }
-.workspace-row { width:100%;height:34px;display:grid;grid-template-columns:20px minmax(0,1fr) auto;gap:5px;align-items:center;border:0;border-radius:5px;padding:0 8px;background:transparent;color:var(--muted);text-align:left; }
+.workspace-row { width:100%;height:34px;display:grid;grid-template-columns:34px minmax(0,1fr) auto;gap:5px;align-items:center;border:0;border-radius:5px;padding:0 8px;background:transparent;color:var(--muted);text-align:left; }
 .workspace-row:hover { color:var(--text);background:var(--surface-3); }
 .workspace-row.active { color:var(--text);background:var(--accent-soft);font-weight:600; }
 .workspace-row.disabled { opacity:.62; }
 .workspace-row span { overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
+.workspace-row .workspace-number { font-size:10px;font-variant-numeric:tabular-nums;color:var(--muted); }
 .workspace-row i { font-size:9px;font-style:normal; }
 .sidebar-project>footer { padding:9px 10px;border-top:1px solid var(--border);color:var(--muted);font-size:10px;line-height:1.45; }
 
@@ -157,7 +158,7 @@ button.primary { min-height:32px;border:1px solid var(--accent);border-radius:5p
 .node.selected { border-color:var(--accent);box-shadow:0 0 0 2px #168df055,0 5px 18px #0005; }
 .node-head { height:39px;display:flex;align-items:center;gap:6px;padding:0 9px;border-bottom:1px solid #1118;border-radius:6px 6px 0 0;background:var(--block-header);cursor:move;user-select:none; }
 .node-head strong { min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px; }
-.block-icon { flex:none;color:var(--accent);font-size:16px; }
+.block-number { flex:none;min-width:22px;color:var(--accent);font-size:11px;font-weight:700;font-variant-numeric:tabular-nums;text-align:center; }
 .node-category { color:var(--muted);font-size:11px;white-space:nowrap; }
 .drag-grip { margin-left:auto;color:var(--muted);font-size:16px; }
 .node-body { --port-inset:24px;--connector-edge-inset:8px;display:grid;grid-template-columns:minmax(0,1fr);gap:10px;min-height:max(80px,calc(var(--port-row-count,1) * 29px - 7px));padding:11px var(--port-inset) 20px; }

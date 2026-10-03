@@ -2,6 +2,22 @@
 const safeID = /^[a-zA-Z0-9_-]{1,80}$/;
 const { parseCron } = require('./cron');
 const normalizeRoutePath = value => value.replace(/\/+$/, '') || '/';
+function assignMissingNumberIds(items) {
+  const used = new Set(items.filter(item => Number.isInteger(item?.numberId) && item.numberId > 0).map(item => item.numberId));
+  let next = 1;
+  for (const item of items) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+    if (item.numberId !== undefined && item.numberId !== null) continue;
+    while (used.has(next)) next++;
+    item.numberId = next; used.add(next); next++;
+  }
+}
+function ensureNumberIds(document) {
+  if (!Array.isArray(document?.workspaces)) return document;
+  assignMissingNumberIds(document.workspaces);
+  for (const workspace of document.workspaces) if (Array.isArray(workspace?.blocks)) assignMissingNumberIds(workspace.blocks);
+  return document;
+}
 function validate(document, definitions) {
   const fail = message => { throw Object.assign(new Error(message), { status: 400 }); };
   if (!document || document.version !== 1 || typeof document.name !== 'string' || !document.name.trim() || document.name.length > 100) fail('Invalid project name or format version');
@@ -14,16 +30,21 @@ function validate(document, definitions) {
     categoryIDs.add(category.id);
   }
   if (!Array.isArray(document.workspaces) || !document.workspaces.length || document.workspaces.length > 100) fail('A project needs 1–100 workspaces');
-  const workspaceIDs = new Set(), routes = new Set();
+  ensureNumberIds(document);
+  const workspaceIDs = new Set(), workspaceNumberIds = new Set(), routes = new Set();
   for (const ws of document.workspaces) {
     if (!ws || typeof ws.id !== 'string' || !safeID.test(ws.id) || workspaceIDs.has(ws.id)) fail('Invalid or duplicate workspace ID');
     workspaceIDs.add(ws.id);
+    if (!Number.isInteger(ws.numberId) || ws.numberId < 1 || workspaceNumberIds.has(ws.numberId)) fail('Invalid or duplicate workspace number ID');
+    workspaceNumberIds.add(ws.numberId);
     if (typeof ws.name !== 'string' || !ws.name.trim() || ws.name.length > 100 || typeof ws.active !== 'boolean') fail('Invalid workspace name or active state');
     if (ws.categoryId !== undefined && ws.categoryId !== null && (typeof ws.categoryId !== 'string' || !categoryIDs.has(ws.categoryId))) fail('Invalid workspace category');
     if (!Array.isArray(ws.blocks) || ws.blocks.length > 1000 || !Array.isArray(ws.connections) || ws.connections.length > 4000) fail('Invalid workspace graph');
-    const nodes = new Map(), edgeIDs = new Set();
+    const nodes = new Map(), edgeIDs = new Set(), blockNumberIds = new Set();
     for (const block of ws.blocks) {
       if (!block || typeof block.id !== 'string' || !safeID.test(block.id) || nodes.has(block.id)) fail('Invalid or duplicate block ID');
+      if (!Number.isInteger(block.numberId) || block.numberId < 1 || blockNumberIds.has(block.numberId)) fail('Invalid or duplicate block number ID');
+      blockNumberIds.add(block.numberId);
       const def = definitions.get(block.type);
       if (!def) fail(`Unknown block: ${block.type}`);
       if (!Number.isFinite(block.x) || !Number.isFinite(block.y) || !block.options || typeof block.options !== 'object' || Array.isArray(block.options)) fail('Invalid block position or options');
@@ -84,4 +105,4 @@ function validate(document, definitions) {
   }
   return document;
 }
-module.exports = { validate, safeID };
+module.exports = { validate, safeID, ensureNumberIds };

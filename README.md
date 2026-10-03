@@ -184,6 +184,8 @@ projects/<project-id>/
 
 Standalone automations create `log/yyyy-mm-dd-N.txt` when `node app.js` starts. `N` begins at `1` each UTC date and increases for every restart that day. Lifecycle messages (listening, stopping, and stopped) are always written to stdout so process managers such as AMP can show application state; their file copies still follow the configured level. Workflow errors, HTTP request diagnostics, **Write to log**, and console output from blocks use the automation's configured log level. Level meanings are the same as the builder table above.
 
+Every workspace and block also has a persistent numeric ID shown in the editor, alongside its internal UUID. New workspaces and blocks receive the next ascending number in their own scope; reordering does not change it. Workflow failures identify the exact location, for example: `Block triggered error (Workspace #1: MyWorkspace > Block #14: Request API)`. Older projects receive numeric IDs automatically when they are loaded.
+
 You can also copy the entire project folder directly. The builder never starts project workflows on its own server. Edits to a builder project do not update an already deployed copy: export and deploy again, run `npm install` when dependencies change, then restart that application. Existing managed projects use the current bundled definitions in the editor and receive the current bundled runtime/blocks when exported; their stored project folders are not overwritten. Project-only custom block types remain available.
 
 ## Included blocks

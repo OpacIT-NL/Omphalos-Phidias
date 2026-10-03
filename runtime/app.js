@@ -76,8 +76,29 @@ function loadAppConfig(directory = __dirname) {
   }
   return validateAppConfig(value);
 }
+function attachWorkflowContext(error, workspace, block, definition) {
+  const failure = error instanceof Error ? error : new Error(String(error));
+  failure.workflowContext ||= {
+    workspaceNumberId: workspace?.numberId,
+    workspaceName: workspace?.name || 'Unknown workspace',
+    blockNumberId: block?.numberId,
+    blockName: definition?.name || block?.type || 'Unknown block'
+  };
+  return failure;
+}
 function createApp({ directory = __dirname, document, definitions, onError, logger = null, clock = () => new Date() } = {}) {
-  const reportError = onError || (error => logger ? logger.error('Workflow failed: %s', error?.stack || error) : console.error(error));
+  const reportError = onError || (error => {
+    const context = error?.workflowContext;
+    if (context && logger) {
+      logger.error('Block triggered error (Workspace #%d: %s > Block #%d: %s): %s', context.workspaceNumberId, context.workspaceName, context.blockNumberId, context.blockName, error?.stack || error);
+    } else if (context) {
+      console.error(`Block triggered error (Workspace #${context.workspaceNumberId}: ${context.workspaceName} > Block #${context.blockNumberId}: ${context.blockName}):`, error);
+    } else if (logger) {
+      logger.error('Workflow failed: %s', error?.stack || error);
+    } else {
+      console.error(error);
+    }
+  });
   definitions ||= loadDefinitions(path.join(directory, 'blocks'));
   for (const [type, definition] of definitions) definitions.set(type, normalizeDefinition(definition, `${type}.js`));
   document ||= JSON.parse(fs.readFileSync(path.join(directory, 'workspaces.json'), 'utf8'));
@@ -118,6 +139,13 @@ function createApp({ directory = __dirname, document, definitions, onError, logg
       return context.values.get(key);
     }
     async function executeBlock(block, actionInput = 'action', stack = new Set()) {
+      try {
+        return await executeBlockInner(block, actionInput, stack);
+      } catch (error) {
+        throw attachWorkflowContext(error, ws, block, definitions.get(block?.type));
+      }
+    }
+    async function executeBlockInner(block, actionInput = 'action', stack = new Set()) {
       signal.throwIfAborted();
       if (++steps > 1000) throw new Error('Workflow step limit exceeded');
       const def = definitions.get(block.type);
