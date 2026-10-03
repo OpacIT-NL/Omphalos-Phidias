@@ -3,8 +3,10 @@ const $ = selector => document.querySelector(selector);
 const escapeHTML = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
 const uid = () => crypto.randomUUID ? crypto.randomUUID() : 'id-' + Array.from(crypto.getRandomValues(new Uint32Array(4)), n => n.toString(16)).join('');
 const initials = name => String(name || 'Project').split(/[\s_-]+/).filter(Boolean).slice(0, 2).map(part => part[0]).join('').toUpperCase();
-let project = null, projects = [], definitions = [], workspaceID = null, selected = null, selectedEdge = null, pending = null;
+let project = null, projects = [], definitions = [], workspaceID = null, selectedEdge = null, pending = null;
 let csrfToken = '', dirty = false, generation = 0, saving = null, view = { x: 0, y: 60, zoom: 1 }, toastTimer;
+const selectedBlocks = new Set();
+let blockClipboard = null, pasteSequence = 0;
 let pickerWorldPosition = null;
 let geometryFrame = 0;
 let portDrag = null, suppressPortClick = false;
@@ -29,18 +31,77 @@ async function api(url, options = {}) {
   return response.json();
 }
 function handle(action) { return (...args) => Promise.resolve().then(() => action(...args)).catch(error => toast(error.message, true)); }
+function modalField(field) {
+  const name = escapeHTML(field.name), label = escapeHTML(field.label);
+  if (field.type === 'select') {
+    const choices = (field.choices || []).map(choice => typeof choice === 'object' ? choice : { value: choice, label: choice });
+    const options = choices.map(choice => '<option value="' + escapeHTML(choice.value) + '" ' + (String(field.value ?? '') === String(choice.value) ? 'selected' : '') + '>' + escapeHTML(choice.label) + '</option>').join('');
+    return '<label class="field"><span>' + label + '</span><select name="' + name + '" autocomplete="off">' + options + '</select></label>';
+  }
+  const checked = field.type === 'checkbox' && field.value ? 'checked' : '';
+  const value = field.type === 'checkbox' ? '' : 'value="' + escapeHTML(field.value || '') + '"';
+  const maxlength = field.type === 'password' ? 1000 : 100;
+  return '<label class="field"><span>' + label + '</span><input name="' + name + '" type="' + (field.type || 'text') + '" ' + checked + ' ' + value + ' maxlength="' + maxlength + '" required autocomplete="off"></label>';
+}
 function modal(title, fields, submit = 'Continue') {
   return new Promise(resolve => {
     const dialog = $('#form-dialog'); $('#dialog-title').textContent = title; $('#dialog-submit').textContent = submit; $('#dialog-error').textContent = '';
-    $('#dialog-fields').innerHTML = fields.map(field => `<label class="field"><span>${escapeHTML(field.label)}</span><input name="${escapeHTML(field.name)}" type="${field.type || 'text'}" ${field.type === 'checkbox' ? (field.value ? 'checked' : '') : `value="${escapeHTML(field.value || '')}" maxlength="${field.type === 'password' ? 1000 : 100}" required`} autocomplete="off"></label>`).join('');
+    $('#dialog-fields').innerHTML = fields.map(modalField).join('');
     dialog.returnValue = ''; dialog.showModal();
     dialog.addEventListener('close', () => {
       if (dialog.returnValue !== 'default') return resolve(null);
-      resolve(Object.fromEntries(fields.map(field => { const input = dialog.querySelector(`[name="${field.name}"]`); return [field.name, field.type === 'checkbox' ? input.checked : input.value.trim()]; })));
+      resolve(Object.fromEntries(fields.map(field => { const input = dialog.querySelector('[name="' + CSS.escape(field.name) + '"]'); return [field.name, field.type === 'checkbox' ? input.checked : input.value.trim()]; })));
     }, { once: true });
   });
 }
 function markDirty() { dirty = true; generation++; $('#save-state').textContent = 'Unsaved changes'; $('#save').disabled = false; }
+function clearSelection(clearPending = false) {
+  selectedBlocks.clear(); selectedEdge = null;
+  if (clearPending) pending = null;
+}
+function selectBlock(id, additive = false) {
+  if (!additive) selectedBlocks.clear();
+  if (additive && selectedBlocks.has(id)) selectedBlocks.delete(id);
+  else selectedBlocks.add(id);
+  selectedEdge = null;
+}
+function updateBlockSelection() {
+  document.querySelectorAll('.node').forEach(node => node.classList.toggle('selected', selectedBlocks.has(node.dataset.node)));
+}
+function selectionSnapshot() {
+  const workspace = ws();
+  if (!workspace || !selectedBlocks.size) return null;
+  const ids = new Set(selectedBlocks);
+  return {
+    blocks: workspace.blocks.filter(block => ids.has(block.id)).map(block => structuredClone(block)),
+    connections: workspace.connections.filter(edge => ids.has(edge.from) && ids.has(edge.to)).map(edge => structuredClone(edge))
+  };
+}
+function pasteSnapshot(snapshot, offsetX, offsetY) {
+  const workspace = ws();
+  if (!workspace || !snapshot?.blocks.length) return 0;
+  const idMap = new Map(snapshot.blocks.map(block => [block.id, uid()]));
+  const blocks = snapshot.blocks.map(block => ({ ...structuredClone(block), id: idMap.get(block.id), x: block.x + offsetX, y: block.y + offsetY }));
+  const connections = snapshot.connections.map(edge => ({ ...structuredClone(edge), id: uid(), from: idMap.get(edge.from), to: idMap.get(edge.to) }));
+  workspace.blocks.push(...blocks); workspace.connections.push(...connections);
+  selectedBlocks.clear(); blocks.forEach(block => selectedBlocks.add(block.id)); selectedEdge = pending = null;
+  markDirty(); closeContextMenu(); renderGraph();
+  return blocks.length;
+}
+function copySelection() {
+  const snapshot = selectionSnapshot();
+  if (!snapshot) return false;
+  blockClipboard = snapshot; pasteSequence = 0;
+  toast('Copied ' + snapshot.blocks.length + ' block' + (snapshot.blocks.length === 1 ? '' : 's') + ' and ' + snapshot.connections.length + ' wire' + (snapshot.connections.length === 1 ? '' : 's') + '.');
+  return true;
+}
+function pasteSelection() {
+  if (!blockClipboard || !ws()) return false;
+  pasteSequence += 1;
+  const count = pasteSnapshot(blockClipboard, pasteSequence * 40, pasteSequence * 40);
+  if (count) toast('Pasted ' + count + ' block' + (count === 1 ? '' : 's') + '.');
+  return count > 0;
+}
 function renderProjects() {
   $('#project-orbs').innerHTML = projects.map((item, index) => `<button class="project-orb color-${index % 7} ${project?.id === item.id && $('#home-screen').hidden ? 'active' : ''}" data-project="${escapeHTML(item.id)}" title="${escapeHTML(item.name)}">${escapeHTML(initials(item.name))}</button>`).join('');
   $('#project-count').textContent = `${projects.length} project${projects.length === 1 ? '' : 's'}`;
@@ -48,7 +109,7 @@ function renderProjects() {
 }
 async function refreshProjects() { projects = await api('/api/projects'); renderProjects(); return projects; }
 function setProjectControls(enabled) {
-  for (const selector of ['#export', '#app-settings', '#add-workspace', '#workspace-settings', '#add-block']) $(selector).disabled = !enabled;
+  for (const selector of ['#export', '#app-settings', '#add-workspace', '#add-workspace-category', '#workspace-settings', '#add-block']) $(selector).disabled = !enabled;
   $('#save').disabled = !enabled || !dirty;
 }
 function showHome() {
@@ -63,7 +124,7 @@ async function openProject(id) {
   if (dirty && !confirm('Discard unsaved changes and open another project?')) return;
   const [document, library] = await Promise.all([api(`/api/projects/${id}`), api(`/api/projects/${id}/blocks`)]);
   project = document; definitions = library; workspaceID = document.workspaces[0]?.id || null;
-  dirty = false; generation = 0; selected = selectedEdge = pending = null; view = { x: 0, y: 60, zoom: 1 };
+  dirty = false; generation = 0; clearSelection(true); view = { x: 0, y: 60, zoom: 1 };
   $('#save-state').textContent = 'Saved to server'; setProjectControls(true);
   $('#home-screen').hidden = true; $('#editor').hidden = false;
   $('#workspace-sidebar').classList.remove('empty'); $('.sidebar-empty').hidden = true; $('.sidebar-project').hidden = false; $('[data-home]').classList.remove('active');
@@ -91,11 +152,24 @@ async function save() {
   })();
   try { await saving; } catch (error) { $('#save-state').textContent = 'Save failed'; throw error; } finally { saving = null; }
 }
+function workspaceCategoryChoices() {
+  return [{ value: '', label: 'Uncategorized' }, ...(project?.workspaceCategories || []).map(category => ({ value: category.id, label: category.name }))];
+}
+function workspaceRow(item) {
+  return '<button class="workspace-row ' + (item.id === workspaceID ? 'active ' : '') + (item.active ? '' : 'disabled') + '" data-workspace="' + escapeHTML(item.id) + '"><span>#</span><span>' + escapeHTML(item.name) + '</span>' + (item.active ? '' : '<i>PAUSED</i>') + '</button>';
+}
+function workspaceGroup(name, items) {
+  return '<section class="workspace-category"><div class="workspace-category-title"><span>⌄</span><strong>' + escapeHTML(name) + '</strong><small>' + items.length + '</small></div>' + items.map(workspaceRow).join('') + '</section>';
+}
 function render() {
   $('#project-title').textContent = project?.name || '';
   $('#workspace-status').textContent = ws() ? (ws().active ? 'Workspace active' : 'Workspace paused') : 'No workspace';
-  const rows = (project?.workspaces || []).map(item => `<button class="workspace-row ${item.id === workspaceID ? 'active' : ''} ${item.active ? '' : 'disabled'}" data-workspace="${item.id}"><span>#</span><span>${escapeHTML(item.name)}</span>${item.active ? '' : '<i>PAUSED</i>'}</button>`).join('');
-  $('#workspace-list').innerHTML = rows;
+  const categories = project?.workspaceCategories || [];
+  const knownCategories = new Set(categories.map(category => category.id));
+  const groups = categories.map(category => workspaceGroup(category.name, project.workspaces.filter(item => item.categoryId === category.id)));
+  const uncategorized = (project?.workspaces || []).filter(item => !item.categoryId || !knownCategories.has(item.categoryId));
+  if (uncategorized.length || !categories.length) groups.push(workspaceGroup('Uncategorized', uncategorized));
+  $('#workspace-list').innerHTML = groups.join('');
   $('#tabs').innerHTML = (project?.workspaces || []).map(item => `<button class="${item.id === workspaceID ? 'active' : ''}" data-workspace="${item.id}"><span>◇</span><span>${escapeHTML(item.name)}</span><span>${item.active ? '' : '○'}</span></button>`).join('');
   renderProjects(); renderLibrary(); renderGraph();
 }
@@ -128,7 +202,7 @@ function renderGraph() {
     const outputHTML = outputs.map(port => `<div class="port-row output-row" data-port-kind="${port.kind}" data-field-link="${escapeHTML(port.id)}"><span>${escapeHTML(port.name)}</span><button class="port ${pending?.from === block.id && pending.output === port.id ? 'pending' : ''}" style="--port-color:${portColor(port)}" data-output="${escapeHTML(port.id)}" data-from="${block.id}" data-kind="${port.kind}" data-types="${escapeHTML((port.types || []).join(','))}" aria-label="Connect ${escapeHTML(port.name)} output"></button></div>`).join('');
     const optionHTML = definition.fields.map(field => optionEditor(field, block.options[field.key])).join('');
     const classes = [inputs.length && 'has-inputs', definition.fields.length && 'has-options', outputs.length && 'has-outputs'].filter(Boolean).join(' ');
-    return `<article class="node ${selected === block.id ? 'selected' : ''}" data-node="${block.id}" style="left:${block.x}px;top:${block.y}px;width:${nodeWidth(block)}px"><div class="node-head"><span class="block-icon">${icons[definition.category] || '□'}</span><strong>${escapeHTML(definition.name)}</strong><span class="node-category">[${escapeHTML(definition.category)}]</span><span class="drag-grip">⠿</span></div><div class="node-body ${classes}" style="--port-row-count:${Math.max(inputs.length, outputs.length, 1)}"><div class="port-column input-ports">${inputHTML}</div><div class="option-column">${optionHTML || (!inputs.length && !outputs.length ? `<p>${escapeHTML(definition.description)}</p>` : '')}</div><div class="port-column output-ports">${outputHTML}</div></div></article>`;
+    return `<article class="node ${selectedBlocks.has(block.id) ? 'selected' : ''}" data-node="${block.id}" style="left:${block.x}px;top:${block.y}px;width:${nodeWidth(block)}px"><div class="node-head"><span class="block-icon">${icons[definition.category] || '□'}</span><strong>${escapeHTML(definition.name)}</strong><span class="node-category">[${escapeHTML(definition.category)}]</span><span class="drag-grip">⠿</span></div><div class="node-body ${classes}" style="--port-row-count:${Math.max(inputs.length, outputs.length, 1)}"><div class="port-column input-ports">${inputHTML}</div><div class="option-column">${optionHTML || (!inputs.length && !outputs.length ? `<p>${escapeHTML(definition.description)}</p>` : '')}</div><div class="port-column output-ports">${outputHTML}</div></div></article>`;
   }).join('');
   $('#nodes').querySelectorAll('[data-field]').forEach(input => {
     input.addEventListener('input', () => {
@@ -157,7 +231,9 @@ function renderWires() {
     const inputID = edge.input || 'action';
     const from = document.querySelector(`[data-from="${CSS.escape(edge.from)}"][data-output="${CSS.escape(edge.output)}"]`), to = document.querySelector(`[data-input="${CSS.escape(edge.to)}"][data-port="${CSS.escape(inputID)}"]`);
     if (!from || !to) return '';
-    return `<path data-edge="${edge.id}" class="${selectedEdge === edge.id ? 'selected' : ''}" style="--wire-color:${from.style.getPropertyValue('--port-color')}" d="${wirePath(point(from), point(to))}"/>`;
+    const path = wirePath(point(from), point(to));
+    const selectedClass = selectedEdge === edge.id ? ' selected' : '';
+    return `<g class="wire${selectedClass}" data-edge="${edge.id}"><path class="wire-hit" d="${path}"/><path class="wire-line" style="--wire-color:${from.style.getPropertyValue('--port-color')}" d="${path}"/></g>`;
   }).join('');
   let preview = '';
   if (portDrag?.portElement?.isConnected) {
@@ -224,15 +300,21 @@ function startPortDrag(event, port) {
   viewport.addEventListener('pointermove', move); viewport.addEventListener('pointerup', stop); viewport.addEventListener('pointercancel', cancel);
 }
 function deleteSelection() {
-  if (!ws()) return;
-  if (selected) { ws().blocks = ws().blocks.filter(item => item.id !== selected); ws().connections = ws().connections.filter(edge => edge.from !== selected && edge.to !== selected); }
-  else if (selectedEdge) ws().connections = ws().connections.filter(edge => edge.id !== selectedEdge);
+  const workspace = ws();
+  if (!workspace) return;
+  if (selectedBlocks.size) {
+    const ids = new Set(selectedBlocks);
+    workspace.blocks = workspace.blocks.filter(item => !ids.has(item.id));
+    workspace.connections = workspace.connections.filter(edge => !ids.has(edge.from) && !ids.has(edge.to));
+  } else if (selectedEdge) workspace.connections = workspace.connections.filter(edge => edge.id !== selectedEdge);
   else return;
-  selected = selectedEdge = pending = null; markDirty(); closeContextMenu(); renderGraph();
+  clearSelection(true); markDirty(); closeContextMenu(); renderGraph();
 }
 function duplicateSelection() {
-  const block = ws()?.blocks.find(item => item.id === selected); if (!block) return;
-  const clone = structuredClone(block); clone.id = uid(); clone.x += 38; clone.y += 54; ws().blocks.push(clone); selected = clone.id; markDirty(); closeContextMenu(); renderGraph();
+  const snapshot = selectionSnapshot();
+  if (!snapshot) return;
+  const count = pasteSnapshot(snapshot, 38, 54);
+  if (count) toast('Duplicated ' + count + ' block' + (count === 1 ? '' : 's') + '.');
 }
 function addBlock(type, position = pickerWorldPosition) {
   if (!ws()) return;
@@ -240,7 +322,7 @@ function addBlock(type, position = pickerWorldPosition) {
   const rect = $('#viewport').getBoundingClientRect();
   const width = definition.fields.length ? 500 : 300;
   const block = { id: uid(), type, x: Math.round(position?.x ?? (rect.width / 2 - view.x) / view.zoom - width / 2), y: Math.round(position?.y ?? (rect.height / 2 - view.y) / view.zoom - 80), options: Object.fromEntries(definition.fields.map(field => [field.key, field.default])) };
-  ws().blocks.push(block); selected = block.id; selectedEdge = null; markDirty(); closePicker(); renderGraph();
+  ws().blocks.push(block); selectBlock(block.id); markDirty(); closePicker(); renderGraph();
 }
 function connect(to, input, kind, types) {
   if (!pending) { toast('Click an output port first, then this input.'); return; }
@@ -279,57 +361,102 @@ function openPicker(clientX, clientY) {
   $('#picker-shade').hidden = false; picker.hidden = false; $('#search').value = ''; renderLibrary(); requestAnimationFrame(() => $('#search').focus());
 }
 function closePicker() { $('#picker-shade').hidden = true; $('#block-picker').hidden = true; pickerWorldPosition = null; }
-function openContextMenu(x, y) {
-  const menu = $('#context-menu'); menu.style.left = `${Math.min(innerWidth - 220, x)}px`; menu.style.top = `${Math.min(innerHeight - 90, y)}px`; $('#context-shade').hidden = false; menu.hidden = false;
+function openContextMenu(x, y, allowDuplicate = true) {
+  const menu = $('#context-menu'), duplicate = $('#duplicate-node');
+  duplicate.hidden = !allowDuplicate;
+  duplicate.querySelector('span').textContent = selectedBlocks.size > 1 ? 'Duplicate selected blocks' : 'Duplicate block';
+  menu.style.left = Math.min(innerWidth - 220, x) + 'px'; menu.style.top = Math.min(innerHeight - 90, y) + 'px'; $('#context-shade').hidden = false; menu.hidden = false;
 }
 function closeContextMenu() { $('#context-shade').hidden = true; $('#context-menu').hidden = true; }
-function selectWorkspace(id) { workspaceID = id; selected = selectedEdge = pending = null; render(); requestAnimationFrame(fit); }
+function selectWorkspace(id) { workspaceID = id; clearSelection(true); render(); requestAnimationFrame(fit); }
 
 $('#library').addEventListener('click', event => { const button = event.target.closest('[data-type]'); if (button) addBlock(button.dataset.type); });
 $('#search').oninput = renderLibrary;
 $('#picker-shade').onclick = closePicker;
 $('#context-shade').onclick = closeContextMenu;
+$('#dialog-cancel').onclick = () => $('#form-dialog').close('cancel');
 $('#duplicate-node').onclick = duplicateSelection;
 $('#remove-selection').onclick = deleteSelection;
 $('#viewport').addEventListener('contextmenu', event => {
-  event.preventDefault(); const node = event.target.closest('[data-node]');
-  if (node) { selected = node.dataset.node; selectedEdge = null; renderGraph(); openContextMenu(event.clientX, event.clientY); }
-  else openPicker(event.clientX, event.clientY);
+  event.preventDefault(); const node = event.target.closest('[data-node]'), edge = event.target.closest('[data-edge]');
+  if (node) {
+    if (!selectedBlocks.has(node.dataset.node)) selectBlock(node.dataset.node);
+    else selectedEdge = null;
+    renderGraph(); openContextMenu(event.clientX, event.clientY);
+  } else if (edge) {
+    selectedBlocks.clear(); selectedEdge = edge.dataset.edge; renderGraph(); openContextMenu(event.clientX, event.clientY, false);
+  } else openPicker(event.clientX, event.clientY);
 });
 $('#viewport').addEventListener('click', event => {
   if (suppressPortClick) { suppressPortClick = false; event.preventDefault(); return; }
   const output = event.target.closest('[data-output]'), input = event.target.closest('[data-input]'), edge = event.target.closest('[data-edge]');
   if (output || input) clickPort(output || input);
-  else if (edge) { selectedEdge = edge.dataset.edge; selected = null; renderGraph(); }
+  else if (edge) { selectedBlocks.clear(); selectedEdge = edge.dataset.edge; renderGraph(); }
 });
 $('#viewport').addEventListener('pointerdown', event => {
   const port = event.target.closest('[data-output], [data-input]');
   if (port && event.button === 0) { startPortDrag(event, port); return; }
   if (event.button !== 0 || event.target.closest('button,input,textarea,select,[data-edge]')) return;
-  const node = event.target.closest('[data-node]'), block = node ? ws()?.blocks.find(item => item.id === node.dataset.node) : null;
-  if (block) { selected = block.id; selectedEdge = null; document.querySelectorAll('.node').forEach(el => el.classList.toggle('selected', el.dataset.node === selected)); }
-  else { selected = selectedEdge = null; document.querySelectorAll('.node').forEach(el => el.classList.remove('selected')); renderWires(); }
+  const node = event.target.closest('[data-node]'), workspace = ws(), block = node ? workspace?.blocks.find(item => item.id === node.dataset.node) : null;
+  const additive = event.ctrlKey || event.metaKey || event.shiftKey;
+  if (block) {
+    if (additive) selectBlock(block.id, true);
+    else if (!selectedBlocks.has(block.id)) selectBlock(block.id);
+    else selectedEdge = null;
+    updateBlockSelection();
+  } else {
+    clearSelection(); updateBlockSelection(); renderWires();
+  }
   if (block && !event.target.closest('.node-head')) return;
-  const start = { x: event.clientX, y: event.clientY, baseX: block ? block.x : view.x, baseY: block ? block.y : view.y }; let moved = false;
+  const movingBlocks = block && selectedBlocks.has(block.id) ? workspace.blocks.filter(item => selectedBlocks.has(item.id)) : [];
+  const basePositions = new Map(movingBlocks.map(item => [item.id, { x: item.x, y: item.y }]));
+  const start = { x: event.clientX, y: event.clientY, baseX: view.x, baseY: view.y }; let moved = false;
   const viewport = $('#viewport'); viewport.setPointerCapture(event.pointerId);
   const move = current => {
     const dx = current.clientX - start.x, dy = current.clientY - start.y; if (Math.abs(dx) + Math.abs(dy) < 3 && !moved) return; moved = true;
-    if (block) { block.x = Math.round(start.baseX + dx / view.zoom); block.y = Math.round(start.baseY + dy / view.zoom); node.style.left = `${block.x}px`; node.style.top = `${block.y}px`; renderWires(); }
-    else { view.x = start.baseX + dx; view.y = start.baseY + dy; updateView(); }
+    if (block) {
+      for (const item of movingBlocks) {
+        const base = basePositions.get(item.id);
+        item.x = Math.round(base.x + dx / view.zoom); item.y = Math.round(base.y + dy / view.zoom);
+        const element = document.querySelector('[data-node="' + CSS.escape(item.id) + '"]');
+        if (element) { element.style.left = item.x + 'px'; element.style.top = item.y + 'px'; }
+      }
+      renderWires();
+    } else { view.x = start.baseX + dx; view.y = start.baseY + dy; updateView(); }
   };
-  const stop = () => { viewport.removeEventListener('pointermove', move); viewport.removeEventListener('pointerup', stop); viewport.removeEventListener('pointercancel', stop); if (block && moved) markDirty(); };
+  const stop = () => { viewport.removeEventListener('pointermove', move); viewport.removeEventListener('pointerup', stop); viewport.removeEventListener('pointercancel', stop); if (block && moved && movingBlocks.length) markDirty(); };
   viewport.addEventListener('pointermove', move); viewport.addEventListener('pointerup', stop); viewport.addEventListener('pointercancel', stop);
 });
 $('#viewport').addEventListener('wheel', event => { event.preventDefault(); const rect = $('#viewport').getBoundingClientRect(); zoom(event.deltaY < 0 ? 1.08 : 1 / 1.08, event.clientX - rect.x, event.clientY - rect.y); }, { passive: false });
 for (const selector of ['#tabs', '#workspace-list']) $(selector).addEventListener('click', event => { const button = event.target.closest('[data-workspace]'); if (button) selectWorkspace(button.dataset.workspace); });
 for (const selector of ['#project-orbs', '#recent-projects']) $(selector).addEventListener('click', event => { const button = event.target.closest('[data-project]'); if (button) handle(openProject)(button.dataset.project); });
-$('#add-workspace').onclick = handle(async () => {
-  const values = await modal('Add workspace', [{ name: 'name', label: 'Workspace name', value: 'New workspace' }], 'Add workspace'); if (!values) return;
-  const workspace = { id: uid(), name: values.name, active: true, blocks: [], connections: [] }; project.workspaces.push(workspace); workspaceID = workspace.id; selected = selectedEdge = pending = null; markDirty(); render(); fit();
+async function addWorkspace(categoryId = '') {
+  const values = await modal('Add workspace', [
+    { name: 'name', label: 'Workspace name', value: 'New workspace' },
+    { name: 'categoryId', label: 'Workspace category', type: 'select', value: categoryId, choices: workspaceCategoryChoices() }
+  ], 'Add workspace');
+  if (!values) return;
+  const workspace = { id: uid(), name: values.name, categoryId: values.categoryId || null, active: true, blocks: [], connections: [] };
+  project.workspaces.push(workspace); workspaceID = workspace.id; clearSelection(true); markDirty(); render(); fit();
+}
+$('#add-workspace').onclick = handle(() => addWorkspace());
+$('#add-workspace-category').onclick = handle(async () => {
+  const values = await modal('Add workspace category', [{ name: 'name', label: 'Category name', value: 'New category' }], 'Add category');
+  if (!values) return;
+  project.workspaceCategories ||= [];
+  project.workspaceCategories.push({ id: uid(), name: values.name });
+  markDirty(); render();
 });
 $('#workspace-settings').onclick = handle(async () => {
-  const values = await modal('Project and workspace', [{ name: 'project', label: 'Project name', value: project.name }, { name: 'name', label: 'Workspace name', value: ws().name }, { name: 'active', label: 'Run this workspace in the exported application', type: 'checkbox', value: ws().active }], 'Apply'); if (!values) return;
-  project.name = values.project; ws().name = values.name; ws().active = values.active; markDirty(); render();
+  const workspace = ws();
+  const values = await modal('Project and workspace', [
+    { name: 'project', label: 'Project name', value: project.name },
+    { name: 'name', label: 'Workspace name', value: workspace.name },
+    { name: 'categoryId', label: 'Workspace category', type: 'select', value: workspace.categoryId || '', choices: workspaceCategoryChoices() },
+    { name: 'active', label: 'Run this workspace in the exported application', type: 'checkbox', value: workspace.active }
+  ], 'Apply');
+  if (!values) return;
+  project.name = values.project; workspace.name = values.name; workspace.categoryId = values.categoryId || null; workspace.active = values.active; markDirty(); render();
 });
 $('#app-settings').onclick = handle(async () => {
   if (!project) return;
@@ -366,9 +493,14 @@ setTheme(localStorage.getItem('phidias-theme') || 'system');
 $('#theme-toggle').onclick = () => setTheme(themes[(themes.indexOf(document.documentElement.dataset.theme) + 1) % themes.length]);
 window.addEventListener('keydown', event => {
   if ($('#form-dialog').open) return;
-  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') { event.preventDefault(); handle(save)(); }
+  const command = event.ctrlKey || event.metaKey;
+  const editing = event.target.closest?.('input,textarea,select,[contenteditable]');
+  const key = event.key.toLowerCase();
+  if (command && key === 's') { event.preventDefault(); handle(save)(); }
+  if (command && key === 'c' && !editing && selectedBlocks.size) { event.preventDefault(); copySelection(); }
+  if (command && key === 'v' && !editing && blockClipboard) { event.preventDefault(); pasteSelection(); }
   if (event.key === 'Escape') { if (!$('#block-picker').hidden) closePicker(); else if (!$('#context-menu').hidden) closeContextMenu(); else { pending = null; renderGraph(); } }
-  if (['Delete', 'Backspace'].includes(event.key) && !event.target.closest('input,textarea,select,[contenteditable]')) { event.preventDefault(); deleteSelection(); }
+  if (['Delete', 'Backspace'].includes(event.key) && !editing) { event.preventDefault(); deleteSelection(); }
 });
 window.addEventListener('beforeunload', event => { if (dirty) { event.preventDefault(); event.returnValue = ''; } });
 window.addEventListener('resize', renderWires);

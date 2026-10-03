@@ -74,9 +74,13 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-vis
 .sidebar-project>header button { width:28px;height:28px;margin-left:auto;border-radius:4px; }
 .sidebar-project>header button:hover,.category-row button:hover { background:var(--surface-3); }
 .workspace-groups { overflow:auto;padding:8px; }
-.category-row { display:grid;grid-template-columns:20px minmax(0,1fr) 24px;align-items:center;height:28px;color:var(--muted); }
+.category-row { display:grid;grid-template-columns:20px minmax(0,1fr) 24px 24px;align-items:center;height:28px;color:var(--muted); }
 .category-row strong { font-size:11px; }
 .category-row button { width:22px;height:22px;padding:0;border-radius:4px; }
+.workspace-category { margin:4px 0 8px; }
+.workspace-category-title { height:24px;display:grid;grid-template-columns:18px minmax(0,1fr) auto;align-items:center;padding:0 8px;color:var(--muted); }
+.workspace-category-title strong { overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;text-transform:uppercase;letter-spacing:.04em; }
+.workspace-category-title small { font-size:9px; }
 .workspace-row { width:100%;height:34px;display:grid;grid-template-columns:20px minmax(0,1fr) auto;gap:5px;align-items:center;border:0;border-radius:5px;padding:0 8px;background:transparent;color:var(--muted);text-align:left; }
 .workspace-row:hover { color:var(--text);background:var(--surface-3); }
 .workspace-row.active { color:var(--text);background:var(--accent-soft);font-weight:600; }
@@ -121,10 +125,12 @@ button.primary { min-height:32px;border:1px solid var(--accent);border-radius:5p
 #viewport:active { cursor:grabbing; }
 #world { position:absolute;left:0;top:0;width:8000px;height:8000px;transform-origin:0 0; }
 #wires { position:absolute;inset:0;width:8000px;height:8000px;overflow:visible;pointer-events:none; }
-#wires path { fill:none;stroke:var(--wire-color,var(--accent));stroke-width:3;pointer-events:stroke;cursor:pointer;opacity:.9; }
-#wires path:hover,#wires path.selected { stroke-width:5;filter:drop-shadow(0 0 3px var(--accent)); }
-#wires path.dragging-wire { stroke-dasharray:6 5; opacity:.72; pointer-events:none; }
-#nodes { position:absolute;inset:0; }
+#wires .wire { pointer-events:stroke;cursor:pointer; }
+#wires .wire-line { fill:none;stroke:var(--wire-color,var(--accent));stroke-width:3;pointer-events:none;opacity:.9; }
+#wires .wire-hit { fill:none;stroke:transparent;stroke-width:18;pointer-events:stroke; }
+#wires .wire:hover .wire-line,#wires .wire.selected .wire-line { stroke-width:5;filter:drop-shadow(0 0 3px var(--accent)); }
+#wires path.dragging-wire { fill:none;stroke:var(--wire-color,var(--accent));stroke-width:3;stroke-dasharray:6 5;opacity:.72;pointer-events:none; }
+#nodes { position:absolute;inset:0;pointer-events:none; }
 .canvas-empty { position:absolute;inset:0;display:grid;place-content:center;justify-items:center;gap:7px;color:var(--muted);pointer-events:none; }
 .canvas-empty>span { font-size:42px;line-height:1; }
 .canvas-empty strong { color:var(--text);font-size:15px; }
@@ -136,7 +142,7 @@ button.primary { min-height:32px;border:1px solid var(--accent);border-radius:5p
 .canvas-controls button:last-child { border-right:0;min-width:50px;font-size:10px; }
 .canvas-controls button:hover { background:var(--surface-3); }
 
-.node { position:absolute;width:300px;min-height:120px;border:1px solid var(--border);border-radius:7px;background:var(--block-body);box-shadow:0 6px 18px #0004;color:var(--text); }
+.node { position:absolute;width:300px;min-height:120px;border:1px solid var(--border);border-radius:7px;background:var(--block-body);box-shadow:0 6px 18px #0004;color:var(--text);pointer-events:auto; }
 .node.selected { border-color:var(--accent);box-shadow:0 0 0 2px #168df055,0 5px 18px #0005; }
 .node-head { height:39px;display:flex;align-items:center;gap:6px;padding:0 9px;border-bottom:1px solid #1118;border-radius:6px 6px 0 0;background:var(--block-header);cursor:move;user-select:none; }
 .node-head strong { min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px; }

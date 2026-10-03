@@ -146,9 +146,9 @@ Back up `config.json`, projects, and the authentication database. For a simple f
 1. Create a project. It starts with `GET /hello` connected to an HTTP response.
 2. Click a block in the library or drag it onto the canvas.
 3. Click an output port, then a compatible input port. Green ports carry actions and gold ports carry values. Action outputs have one wire; value outputs can feed multiple blocks. Each value input accepts one wire.
-4. Select a block to edit its configuration. Drag blocks to position them; drag the background to pan, scroll to zoom, or use **Fit**.
-5. Select a block or connection and press Delete to remove it. Blocks also have duplicate/delete buttons in the configuration panel.
-6. Add workspaces with **+**. Use **•••** to rename the project/workspace or pause a workspace. All active workspaces run in the exported application.
+4. Select a block to edit its configuration. Hold Ctrl/Cmd or Shift while clicking blocks to toggle them in a multi-selection. Drag the header of any selected block to move the whole group.
+5. Press Ctrl/Cmd+C and Ctrl/Cmd+V to copy and paste the selected blocks. Connections are copied when both endpoint blocks are selected, and pasted blocks and connections receive new IDs. Select blocks or a connection and press Delete to remove them.
+6. Add workspace categories with **▤** and workspaces with **+**. Choose a category when creating a workspace or move the current workspace from **•••**. All active workspaces run in the exported application.
 7. Click **Save project** or press Ctrl/Cmd+S. Changes are saved explicitly, not automatically; closing the page with unsaved changes prompts you.
 8. Click **Export application**. This saves edits and downloads a ZIP of the current saved project.
 

@@ -5,12 +5,21 @@ const normalizeRoutePath = value => value.replace(/\/+$/, '') || '/';
 function validate(document, definitions) {
   const fail = message => { throw Object.assign(new Error(message), { status: 400 }); };
   if (!document || document.version !== 1 || typeof document.name !== 'string' || !document.name.trim() || document.name.length > 100) fail('Invalid project name or format version');
+  const categories = document.workspaceCategories ?? [];
+  if (!Array.isArray(categories) || categories.length > 100) fail('A project can have at most 100 workspace categories');
+  const categoryIDs = new Set();
+  for (const category of categories) {
+    if (!category || typeof category.id !== 'string' || !safeID.test(category.id) || categoryIDs.has(category.id)) fail('Invalid or duplicate workspace category ID');
+    if (typeof category.name !== 'string' || !category.name.trim() || category.name.length > 100) fail('Invalid workspace category name');
+    categoryIDs.add(category.id);
+  }
   if (!Array.isArray(document.workspaces) || !document.workspaces.length || document.workspaces.length > 100) fail('A project needs 1–100 workspaces');
   const workspaceIDs = new Set(), routes = new Set();
   for (const ws of document.workspaces) {
     if (!ws || typeof ws.id !== 'string' || !safeID.test(ws.id) || workspaceIDs.has(ws.id)) fail('Invalid or duplicate workspace ID');
     workspaceIDs.add(ws.id);
     if (typeof ws.name !== 'string' || !ws.name.trim() || ws.name.length > 100 || typeof ws.active !== 'boolean') fail('Invalid workspace name or active state');
+    if (ws.categoryId !== undefined && ws.categoryId !== null && (typeof ws.categoryId !== 'string' || !categoryIDs.has(ws.categoryId))) fail('Invalid workspace category');
     if (!Array.isArray(ws.blocks) || ws.blocks.length > 1000 || !Array.isArray(ws.connections) || ws.connections.length > 4000) fail('Invalid workspace graph');
     const nodes = new Map(), edgeIDs = new Set();
     for (const block of ws.blocks) {
