@@ -198,22 +198,43 @@ function createApp({ directory = __dirname, document, definitions, onError, logg
   function track(promise) {
     activeRuns.add(promise); promise.then(() => activeRuns.delete(promise), () => activeRuns.delete(promise)); return promise;
   }
-  function reachableLogin(ws, trigger) {
-    const nodes = new Map(ws.blocks.map(block => [block.id, block]));
-    const queue = [trigger.id], visited = new Set();
+  function connectedStaticValue(ws, block, input) {
+    if (Object.hasOwn(block.options || {}, input)) return { known: true, value: block.options[input] };
+    const edge = ws.connections.find(item => item.to === block.id && item.input === input && (item.kind || 'action') === 'value');
+    if (!edge) return { known: false };
+    const source = ws.blocks.find(item => item.id === edge.from);
+    return source && Object.hasOwn(source.options || {}, edge.output)
+      ? { known: true, value: source.options[edge.output] }
+      : { known: false };
+  }
+  function reachableLogin(startWorkspace, trigger) {
+    const queue = [{ workspace: startWorkspace, id: trigger.id }], visited = new Set();
     while (queue.length) {
-      const id = queue.shift();
-      if (visited.has(id)) continue;
-      visited.add(id);
-      const current = nodes.get(id);
-      if (current?.type === 'display_login') return current;
-      for (const edge of ws.connections) if (edge.from === id && (edge.kind || 'action') === 'action') queue.push(edge.to);
+      const { workspace, id } = queue.shift(), visitKey = `${workspace.id}:${id}`;
+      if (visited.has(visitKey)) continue;
+      visited.add(visitKey);
+      const current = workspace.blocks.find(block => block.id === id);
+      if (current?.type === 'display_login') return { workspace, block: current };
+      for (const edge of workspace.connections) {
+        if (edge.from === id && (edge.kind || 'action') === 'action') queue.push({ workspace, id: edge.to });
+      }
+      if (!['emitter', 'emitter_8x'].includes(current?.type)) continue;
+      const emitterID = connectedStaticValue(workspace, current, 'id');
+      const targetWorkspaces = current.options.restriction_type === 'all' ? document.workspaces.filter(item => item.active) : [workspace];
+      for (const targetWorkspace of targetWorkspaces) {
+        for (const receiver of targetWorkspace.blocks.filter(block => ['receiver', 'receiver_8x'].includes(block.type))) {
+          const receiverID = connectedStaticValue(targetWorkspace, receiver, 'id');
+          if (emitterID.known && receiverID.known && String(emitterID.value) !== String(receiverID.value)) continue;
+          queue.push({ workspace: targetWorkspace, id: receiver.id });
+        }
+      }
     }
     return null;
   }
   for (const ws of document.workspaces.filter(ws => ws.active)) {
     for (const block of ws.blocks.filter(block => block.type === 'http')) {
-      routes.push({ method: block.options.method, path: normalizeRoutePath(block.options.path), ws, block, loginBlock: reachableLogin(ws, block) });
+      const login = reachableLogin(ws, block);
+      routes.push({ method: block.options.method, path: normalizeRoutePath(block.options.path), ws, block, loginBlock: login?.block, loginWorkspace: login?.workspace });
     }
   }
   const server = http.createServer(async (req, res) => {
@@ -237,7 +258,7 @@ function createApp({ directory = __dirname, document, definitions, onError, logg
       if (!route) { res.writeHead(404); res.end('Not found'); return; }
       const subpath = route.path === '/' ? url.pathname : url.pathname.slice(route.path.length) || '/';
       const request = { method: req.method, path: url.pathname, endpoint: route.path, subpath, query: Object.fromEntries(url.searchParams), headers: req.headers, body: await readBody(req), ip: req.socket.remoteAddress, loginSubmission };
-      await track(run(route.ws, loginSubmission ? route.loginBlock : route.block, request, res));
+      await track(run(loginSubmission ? route.loginWorkspace : route.ws, loginSubmission ? route.loginBlock : route.block, request, res));
       if (!res.writableEnded) { res.writeHead(204); res.end(); }
     } catch (error) {
       reportError(error);

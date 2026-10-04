@@ -25,6 +25,9 @@ test('workflow browser sessions and API bearer tokens use a builder-compatible a
     node('browser-login', 'display_login', { database: './unused-auth.sqlite' }),
     node('browser-user', 'get_current_logged_in_user', { database: './unused-auth.sqlite', sessionType: 'Browser' }),
     reply('browser-ok', 200, 'Text', 'missing user'),
+    node('cross-browser-endpoint', 'http', { method: 'GET', path: '/cross-protected' }),
+    node('cross-browser-emitter-id', 'text', { text: 'cross-browser-auth' }),
+    node('cross-browser-emitter', 'emitter', { restriction_type: 'all', search_type: 'number' }),
 
     node('browser-logout-endpoint', 'http', { method: 'POST', path: '/browser-logout' }),
     node('browser-logout', 'logout', { database: './unused-auth.sqlite', sessionType: 'Browser' }),
@@ -60,6 +63,8 @@ test('workflow browser sessions and API bearer tokens use a builder-compatible a
     edge('b4', 'browser-login', 'authenticated', 'browser-user'),
     edge('b5', 'browser-user', 'found', 'browser-ok'),
     edge('b6', 'browser-user', 'username', 'browser-ok', 'body', 'value'),
+    edge('cb1', 'cross-browser-endpoint', 'next', 'cross-browser-emitter'),
+    edge('cb2', 'cross-browser-emitter-id', 'text', 'cross-browser-emitter', 'id', 'value'),
 
     edge('bl1', 'browser-logout-endpoint', 'next', 'browser-logout'),
     edge('bl2', 'browser-logout', 'logged_out', 'browser-logout-ok'),
@@ -82,7 +87,31 @@ test('workflow browser sessions and API bearer tokens use a builder-compatible a
     edge('ao2', 'api-logout', 'logged_out', 'api-logout-ok'),
     edge('ao3', 'api-logout', 'not_logged_in', 'api-logout-ok')
   ];
-  const document = { version: 1, name: 'Secured application', workspaces: [{ id: 'main', name: 'Main', active: true, blocks, connections }] };
+  const crossWorkspace = {
+    id: 'cross-auth', name: 'Shared browser authentication', active: true,
+    blocks: [
+      node('cross-database-path', 'text', { text: database }),
+      node('cross-receiver-id', 'text', { text: 'cross-browser-auth' }),
+      node('cross-receiver', 'receiver', {}),
+      node('cross-check', 'check_if_logged_in', { database: './unused-auth.sqlite' }),
+      node('cross-login', 'display_login', { database: './unused-auth.sqlite' }),
+      node('cross-user', 'get_current_logged_in_user', { database: './unused-auth.sqlite', sessionType: 'Browser' }),
+      reply('cross-ok', 200, 'Text', 'missing user')
+    ],
+    connections: [
+      edge('cr1', 'cross-receiver-id', 'text', 'cross-receiver', 'id', 'value'),
+      edge('cr2', 'cross-receiver', 'action', 'cross-check'),
+      edge('cr3', 'cross-check', 'false', 'cross-login'),
+      edge('cr4', 'cross-check', 'true', 'cross-user'),
+      edge('cr5', 'cross-login', 'authenticated', 'cross-user'),
+      edge('cr6', 'cross-user', 'found', 'cross-ok'),
+      edge('cr7', 'cross-user', 'username', 'cross-ok', 'body', 'value'),
+      edge('cr8', 'cross-database-path', 'text', 'cross-check', 'database', 'value'),
+      edge('cr9', 'cross-database-path', 'text', 'cross-login', 'database', 'value'),
+      edge('cr10', 'cross-database-path', 'text', 'cross-user', 'database', 'value')
+    ]
+  };
+  const document = { version: 1, name: 'Secured application', workspaces: [{ id: 'main', name: 'Main', active: true, blocks, connections }, crossWorkspace] };
   const errors = [];
   const app = createApp({ directory, document, definitions: loadDefinitions(path.resolve(__dirname, '../blocks')), onError: error => errors.push(error) });
   const address = await app.start(0, '127.0.0.1');
@@ -121,6 +150,20 @@ test('workflow browser sessions and API bearer tokens use a builder-compatible a
   const protectedPage = await fetch(base + '/protected', { headers: { cookie: browserCookie } });
   assert.equal(protectedPage.status, 200);
   assert.equal(await protectedPage.text(), 'alice');
+
+  const crossLoginPage = await fetch(base + '/cross-protected');
+  assert.equal(crossLoginPage.status, 200);
+  assert.match(crossLoginPage.headers.get('content-type'), /^text\/html/);
+  const crossLogin = await fetch(base + '/cross-protected', {
+    method: 'POST', redirect: 'manual', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ username: 'alice', password: 'a-secure-test-password' })
+  });
+  assert.equal(crossLogin.status, 303);
+  assert.equal(crossLogin.headers.get('location'), '/cross-protected');
+  const crossCookie = crossLogin.headers.get('set-cookie').split(';')[0];
+  const crossProtectedPage = await fetch(base + '/cross-protected', { headers: { cookie: crossCookie } });
+  assert.equal(crossProtectedPage.status, 200);
+  assert.equal(await crossProtectedPage.text(), 'alice');
   const nonLoginPost = await fetch(base + '/protected', { method: 'POST', headers: { cookie: browserCookie, 'content-type': 'application/x-www-form-urlencoded' }, body: '' });
   assert.equal(nonLoginPost.status, 401);
   assert.match(await nonLoginPost.text(), /Invalid username or password/);
