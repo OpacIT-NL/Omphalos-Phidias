@@ -83,8 +83,17 @@ test('imported value wires and action branches execute in an exported app', asyn
   assert.deepEqual(errors, []);
 });
 
-test('Receiver accepts a connected ID and only runs for a matching Emitter', async t => {
-  const library = definitions();
+test('Receiver accepts a connected ID and keeps emitted values across following actions', async t => {
+  const library = definitions(), observed = [];
+  library.set('capture_receiver_value', {
+    type: 'capture_receiver_value', name: 'Capture receiver value', category: 'Tests', description: 'Records a receiver value.', fields: [], outputs: ['next'],
+    inputPorts: [
+      { id: 'action', name: 'Action', kind: 'action', types: [] },
+      { id: 'value', name: 'Value', kind: 'value', types: ['unspecified'] }
+    ],
+    outputPorts: [{ id: 'next', name: 'Next', kind: 'action', types: [] }],
+    async execute(_ctx, _options, inputs) { observed.push(inputs.value); return 'next'; }
+  });
   const document = {
     version: 1,
     name: 'Emitter and receiver',
@@ -98,6 +107,8 @@ test('Receiver accepts a connected ID and only runs for a matching Emitter', asy
         block('emitter', 'emitter', { restriction_type: 'current', search_type: 'number' }),
         block('receiver', 'receiver', {}),
         block('wrong-receiver', 'receiver', {}),
+        block('first-action', 'capture_receiver_value', {}),
+        block('second-action', 'capture_receiver_value', {}),
         block('response', 'respond', { status: 200, body: 'missing receiver value' })
       ],
       connections: [
@@ -106,8 +117,12 @@ test('Receiver accepts a connected ID and only runs for a matching Emitter', asy
         edge('v2', 'payload', 'text', 'emitter', 'value1', 'value'),
         edge('v3', 'matching-id', 'text', 'receiver', 'id', 'value'),
         edge('v4', 'wrong-id', 'text', 'wrong-receiver', 'id', 'value'),
-        edge('a2', 'receiver', 'action', 'response'),
-        edge('v5', 'receiver', 'value1', 'response', 'body', 'value')
+        edge('a2', 'receiver', 'action', 'first-action'),
+        edge('a3', 'first-action', 'next', 'second-action'),
+        edge('a4', 'second-action', 'next', 'response'),
+        edge('v5', 'receiver', 'value1', 'first-action', 'value', 'value'),
+        edge('v6', 'receiver', 'value1', 'second-action', 'value', 'value'),
+        edge('v7', 'receiver', 'value1', 'response', 'body', 'value')
       ]
     }]
   };
@@ -120,6 +135,87 @@ test('Receiver accepts a connected ID and only runs for a matching Emitter', asy
   const responseBody = await response.text();
   assert.equal(response.status, 200, `${responseBody}: ${errors.map(error => error.stack || error.message).join(' | ')}`);
   assert.equal(responseBody, 'receiver ran');
+  assert.deepEqual(observed, ['receiver ran', 'receiver ran']);
+  assert.deepEqual(errors, []);
+});
+
+test('Receiver headers and session remain available to sequential Request API blocks', async t => {
+  const received = [];
+  const upstream = require('node:http').createServer((request, response) => {
+    received.push({ path: request.url, authorization: request.headers.authorization, cookie: request.headers.cookie });
+    response.setHeader('content-type', 'application/json');
+    response.end(JSON.stringify({ path: request.url }));
+  });
+  await new Promise(resolve => upstream.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => { upstream.close(resolve); upstream.closeAllConnections(); }));
+
+  const library = definitions();
+  library.set('auth_payload', {
+    type: 'auth_payload', name: 'Auth payload', category: 'Tests', description: 'Test values.', fields: [], outputs: [], inputPorts: [],
+    outputPorts: [
+      { id: 'headers', name: 'Headers', kind: 'value', types: ['object'] },
+      { id: 'session', name: 'Session', kind: 'value', types: ['text'] }
+    ],
+    async execute(_ctx, _options, _inputs, setOutput) {
+      setOutput('headers', { Authorization: 'Bearer receiver-token' });
+      setOutput('session', 'sid=receiver-session');
+    }
+  });
+  const base = `http://127.0.0.1:${upstream.address().port}`;
+  const document = {
+    version: 1,
+    name: 'Sequential receiver requests',
+    workspaces: [{
+      id: 'main', name: 'Main', active: true,
+      blocks: [
+        block('http', 'http', { method: 'GET', path: '/run' }),
+        block('receiver-id', 'text', { text: 'auth-result' }),
+        block('nested-id', 'text', { text: 'nested-result' }),
+        block('first-url', 'text', { text: base + '/first' }),
+        block('second-url', 'text', { text: base + '/second' }),
+        block('auth-values', 'auth_payload', {}),
+        block('emitter', 'emitter', { restriction_type: 'current', search_type: 'number' }),
+        block('receiver', 'receiver', {}),
+        block('first-request', 'request_api', { method_type: 'get', data_type: 'json' }),
+        block('second-request', 'request_api', { method_type: 'get', data_type: 'json' }),
+        block('nested-emitter', 'emitter', { restriction_type: 'current', search_type: 'number' }),
+        block('nested-receiver', 'receiver', {}),
+        block('response', 'respond', { status: 200, format: 'JSON', body: '', headers: '{}' })
+      ],
+      connections: [
+        edge('a1', 'http', 'next', 'emitter'),
+        edge('e-id', 'receiver-id', 'text', 'emitter', 'id', 'value'),
+        edge('e-headers', 'auth-values', 'headers', 'emitter', 'value1', 'value'),
+        edge('e-session', 'auth-values', 'session', 'emitter', 'value2', 'value'),
+        edge('r-id', 'receiver-id', 'text', 'receiver', 'id', 'value'),
+        edge('a2', 'receiver', 'action', 'first-request'),
+        edge('a3', 'first-request', 'action', 'second-request'),
+        edge('a4', 'second-request', 'action', 'nested-emitter'),
+        edge('nested-emitter-id', 'nested-id', 'text', 'nested-emitter', 'id', 'value'),
+        edge('nested-receiver-id', 'nested-id', 'text', 'nested-receiver', 'id', 'value'),
+        edge('a5', 'nested-receiver', 'action', 'response'),
+        edge('url1', 'first-url', 'text', 'first-request', 'url', 'value'),
+        edge('headers1', 'receiver', 'value1', 'first-request', 'headers', 'value'),
+        edge('session1', 'receiver', 'value2', 'first-request', 'session', 'value'),
+        edge('url2', 'second-url', 'text', 'second-request', 'url', 'value'),
+        edge('headers2', 'receiver', 'value1', 'second-request', 'headers', 'value'),
+        edge('session2', 'receiver', 'value2', 'second-request', 'session', 'value'),
+        edge('body', 'second-request', 'data', 'response', 'body', 'value')
+      ]
+    }]
+  };
+  assert.doesNotThrow(() => validate(structuredClone(document), library));
+  const errors = [];
+  const app = createApp({ document, definitions: library, onError: error => errors.push(error) });
+  const address = await app.start(0, '127.0.0.1');
+  t.after(() => app.stop());
+  const response = await fetch(`http://127.0.0.1:${address.port}/run`);
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { path: '/second' });
+  assert.deepEqual(received, [
+    { path: '/first', authorization: 'Bearer receiver-token', cookie: 'sid=receiver-session' },
+    { path: '/second', authorization: 'Bearer receiver-token', cookie: 'sid=receiver-session' }
+  ]);
   assert.deepEqual(errors, []);
 });
 

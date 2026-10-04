@@ -111,8 +111,9 @@ function createApp({ directory = __dirname, document, definitions, onError, logg
   }
   async function run(ws, trigger, request = null, response = null, seed = {}) {
     const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(60000)]);
+    const execution = seed.execution || { vars: Object.create(null), values: new Map(), evaluated: new Set() };
     const context = {
-      vars: Object.create(null), values: new Map(), evaluated: new Set(),
+      vars: execution.vars, values: execution.values, evaluated: execution.evaluated,
       request, response, env: process.env, signal, shared, appName: document.name, logger,
       legacyValues: seed.legacyValues || []
     };
@@ -186,7 +187,7 @@ function createApp({ directory = __dirname, document, definitions, onError, logg
       const tasks = [];
       for (const targetWorkspace of workspaces) {
         for (const receiver of targetWorkspace.blocks.filter(block => ['receiver', 'receiver_8x'].includes(block.type))) {
-          tasks.push(run(targetWorkspace, receiver, request, response, { receiverID: id, legacyValues: details.values || [] }));
+          tasks.push(run(targetWorkspace, receiver, request, response, { receiverID: id, legacyValues: details.values || [], execution }));
         }
       }
       await Promise.all(tasks);
