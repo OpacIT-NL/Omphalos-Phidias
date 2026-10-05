@@ -70,6 +70,7 @@ Configuration commands:
 | `user create <name>` | Create a new account; rejects an existing username |
 | `user password <name>` | Reset an existing account’s password |
 | `user delete <name>` / `no username <name>` | Remove an account from the running configuration |
+| `user <name> grant_all` | Grant every core and project permission by adding the user to Administrators; save with `copy run start` |
 | `enable secret` / `enable password` | Set the console enable password with hidden prompts |
 | `no enable secret` / `no enable password` | Remove the console enable password |
 | `auth secure-cookies <true-or-false>` | Change the flag on newly issued cookies immediately |
@@ -107,7 +108,7 @@ Generated defaults:
 }
 ```
 
-Settings can also be edited while the server is stopped. Missing fields in older configurations receive defaults in memory and are written on the next `copy run start`. Keep the startup configuration, project directory, and authentication database on persistent storage and back them up. Run one builder process against a project directory. All accounts share project access; this is not a service with isolated user workspaces or roles.
+Settings can also be edited while the server is stopped. Missing fields in older configurations receive defaults in memory and are written on the next `copy run start`. Keep the startup configuration, project directory, and authentication database on persistent storage and back them up. Run one builder process against a project directory. Web accounts only see projects granted through their direct permissions and group memberships.
 
 ## Server logging
 
@@ -129,9 +130,13 @@ The `log/` directory is created automatically and excluded from Git and release 
 
 ## Accounts and login
 
-Manage web accounts through the configuration console, then save with `copy run start`. Usernames are case-insensitive, 3–64 characters, and may contain letters, numbers, dots, underscores, and hyphens. Web-account passwords must contain at least 12 characters and be at most 1,024 bytes; spaces are preserved. Console enable passwords have no length or complexity requirements.
+Manage web accounts through **Access management** in the editor or through the configuration console, then save console-staged account changes with `copy run start`. Usernames are case-insensitive, 3–64 characters, and may contain letters, numbers, dots, underscores, and hyphens. Web-account passwords must contain at least 12 characters and be at most 1,024 bytes; spaces are preserved. Console enable passwords have no length or complexity requirements.
 
-There is no default web account or public registration endpoint. Web authentication is always required, even before any accounts exist. All accounts currently share access to every project. Account credentials are salted **Argon2id** hashes (64 MiB memory, 3 iterations, parallelism 1) using [node-argon2](https://github.com/ranisalt/node-argon2). Saved account credentials, hashed session tokens, CSRF tokens, expiration timestamps, and login-rate-limit counters live in SQLite. Passwords and raw session tokens are not persisted.
+There is no default web account or public registration endpoint. Web authentication is always required, even before any accounts exist. Account credentials are salted **Argon2id** hashes (64 MiB memory, 3 iterations, parallelism 1) using [node-argon2](https://github.com/ranisalt/node-argon2). Saved account credentials, groups, ACL grants, hashed session tokens, CSRF tokens, expiration timestamps, and login-rate-limit counters live in SQLite. Passwords and raw session tokens are not persisted.
+
+Core permissions are **Login**, **Manage users**, **Create projects**, and **Console**. Project permissions are **Login to RC**, **Login to Prod**, **View Builder Project**, **Edit Builder Project**, **Promote to Prod**, and **Delete Project**. Grants are additive: a user receives the union of direct grants and every group grant. A newly created project grants all project permissions directly to its creator. The local Cisco-style terminal still requires OS-level terminal access and its enable secret; the Console ACL is recorded for authenticated console integrations.
+
+The ACL schema is added with `CREATE TABLE IF NOT EXISTS`; the updater never replaces `auth.sqlite`. On the first ACL migration, every existing user is placed in the built-in **Administrators** group, which has every core permission and wildcard access to existing and future projects. This preserves access during upgrades. The first account created in a completely empty database becomes the bootstrap administrator. Later accounts start with no permissions until an administrator assigns them.
 
 Sessions use random 256-bit cookies with `HttpOnly`, `SameSite=Strict`, and `Secure` when configured. They expire after eight hours. Saved sessions survive builder restarts; sessions for unsaved accounts remain in memory until `copy run start`. Signing out revokes the current session; resetting or deleting an account revokes its sessions. State-changing authenticated API calls require the session’s `X-CSRF-Token`, and cross-origin writes are rejected.
 
@@ -154,6 +159,8 @@ Back up `config.json`, projects, the sibling `repo` directory, and the authentic
 9. Open **Version manager** with **↶** to configure host, port, and log level independently for RC and Prod, download old builds, restore one as a new revision, delete an old revision, or promote a tested revision to Prod. RC saves and direct exports use the RC profile. Promotion packages the selected revision with the Prod profile and updates Prod `latest.zip`; later RC saves do not change Prod. Restoring a revision also restores its saved HTML templates.
 10. Click **Export application** to save edits and download the current project directly.
 
+Administrators can open **Access management** with the user icon in the top-right toolbar. Create users and groups, select one, assign core and per-project permissions, and save. Group membership and direct user grants combine. The built-in Administrators group always has every permission; change its membership to add or remove administrators.
+
 Invalid graphs, unknown blocks, incompatible value types, loops, invalid options, and duplicate active HTTP routes are rejected on save and export. Execution follows action wires; connected value blocks are evaluated when their values are needed. Branching blocks expose separate action outputs. Use timer triggers for recurring work.
 
 With the default `projects` directory, repository builds are stored in `repo` beside it. A project named `Delphi` publishes RC builds as `/repo/DelphiRC/latest.zip` and `/repo/DelphiRC/delphi.revN.zip`. Promoting revision N creates `/repo/DelphiProd/latest.zip` and `/repo/DelphiProd/delphi.revN.zip`. Open `/repo/` to browse every published project-state folder and continue into a folder to browse its current and numbered ZIPs. Repository browsing and downloads are public and require no builder session. Exported `workspaces.json` files are included in these ZIPs, including credentials entered directly in block options.
@@ -169,7 +176,7 @@ node app.js
 npm start
 ```
 
-`npm install` installs Argon2 plus the FTP, SSH, and MySQL clients used by authentication and imported network/database blocks. Visit `http://localhost:3001/hello` for the starter workflow. In **Version manager**, set separate host, port, and log-level profiles for RC and Prod. Direct exports and RC repository ZIPs contain the RC `config.json`; promoted ZIPs contain the Prod `config.json`. Changing a profile updates the corresponding existing repository ZIPs and `latest.zip`. Without a saved profile, first launch creates `config.json` with port `3001`, host `0.0.0.0`, and log level `3`. `PORT` and `HOST` remain optional process-level overrides. Stop it with SIGINT or SIGTERM. Run it under your normal process manager or service manager for unattended hosting.
+`npm install` installs Argon2 plus the FTP, SSH, and MySQL clients used by authentication and imported network/database blocks. Visit `http://localhost:3001/hello` for the starter workflow. In **Version manager**, set separate host, port, and log-level profiles for RC and Prod. Direct exports and RC repository ZIPs contain the RC `config.json`; promoted ZIPs contain the Prod `config.json`. Every generated config also contains the immutable `project-id` and its `release-channel` (`RC` or `Prod`) so authentication blocks can select the correct ACL. Changing a profile updates the corresponding existing repository ZIPs and `latest.zip`. An unset profile uses port `3001`, host `0.0.0.0`, and log level `3`. `PORT` and `HOST` remain optional process-level overrides. Stop it with SIGINT or SIGTERM. Run it under your normal process manager or service manager for unattended hosting.
 
 Each server-side project and exported ZIP contains:
 
@@ -210,6 +217,8 @@ You can also copy the entire project folder directly. The builder never starts p
 | HTTP request | Calls an HTTP(S) URL with JSON, HTML, or text request bodies and stores status, response headers, and body |
 | HTTP response | Sends JSON by default, with HTML and text available from the Reply format menu |
 | Linux command | Runs `/bin/sh -c` as the deployed automation's OS user and exposes stdout, stderr, and exit code |
+| Stop App | Gracefully closes the exported automation runtime and exits the Node.js process |
+| Restart App | Gracefully reloads the exported automation runtime in the same process, preserving compatibility with process managers such as AMP |
 | List Folder Contents | Accepts a connected text folder path and outputs detailed entries, file paths, and subfolder paths, optionally including nested contents |
 | Display Login | Shows the Phidias-style browser login page, creates a session-only browser cookie, and redirects back to the requested page |
 | Check If Logged In | Branches on a valid browser session and outputs its username |
@@ -246,7 +255,7 @@ An entire field containing one template preserves its value's type, so `{{reques
 
 HTTP endpoints expose `request.method`, `request.path`, `request.endpoint`, `request.subpath`, `request.query`, `request.headers`, and `request.body`. A request uses the longest endpoint prefix that ends on a path-segment boundary: `/systems/vhins` matches `/systems`, while `/systematic` does not. An exact endpoint takes priority over a shorter prefix. **Get sub-endpoint by name** outputs the unmatched part with a leading slash (`/vhins` in this example), or `/` when the endpoint itself was requested. Body carries the request body as text or parsed JSON, while Headers exposes incoming headers as an object. HTTP request and response blocks accept configured JSON headers or connected header objects. API Call offers JSON, HTML, and Text body formats; API Reply offers the same formats and defaults to JSON. JSON request bodies are parsed when Content-Type contains `application/json`. An endpoint without an executed response block returns 204. Unmatched routes return 404; workflow failures are logged and return 500 if no response was sent. Outbound non-2xx HTTP statuses are stored in the result for branching, rather than automatically thrown.
 
-Authentication blocks accept the SQLite path from a connected Text block or use the path configured in the block as a fallback. One Text block can feed the same path into multiple authentication blocks. Relative paths resolve from the deployed application's directory; absolute paths can point at the builder's authentication database when both processes can securely access it. The `users` table and Argon2id password hashes are compatible with the builder. Workflow browser sessions and API tokens use separate `automation_sessions` records, so they do not reuse editor sessions. Raw session tokens are returned only to the client and only SHA-256 token hashes are stored in SQLite.
+Authentication blocks accept the SQLite path from a connected Text block or use the path configured in the block as a fallback. One Text block can feed the same path into multiple authentication blocks. Relative paths resolve from the deployed application's directory; absolute paths can point at the builder's authentication database when both processes can securely access it. The `users` table and Argon2id password hashes are compatible with the builder. For generated builds, login and session checks read `project-id` and `release-channel` from `config.json` and require that project's **Login to RC** or **Login to Prod** permission. Revoking that permission invalidates subsequent checks for an existing automation session. Older manually assembled applications without release identity retain their legacy authentication behavior. Workflow browser sessions and API tokens use separate `automation_sessions` records, so they do not reuse editor sessions. Raw session tokens are returned only to the client and only SHA-256 token hashes are stored in SQLite.
 
 **Display Login** can follow a normal **GET** HTTP endpoint, either directly or through matching emitter/receiver blocks in another active workspace. When that endpoint can reach Display Login, the runtime routes the form's POST submission directly to the login block; unrelated POST requests cannot enter the protected GET branch. **ANY** endpoints remain supported. A successful login sends a `303` redirect to the same path. Its `phidias_session` cookie is `HttpOnly`, `SameSite=Strict`, and has no `Expires` or `Max-Age`, so it is a browser-session cookie. Browser sessions also expire server-side after 24 hours. **Login Through API** accepts `username` and `password` from connected inputs or a JSON/form request body. Its API token expires after eight hours and must be sent as `Authorization: Bearer <token>`. Use **Logout** with Session type set to Browser or API to revoke the current credential.
 
@@ -283,10 +292,18 @@ Use unique lowercase filenames and types containing letters, numbers, `_` or `-`
 | POST | `/api/login` | Sign in with `{ "username": "…", "password": "…" }`; sets session cookie and returns CSRF token |
 | GET | `/api/session` | Get signed-in username, CSRF token, and expiration |
 | POST | `/api/logout` | Revoke current session and clear cookie |
+| GET | `/api/access` | Read users, groups, memberships, projects, and ACL grants (Manage users required) |
+| POST, DELETE | `/api/access/users[/:username]` | Create or delete a user |
+| PUT | `/api/access/users/:username/password` | Reset a user's password and sessions |
+| POST, DELETE | `/api/access/groups[/:id]` | Create or delete a group |
+| PUT | `/api/access/groups/:id/members` | Replace a group's membership |
+| PUT | `/api/access/grants/core/:type/:id` | Replace direct core grants for a user or group |
+| PUT | `/api/access/grants/projects/:project/:type/:id` | Replace direct project grants for a user or group |
 | GET | `/api/projects` | List projects |
 | POST | `/api/projects` | Create with `{ "name": "…" }` |
 | GET | `/api/projects/:id` | Load `workspaces.json` |
 | PUT | `/api/projects/:id` | Save document with current `revision`; conflict returns 409 |
+| DELETE | `/api/projects/:id` | Delete a project and its repository revisions |
 | GET | `/api/projects/:id/blocks` | Read block metadata |
 | GET | `/api/projects/:id/export` | Download saved project ZIP |
 | GET | `/api/projects/:id/deployment-configs` | Read the separate RC and Prod host, port, and log-level profiles |

@@ -67,7 +67,7 @@ class WorkflowAuth {
       this.db.exec('COMMIT');
     } catch (error) { this.db.exec('ROLLBACK'); throw error; }
   }
-  async login(username, password, kind, ip) {
+  async login(username, password, kind, ip, deployment = null) {
     username = normalizedUsername(username);
     this.consumeAttempt(ip, username);
     if (this.pending >= 2) throw authError('Sign-in is busy. Try again shortly.', 429, 2);
@@ -78,6 +78,7 @@ class WorkflowAuth {
       const validPassword = typeof password === 'string' && Buffer.byteLength(password) <= 1024;
       const matches = await argon2.verify(user?.password_hash || fallback, validPassword ? password : 'invalid-password');
       if (!matches || !user || !validPassword) throw authError('Invalid username or password.');
+      if (!this.allowed(user.username, deployment)) throw authError('This account is not allowed to sign in to this application.', 403);
       const token = crypto.randomBytes(32).toString('hex');
       const expiresAt = Date.now() + (kind === 'browser' ? BROWSER_SESSION_MS : API_SESSION_MS);
       this.db.prepare('DELETE FROM automation_sessions WHERE expires_at <= ?').run(Date.now());
@@ -85,18 +86,31 @@ class WorkflowAuth {
       return { token, username: user.username, expiresAt };
     } finally { this.pending--; }
   }
-  session(token, kind) {
+  allowed(username, deployment) {
+    if (!deployment?.projectId || !deployment?.channel) return true;
+    const permission = deployment.channel === 'Prod' ? 'login_prod' : 'login_rc';
+    try {
+      return Boolean(this.db.prepare(`SELECT 1 FROM users u WHERE u.username = ? AND (
+        EXISTS (SELECT 1 FROM acl_project_grants a WHERE a.principal_type = 'user' AND a.principal_id = u.id AND a.permission = ? AND a.project_id IN (?, '*'))
+        OR EXISTS (SELECT 1 FROM acl_group_members m JOIN acl_project_grants a ON a.principal_type = 'group' AND a.principal_id = m.group_id WHERE m.user_id = u.id AND a.permission = ? AND a.project_id IN (?, '*'))
+      )`).get(username, permission, deployment.projectId, permission, deployment.projectId));
+    } catch (error) {
+      if (/no such table/.test(error.message)) return false;
+      throw error;
+    }
+  }
+  session(token, kind, deployment = null) {
     if (!/^[a-f0-9]{64}$/.test(token || '')) return null;
     const row = this.db.prepare(`SELECT u.username, s.expires_at FROM automation_sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ? AND s.kind = ? AND s.expires_at > ?`).get(digest(token), kind, Date.now());
-    return row ? { username: row.username, expiresAt: row.expires_at } : null;
+    return row && this.allowed(row.username, deployment) ? { username: row.username, expiresAt: row.expires_at } : null;
   }
   browserToken(request) { return cookieValue(request, 'phidias_session'); }
   apiToken(request) {
     const match = String(request?.headers?.authorization || '').match(/^Bearer\s+([a-f0-9]{64})$/i);
     return match ? match[1].toLowerCase() : null;
   }
-  browserSession(request) { return this.session(this.browserToken(request), 'browser'); }
-  apiSession(request) { return this.session(this.apiToken(request), 'api'); }
+  browserSession(request, deployment = null) { return this.session(this.browserToken(request), 'browser', deployment); }
+  apiSession(request, deployment = null) { return this.session(this.apiToken(request), 'api', deployment); }
   logout(request, kind) {
     const token = kind === 'browser' ? this.browserToken(request) : this.apiToken(request);
     const session = this.session(token, kind);

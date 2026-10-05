@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const { Auth } = require('../lib/auth');
 const { createApp, loadDefinitions } = require('../runtime/app');
 
@@ -195,4 +196,40 @@ test('workflow browser sessions and API bearer tokens use a builder-compatible a
   assert.equal(apiLogout.status, 200);
   assert.equal((await fetch(base + '/api-protected', { headers: { authorization } })).status, 401);
   assert.deepEqual(errors, []);
+});
+
+test('login blocks enforce the project and RC or Prod identity packaged in config.json', async t => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'phidias-workflow-acl-'));
+  const database = path.join(directory, 'auth.sqlite'), projectId = crypto.randomUUID();
+  const auth = new Auth(database);
+  await auth.createUser('admin', 'admin-secure-password');
+  await auth.createUser('rc-user', 'rc-user-secure-password');
+  const rcUser = auth.user('rc-user');
+  auth.setGrants('user', rcUser.id, projectId, ['login_rc']);
+  auth.close();
+  const blocks = [
+    node('db', 'text', { text: database }),
+    node('endpoint', 'http', { method: 'GET', path: '/login' }),
+    node('login', 'display_login', { database: './unused.sqlite' }),
+    reply('ok', 200, 'Text', 'signed in')
+  ];
+  const document = { version: 1, name: 'ACL app', workspaces: [{ id: 'main', name: 'Main', active: true, blocks, connections: [
+    edge('db-login', 'db', 'text', 'login', 'database', 'value'), edge('start', 'endpoint', 'next', 'login'), edge('done', 'login', 'authenticated', 'ok')
+  ] }] };
+  const definitions = loadDefinitions(path.resolve(__dirname, '../blocks'));
+  const writeConfig = channel => fs.writeFile(path.join(directory, 'config.json'), JSON.stringify({ port: 3001, host: '127.0.0.1', 'log-level': 3, 'project-id': projectId, 'release-channel': channel }));
+  const submit = (base, username, password) => fetch(base + '/login', { method: 'POST', redirect: 'manual', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ username, password }) });
+
+  await writeConfig('RC');
+  let app = createApp({ directory, document: structuredClone(document), definitions: new Map(definitions) });
+  let address = await app.start(0, '127.0.0.1');
+  assert.equal((await submit(`http://127.0.0.1:${address.port}`, 'rc-user', 'rc-user-secure-password')).status, 303);
+  await app.stop();
+
+  await writeConfig('Prod');
+  app = createApp({ directory, document: structuredClone(document), definitions: loadDefinitions(path.resolve(__dirname, '../blocks')) });
+  address = await app.start(0, '127.0.0.1');
+  t.after(async () => { await app.stop(); await fs.rm(directory, { recursive: true, force: true }); });
+  assert.equal((await submit(`http://127.0.0.1:${address.port}`, 'rc-user', 'rc-user-secure-password')).status, 403);
+  assert.equal((await submit(`http://127.0.0.1:${address.port}`, 'admin', 'admin-secure-password')).status, 303);
 });

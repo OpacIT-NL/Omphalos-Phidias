@@ -34,12 +34,12 @@ module.exports = {
     const database = Object.hasOwn(inputs, 'database') ? inputs.database : ctx.render(options.database);
     const authentication = ctx.authentication(database);
     if (ctx.request.method !== 'POST') {
-      if (authentication.browserSession(ctx.request)) return 'authenticated';
+      if (authentication.browserSession(ctx.request, ctx.deployment)) return 'authenticated';
       sendPage(ctx, 200); return null;
     }
     const values = credentials(ctx.request.body);
     try {
-      const session = await authentication.login(values.username, values.password, 'browser', ctx.request.ip);
+      const session = await authentication.login(values.username, values.password, 'browser', ctx.request.ip, ctx.deployment);
       const secure = String(ctx.request.headers['x-forwarded-proto'] || '').split(',')[0].trim() === 'https';
       ctx.response.writeHead(303, { location: ctx.request.path, 'set-cookie': authentication.browserCookie(session.token, secure), 'cache-control': 'no-store' });
       ctx.response.end();

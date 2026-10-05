@@ -7,7 +7,7 @@ const { selectHTMLDetailRows } = require('../blocks/select_html_detail_rows');
 const { createButtonDetailRow } = require('../blocks/create_button_detail_row');
 const { sortHTMLDetailRows } = require('../blocks/sort_html_detail_rows');
 
-test('Convert JSON to HTML Detail creates headed vertical rows and nested tables', () => {
+test('Convert JSON to HTML Detail creates headed vertical rows from objects and lists', () => {
   const html = convertJSONToHTMLDetail(JSON.stringify({
     ID: 'server 1/a', Name: 'Alpha & Beta', Details: { Status: 'Online' }, Roles: [{ Name: 'Admin' }, { Name: 'User' }]
   }));
@@ -17,9 +17,31 @@ test('Convert JSON to HTML Detail creates headed vertical rows and nested tables
   assert.match(html, /<th scope="row">Details<\/th><td>\s*<table class="phidias-detail-table">/);
   assert.match(html, /<th scope="row">Status<\/th><td>Online<\/td>/);
   assert.match(html, /<th>Admin|<td>Admin/);
-  assert.throws(() => convertJSONToHTMLDetail('[{"ID":1}]'), /requires a JSON object/);
+  const list = convertJSONToHTMLDetail([ { ID: 1 }, { ID: 2 } ]);
+  assert.match(list, /<th scope="row">0<\/th>/);
+  assert.match(list, /<th scope="row">1<\/th>/);
+  assert.match(list, /<th scope="row">ID<\/th><td>1<\/td>/);
+  assert.match(list, /<th scope="row">ID<\/th><td>2<\/td>/);
+  assert.match(convertJSONToHTMLDetail('[{"ID":3}]'), /<th scope="row">ID<\/th><td>3<\/td>/);
   const circular = {}; circular.self = circular;
   assert.throws(() => convertJSONToHTMLDetail(circular), /circular objects/);
+});
+
+test('JSON table and detail converters accept list output ports', () => {
+  const { loadDefinitions } = require('../runtime/app');
+  const { validate } = require('../runtime/validate');
+  const definitions = loadDefinitions(path.resolve(__dirname, '../blocks'));
+  for (const type of ['convert_json_to_html_table', 'convert_json_to_html_detail']) {
+    assert.ok(definitions.get(type).inputPorts.find(port => port.id === 'json').types.includes('list'));
+    assert.doesNotThrow(() => validate({ version: 1, name: 'List conversion', workspaces: [{
+      id: 'main', name: 'Main', active: false,
+      blocks: [
+        { id: 'list', type: 'create_list', x: 0, y: 0, options: {} },
+        { id: 'convert', type, x: 0, y: 0, options: {} }
+      ],
+      connections: [{ id: 'list-json', from: 'list', output: 'list', to: 'convert', input: 'json', kind: 'value' }]
+    }] }, definitions));
+  }
 });
 
 test('Select HTML Detail Rows filters top-level rows and preserves nested detail tables', () => {

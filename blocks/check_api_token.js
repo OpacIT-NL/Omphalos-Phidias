@@ -15,7 +15,7 @@ module.exports = {
   fields: [{ key: 'database', label: 'SQLite authentication database', type: 'text', default: './data/auth.sqlite' }],
   async execute(ctx, options, inputs = {}, setOutput) {
     if (!ctx.request) throw new Error('Check API Token requires an HTTP endpoint trigger');
-    const session = ctx.authentication(Object.hasOwn(inputs, 'database') ? inputs.database : ctx.render(options.database)).apiSession(ctx.request);
+    const session = ctx.authentication(Object.hasOwn(inputs, 'database') ? inputs.database : ctx.render(options.database)).apiSession(ctx.request, ctx.deployment);
     setOutput('username', session?.username || '');
     return session ? 'true' : 'false';
   }

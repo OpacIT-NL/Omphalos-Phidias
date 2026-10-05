@@ -20,7 +20,7 @@ module.exports = {
     if (!ctx.request) throw new Error('Get Current Logged In User requires an HTTP endpoint trigger');
     const database = Object.hasOwn(inputs, 'database') ? inputs.database : ctx.render(options.database);
     const authentication = ctx.authentication(database);
-    const session = options.sessionType === 'API' ? authentication.apiSession(ctx.request) : authentication.browserSession(ctx.request);
+    const session = options.sessionType === 'API' ? authentication.apiSession(ctx.request, ctx.deployment) : authentication.browserSession(ctx.request, ctx.deployment);
     setOutput('username', session?.username || '');
     return session ? 'found' : 'not_logged_in';
   }

@@ -8,6 +8,7 @@ let csrfToken = '', dirty = false, generation = 0, saving = null, view = { x: 0,
 const selectedBlocks = new Set(), openWorkspaceIDs = new Set();
 let blockClipboard = null, workspaceClipboard = null, clipboardKind = null, pasteSequence = 0, workspaceContextID = null, draggedWorkspaceID = null;
 let templateNames = [], templateOriginalName = null, templateDirty = false;
+let sessionPermissions = {}, accessData = null, accessSelection = null;
 let pickerWorldPosition = null;
 let geometryFrame = 0;
 let portDrag = null, suppressPortClick = false;
@@ -171,9 +172,13 @@ function renderProjects() {
 }
 async function refreshProjects() { projects = await api('/api/projects'); renderProjects(); return projects; }
 function setProjectControls(enabled) {
-  for (const selector of ['#export', '#versions', '#templates', '#add-workspace', '#add-workspace-category']) $(selector).disabled = !enabled;
-  for (const selector of ['#workspace-settings', '#add-block']) $(selector).disabled = !enabled || !ws();
-  $('#save').disabled = !enabled || !dirty;
+  const canView = enabled && project?.access?.includes('view'), canEdit = enabled && project?.access?.includes('edit');
+  for (const selector of ['#export', '#versions']) $(selector).disabled = !canView;
+  for (const selector of ['#templates', '#add-workspace', '#add-workspace-category']) $(selector).disabled = !canEdit;
+  for (const selector of ['#workspace-settings', '#add-block']) $(selector).disabled = !canEdit || !ws();
+  $('#delete-project').disabled = !enabled || !project?.access?.includes('delete');
+  $('#save').disabled = !canEdit || !dirty;
+  $('#editor').classList.toggle('read-only', enabled && !canEdit);
 }
 function showHome() {
   closePicker(); closeContextMenu();
@@ -230,7 +235,9 @@ function renderVersions(versions) {
   $('#version-list').innerHTML = versions.length ? versions.map(version => {
     const current = version.revision === project.revision;
     const links = [version.rcUrl && `<a href="${escapeHTML(version.rcUrl)}" download>RC ZIP</a>`, version.prodUrl && `<a href="${escapeHTML(version.prodUrl)}" download>Prod ZIP</a>`].filter(Boolean).join('');
-    return `<article class="version-row" data-revision="${version.revision}"><div class="version-main"><strong>Revision ${version.revision}</strong><span>${escapeHTML(new Date(version.createdAt).toLocaleString())}</span><small>${escapeHTML(version.name)}</small></div><div class="version-channels"><b class="channel rc">RC</b>${version.channels.includes('Prod') ? '<b class="channel prod">PROD</b>' : ''}${current ? '<b class="channel current">CURRENT</b>' : ''}</div><div class="version-links">${links}</div><div class="version-actions">${version.channels.includes('Prod') ? '' : '<button type="button" data-version-action="promote">Promote to Prod</button>'}<button type="button" data-version-action="restore" ${current ? 'disabled' : ''}>Restore</button><button type="button" class="danger" data-version-action="delete" ${current ? 'disabled' : ''}>Delete</button></div></article>`;
+    const promote = project.access?.includes('promote') && !version.channels.includes('Prod') ? '<button type="button" data-version-action="promote">Promote to Prod</button>' : '';
+    const editActions = project.access?.includes('edit') ? `<button type="button" data-version-action="restore" ${current ? 'disabled' : ''}>Restore</button><button type="button" class="danger" data-version-action="delete" ${current ? 'disabled' : ''}>Delete</button>` : '';
+    return `<article class="version-row" data-revision="${version.revision}"><div class="version-main"><strong>Revision ${version.revision}</strong><span>${escapeHTML(new Date(version.createdAt).toLocaleString())}</span><small>${escapeHTML(version.name)}</small></div><div class="version-channels"><b class="channel rc">RC</b>${version.channels.includes('Prod') ? '<b class="channel prod">PROD</b>' : ''}${current ? '<b class="channel current">CURRENT</b>' : ''}</div><div class="version-links">${links}</div><div class="version-actions">${promote}${editActions}</div></article>`;
   }).join('') : '<div class="version-empty"><strong>No saved revisions yet</strong><span>Save the project to create its first RC build.</span></div>';
 }
 async function refreshVersions() {
@@ -244,7 +251,74 @@ function renderDeploymentConfigs(configurations) {
     form.elements.host.value = config.host;
     form.elements.port.value = config.port;
     form.elements['log-level'].value = config['log-level'];
+    for (const control of form.elements) control.disabled = !project.access?.includes('edit');
   }
+}
+const permissionLabels = { login: 'Login', manage_users: 'Manage users', create_projects: 'Create projects', console: 'Console', login_rc: 'Login to RC', login_prod: 'Login to Prod', view: 'View Builder Project', edit: 'Edit Builder Project', promote: 'Promote to Prod', delete: 'Delete Project' };
+function selectedAccessPrincipal() {
+  if (!accessData || !accessSelection) return null;
+  return accessData[accessSelection.type === 'user' ? 'users' : 'groups'].find(item => item.id === accessSelection.id) || null;
+}
+function permissionChecks(permissions, selected, scope, disabled = false) {
+  return `<div class="permission-grid">${permissions.map(permission => `<label><input type="checkbox" data-access-scope="${escapeHTML(scope)}" value="${escapeHTML(permission)}" ${selected.includes(permission) ? 'checked' : ''} ${disabled ? 'disabled' : ''}>${escapeHTML(permissionLabels[permission] || permission)}</label>`).join('')}</div>`;
+}
+function renderAccessManager() {
+  if (!accessData) return;
+  $('#access-users').innerHTML = accessData.users.map(user => `<button type="button" data-access-type="user" data-access-id="${user.id}" class="${accessSelection?.type === 'user' && accessSelection.id === user.id ? 'active' : ''}"><span>${escapeHTML(user.username)}</span></button>`).join('') || '<small>No users</small>';
+  $('#access-groups').innerHTML = accessData.groups.map(group => `<button type="button" data-access-type="group" data-access-id="${group.id}" class="${accessSelection?.type === 'group' && accessSelection.id === group.id ? 'active' : ''}"><span>${escapeHTML(group.name)}</span>${group.system ? '<small>built-in</small>' : ''}</button>`).join('') || '<small>No groups</small>';
+  const principal = selectedAccessPrincipal();
+  if (!principal) { $('#access-editor').innerHTML = '<div class="access-empty">Select a user or group.</div>'; return; }
+  const type = accessSelection.type, system = type === 'group' && Boolean(principal.system);
+  const actions = type === 'user'
+    ? '<button type="button" data-access-action="password">Reset password</button><button type="button" class="danger" data-access-action="delete-user">Delete user</button>'
+    : (system ? '' : '<button type="button" class="danger" data-access-action="delete-group">Delete group</button>');
+  const members = type === 'group' ? `<section class="permission-section"><h4>Members</h4><div class="member-grid">${accessData.users.map(user => `<label><input type="checkbox" data-group-member value="${escapeHTML(user.username)}" ${principal.members.includes(user.username) ? 'checked' : ''}>${escapeHTML(user.username)}</label>`).join('') || '<span>No users available</span>'}</div></section>` : '';
+  const projects = accessData.projects.map(item => {
+    const direct = principal.projectPermissions[item.id] || [], selected = system ? principal.wildcardProjectPermissions : direct;
+    return `<section class="project-permission"><h5>${escapeHTML(item.name)}</h5>${permissionChecks(accessData.projectPermissions, selected, item.id, system)}</section>`;
+  }).join('') || '<p>No projects exist yet.</p>';
+  $('#access-editor').innerHTML = `<header class="access-editor-head"><div><h3>${escapeHTML(principal.username || principal.name)}</h3><p>${type === 'user' ? 'User permissions' : system ? 'Built-in group with all permissions' : 'Group permissions'}</p></div><div class="access-editor-actions">${actions}</div></header>${members}<section class="permission-section"><h4>Core permissions</h4>${permissionChecks(accessData.corePermissions, principal.corePermissions, 'core', system)}</section><section class="permission-section"><h4>Project permissions</h4>${projects}</section><button type="button" class="access-save" data-access-action="save">${system ? 'Save membership' : 'Save permissions'}</button>`;
+}
+async function refreshAccessManager() {
+  accessData = await api('/api/access');
+  if (accessSelection && !selectedAccessPrincipal()) accessSelection = null;
+  renderAccessManager();
+}
+async function openAccessManager() { accessSelection = null; await refreshAccessManager(); $('#access-dialog').showModal(); }
+async function saveAccessPrincipal() {
+  const principal = selectedAccessPrincipal(); if (!principal) return;
+  if (accessSelection.type === 'group') {
+    const usernames = [...document.querySelectorAll('[data-group-member]:checked')].map(input => input.value);
+    await api(`/api/access/groups/${principal.id}/members`, { method: 'PUT', body: JSON.stringify({ usernames }) });
+  }
+  if (!(accessSelection.type === 'group' && principal.system)) {
+    const base = `/api/access/grants`, type = accessSelection.type;
+    const core = [...document.querySelectorAll('[data-access-scope="core"]:checked')].map(input => input.value);
+    await api(`${base}/core/${type}/${principal.id}`, { method: 'PUT', body: JSON.stringify({ permissions: core }) });
+    for (const item of accessData.projects) {
+      const permissions = [...document.querySelectorAll(`[data-access-scope="${CSS.escape(item.id)}"]:checked`)].map(input => input.value);
+      await api(`${base}/projects/${item.id}/${type}/${principal.id}`, { method: 'PUT', body: JSON.stringify({ permissions }) });
+    }
+  }
+  await refreshAccessManager(); await refreshProjects(); toast('Access settings saved.');
+}
+async function accessEditorAction(action) {
+  const principal = selectedAccessPrincipal(); if (!principal) return;
+  if (action === 'save') return saveAccessPrincipal();
+  if (action === 'password') {
+    const values = await modal(`Reset password for ${principal.username}`, [{ name: 'password', label: 'New password', type: 'password' }, { name: 'confirm', label: 'Confirm password', type: 'password' }], 'Reset password');
+    if (!values) return; if (values.password !== values.confirm) throw new Error('Passwords do not match.');
+    await api(`/api/access/users/${encodeURIComponent(principal.username)}/password`, { method: 'PUT', body: JSON.stringify({ password: values.password }) }); toast('Password reset.'); return;
+  }
+  if (action === 'delete-user') {
+    if (!confirm(`Delete user ${principal.username}?`)) return;
+    await api(`/api/access/users/${encodeURIComponent(principal.username)}`, { method: 'DELETE', body: '{}' });
+  }
+  if (action === 'delete-group') {
+    if (!confirm(`Delete group ${principal.name}?`)) return;
+    await api(`/api/access/groups/${principal.id}`, { method: 'DELETE', body: '{}' });
+  }
+  accessSelection = null; await refreshAccessManager(); toast('Access entry deleted.');
 }
 async function saveDeploymentConfig(form) {
   const channel = form.dataset.deploymentChannel;
@@ -838,6 +912,30 @@ $('#template-contents').addEventListener('keydown', event => {
   input.setRangeText('  ', start, end, 'end'); input.dispatchEvent(new Event('input', { bubbles: true }));
 });
 $('#template-dialog').addEventListener('cancel', event => { event.preventDefault(); closeTemplateEditor(); });
+$('#access-management').onclick = handle(openAccessManager);
+$('#access-close').onclick = () => $('#access-dialog').close();
+$('#access-dialog').addEventListener('cancel', event => { event.preventDefault(); $('#access-dialog').close(); });
+for (const selector of ['#access-users', '#access-groups']) $(selector).onclick = event => {
+  const button = event.target.closest('[data-access-type]'); if (!button) return;
+  accessSelection = { type: button.dataset.accessType, id: Number(button.dataset.accessId) }; renderAccessManager();
+};
+$('#access-editor').onclick = event => { const button = event.target.closest('[data-access-action]'); if (button) handle(() => accessEditorAction(button.dataset.accessAction))(); };
+$('#access-new-user').onclick = handle(async () => {
+  const values = await modal('Create user', [{ name: 'username', label: 'Username' }, { name: 'password', label: 'Password', type: 'password' }, { name: 'confirm', label: 'Confirm password', type: 'password' }], 'Create user');
+  if (!values) return; if (values.password !== values.confirm) throw new Error('Passwords do not match.');
+  const created = await api('/api/access/users', { method: 'POST', body: JSON.stringify({ username: values.username, password: values.password }) });
+  await refreshAccessManager(); const user = accessData.users.find(item => item.username === created.username); accessSelection = { type: 'user', id: user.id }; renderAccessManager(); toast('User created. Assign permissions before they sign in.');
+});
+$('#access-new-group').onclick = handle(async () => {
+  const values = await modal('Create group', [{ name: 'name', label: 'Group name' }], 'Create group'); if (!values) return;
+  const created = await api('/api/access/groups', { method: 'POST', body: JSON.stringify(values) });
+  await refreshAccessManager(); accessSelection = { type: 'group', id: created.id }; renderAccessManager(); toast('Group created.');
+});
+$('#delete-project').onclick = handle(async () => {
+  if (!project || !confirm(`Delete project ${project.name}? This removes its saved revisions and cannot be undone.`)) return;
+  await api(`/api/projects/${project.id}`, { method: 'DELETE', body: '{}' });
+  project = null; workspaceID = null; dirty = false; openWorkspaceIDs.clear(); await refreshProjects(); showHome(); setProjectControls(false); toast('Project deleted.');
+});
 $('#export').onclick = handle(async () => {
   if (!project) return; await save(); if (dirty) await save();
   const response = await fetch(`/api/projects/${project.id}/export`);
@@ -850,7 +948,7 @@ function setTheme(theme) { document.documentElement.dataset.theme = theme; local
 setTheme(localStorage.getItem('phidias-theme') || 'system');
 $('#theme-toggle').onclick = () => setTheme(themes[(themes.indexOf(document.documentElement.dataset.theme) + 1) % themes.length]);
 window.addEventListener('keydown', event => {
-  if ($('#form-dialog').open || $('#version-dialog').open || $('#template-dialog').open) return;
+  if ($('#form-dialog').open || $('#version-dialog').open || $('#template-dialog').open || $('#access-dialog').open) return;
   const command = event.ctrlKey || event.metaKey;
   const editing = event.target.closest?.('input,textarea,select,[contenteditable]');
   const key = event.key.toLowerCase();
@@ -866,7 +964,11 @@ window.addEventListener('keydown', event => {
 });
 window.addEventListener('beforeunload', event => { if (dirty || templateDirty) { event.preventDefault(); event.returnValue = ''; } });
 window.addEventListener('resize', renderWires);
-async function refreshSession() { const session = await api('/api/session'); csrfToken = session.csrfToken; $('#account-name').textContent = session.username; $('#sign-in-again').hidden = true; }
+async function refreshSession() {
+  const session = await api('/api/session'); csrfToken = session.csrfToken; sessionPermissions = session.permissions || {};
+  $('#account-name').textContent = session.username; $('#sign-in-again').hidden = true; $('#access-management').hidden = !sessionPermissions.manageUsers;
+  for (const selector of ['#new-project', '#rail-new-project', '#home-new-project']) $(selector).disabled = !sessionPermissions.createProjects;
+}
 $('#logout').onclick = handle(async () => {
   if (saving) await saving; if (dirty && !confirm('Sign out and discard unsaved changes?')) return;
   try { await api('/api/logout', { method: 'POST', body: '{}' }); } catch (error) { if (error.status !== 401) throw error; }

@@ -9,9 +9,9 @@ function escapeHTML(value) {
 function parseObject(value) {
   if (typeof value === 'string') {
     try { value = JSON.parse(value); }
-    catch { throw new Error('Convert JSON to HTML detail requires valid JSON object text or an object'); }
+    catch { throw new Error('Convert JSON to HTML detail requires valid JSON text, an object, or a list'); }
   }
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Convert JSON to HTML detail requires a JSON object');
+  if (!value || typeof value !== 'object') throw new Error('Convert JSON to HTML detail requires an object or a list');
   return value;
 }
 function renderValue(value, ancestors, depth) {
@@ -34,10 +34,10 @@ module.exports = {
   type: 'convert_json_to_html_detail',
   name: 'Convert JSON to HTML Detail',
   category: 'Data',
-  description: 'Converts one JSON object into a vertical HTML detail table with header and value columns.',
+  description: 'Converts a JSON object or list into a vertical HTML detail table with header and value columns.',
   inputPorts: [
     { id: 'action', name: 'Action', kind: 'action', types: [] },
-    { id: 'json', name: 'JSON Object', kind: 'value', types: ['text', 'object'], required: true }
+    { id: 'json', name: 'JSON', kind: 'value', types: ['text', 'object', 'list'], required: true }
   ],
   outputs: ['next'],
   outputPorts: [

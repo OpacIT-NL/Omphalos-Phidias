@@ -19,10 +19,12 @@
       <button id="add-block" title="Add block" aria-label="Add block" disabled>◇＋</button>
       <button id="templates" title="HTML and CSS templates" aria-label="HTML and CSS templates" disabled>&lt;/&gt;</button>
       <button id="versions" title="Version manager" aria-label="Version manager" disabled>↶</button>
+      <button id="delete-project" title="Delete project" aria-label="Delete project" disabled>⌫</button>
       <button id="export" title="Export application" aria-label="Export application" disabled>⇩</button>
       <span id="save-state" role="status">Ready</span>
       <span class="toolbar-spacer"></span>
       <a id="sign-in-again" href="/login" target="_blank" rel="noopener" hidden>Sign in again</a>
+      <button id="access-management" title="Users, groups and permissions" aria-label="Users, groups and permissions" hidden>♙</button>
       <button id="theme-toggle" title="Change appearance" aria-label="Change appearance">◐</button>
       <span id="account-name"></span>
       <button id="logout" title="Sign out" aria-label="Sign out">↪</button>
@@ -108,6 +110,17 @@
         <label><span>HTML</span><textarea id="template-contents" spellcheck="false" placeholder="Select or create a template"></textarea></label>
         <footer><span id="template-state"></span><button id="template-delete" type="button" class="danger">Delete</button><button id="template-save" type="button" class="primary">Save template</button></footer>
       </section>
+    </div>
+  </dialog>
+  <dialog id="access-dialog" class="access-dialog">
+    <header><div><h2>Access management</h2><p>Permissions are additive across users and groups.</p></div><button id="access-close" type="button" aria-label="Close access management">×</button></header>
+    <div class="access-layout">
+      <aside>
+        <div class="access-add"><button id="access-new-user" type="button">＋ User</button><button id="access-new-group" type="button">＋ Group</button></div>
+        <h3>Users</h3><div id="access-users" class="access-principals"></div>
+        <h3>Groups</h3><div id="access-groups" class="access-principals"></div>
+      </aside>
+      <section id="access-editor" class="access-editor"><div class="access-empty">Select a user or group.</div></section>
     </div>
   </dialog>
 </body>

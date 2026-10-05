@@ -59,7 +59,11 @@ function validateAppConfig(value) {
   if (!Number.isInteger(value.port) || value.port < 1 || value.port > 65535) throw new Error('config.json: port must be an integer between 1 and 65535');
   if (typeof value.host !== 'string' || !net.isIP(value.host)) throw new Error('config.json: host must be an IPv4 or IPv6 address');
   if (!Number.isInteger(value['log-level']) || value['log-level'] < 0 || value['log-level'] > 4) throw new Error('config.json: log-level must be an integer between 0 and 4');
-  return { port: value.port, host: value.host, 'log-level': value['log-level'] };
+  const projectId = value['project-id'] ?? null, releaseChannel = value['release-channel'] ?? null;
+  if ((projectId === null) !== (releaseChannel === null)) throw new Error('config.json: project-id and release-channel must be set together');
+  if (projectId !== null && (typeof projectId !== 'string' || !/^[a-f0-9-]{36}$/.test(projectId))) throw new Error('config.json: project-id must be a project UUID');
+  if (releaseChannel !== null && !['RC', 'Prod'].includes(releaseChannel)) throw new Error('config.json: release-channel must be RC or Prod');
+  return { port: value.port, host: value.host, 'log-level': value['log-level'], ...(projectId === null ? {} : { 'project-id': projectId, 'release-channel': releaseChannel }) };
 }
 function loadAppConfig(directory = __dirname) {
   const filename = path.join(directory, 'config.json');
@@ -86,7 +90,7 @@ function attachWorkflowContext(error, workspace, block, definition) {
   };
   return failure;
 }
-function createApp({ directory = __dirname, document, definitions, onError, logger = null, clock = () => new Date() } = {}) {
+function createApp({ directory = __dirname, document, definitions, onError, onControl = null, logger = null, clock = () => new Date() } = {}) {
   const reportError = onError || (error => {
     const context = error?.workflowContext;
     if (context && logger) {
@@ -102,10 +106,13 @@ function createApp({ directory = __dirname, document, definitions, onError, logg
   definitions ||= loadDefinitions(path.join(directory, 'blocks'));
   for (const [type, definition] of definitions) definitions.set(type, normalizeDefinition(definition, `${type}.js`));
   document ||= JSON.parse(fs.readFileSync(path.join(directory, 'workspaces.json'), 'utf8'));
+  const configFile = path.join(directory, 'config.json');
+  const applicationConfig = fs.existsSync(configFile) ? validateAppConfig(JSON.parse(fs.readFileSync(configFile, 'utf8'))) : DEFAULT_APP_CONFIG;
+  const deployment = { projectId: applicationConfig['project-id'] || null, channel: applicationConfig['release-channel'] || null };
   validate(document, definitions);
   const controller = new AbortController(), timers = [], stdinListeners = [], activeRuns = new Set(), routes = [], authenticationStores = new Map();
   const shared = Object.create(null);
-  let started = false, stdinInterface = null;
+  let started = false, stdinInterface = null, controlRequested = null;
   for (const definition of definitions.values()) {
     if (definition.legacy && typeof definition.source.init === 'function') definition.source.init(shared);
   }
@@ -114,10 +121,17 @@ function createApp({ directory = __dirname, document, definitions, onError, logg
     const execution = seed.execution || { vars: Object.create(null), values: new Map(), evaluated: new Set() };
     const context = {
       vars: execution.vars, values: execution.values, evaluated: execution.evaluated,
-      request, response, env: process.env, signal, shared, appName: document.name, directory, logger,
+      request, response, env: process.env, signal, shared, appName: document.name, directory, logger, deployment,
       legacyValues: seed.legacyValues || []
     };
     context.render = value => render(value, context);
+    context.controlApplication = mode => {
+      if (!['stop', 'restart'].includes(mode)) throw new Error('Unknown application control request');
+      if (typeof onControl !== 'function') throw new Error('Application control is unavailable in this runtime');
+      if (controlRequested) return;
+      controlRequested = mode;
+      setImmediate(() => Promise.resolve(onControl(mode)).catch(reportError));
+    };
     context.authentication = filename => {
       const resolved = path.resolve(directory, String(filename || '').trim());
       if (!String(filename || '').trim()) throw new Error('Select an authentication SQLite database');
@@ -328,18 +342,25 @@ if (require.main === module) {
   const lifecycle = (...values) => typeof logger.notice === 'function'
     ? logger.notice(...values)
     : process.stdout.write(require('node:util').format(...values) + '\n');
-  const app = createApp({ logger });
-  let stopping = false;
-  const stop = async signal => {
+  let app, stopping = false;
+  const launch = async () => {
+    app = createApp({ logger, onControl: mode => stop(`workflow ${mode}`, mode === 'restart') });
+    const address = await app.start();
+    lifecycle('%s listening on %s:%d', app.name, address.address, address.port);
+  };
+  const stop = async (reason, restart = false) => {
     if (stopping) return;
     stopping = true;
-    lifecycle('Stopping %s (%s)', app.name, signal);
-    try { await app.stop(); lifecycle('%s stopped', app.name); }
+    lifecycle('Stopping %s (%s)', app.name, reason);
+    try {
+      await app.stop(); lifecycle('%s stopped', app.name);
+      if (restart) { lifecycle('Restarting %s', app.name); stopping = false; await launch(); }
+    }
     catch (error) { logger.critical('Shutdown failed: %s', error?.stack || error); process.exitCode = 1; }
   };
   process.once('uncaughtException', error => { logger.critical('Uncaught exception: %s', error?.stack || error); process.exit(1); });
   process.once('unhandledRejection', error => { logger.critical('Unhandled rejection: %s', error?.stack || error); process.exit(1); });
-  app.start().then(address => lifecycle('%s listening on %s:%d', app.name, address.address, address.port)).catch(error => { logger.critical('Could not start application: %s', error?.stack || error); process.exitCode = 1; });
+  launch().catch(error => { logger.critical('Could not start application: %s', error?.stack || error); process.exitCode = 1; });
   for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => { stop(signal); });
 }
 module.exports = { createApp, loadDefinitions, render, readBody, findRoute, normalizeRoutePath, loadAppConfig, validateAppConfig };

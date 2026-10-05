@@ -90,6 +90,34 @@ test('accounts run before save, remain outside config.json, and persist with the
   await engine.execute('no username alice'); assert.equal(auth.listUsers().length, 0);
   await engine.execute('do copy run start'); assert.equal(auth.db.prepare('SELECT COUNT(*) AS count FROM users').get().count, 0);
 });
+test('grant_all gives a user immediate super-admin access and persists it only on save', async t => {
+  const { engine, auth, database, messages } = await fixture(t);
+  await auth.createUser('alice', password);
+  await auth.createUser('bob', password);
+  assert.equal(auth.hasCore('bob', 'manage_users'), false);
+  assert.equal(auth.hasProject('bob', 'any-project', 'delete'), false);
+
+  await engine.execute('enable'); await engine.execute('conf t');
+  await engine.execute('user bob grant_all');
+  assert.equal(engine.dirty, true);
+  assert.equal(auth.hasCore('bob', 'manage_users'), true);
+  assert.equal(auth.hasProject('bob', 'any-project', 'delete'), true);
+  assert.match(messages.at(-1), /Save with copy run start/);
+
+  const beforeSave = new Auth(database);
+  assert.equal(beforeSave.hasCore('bob', 'manage_users'), false);
+  beforeSave.close();
+
+  await engine.execute('do copy run start');
+  assert.equal(engine.dirty, false);
+  const afterSave = new Auth(database);
+  assert.equal(afterSave.hasCore('bob', 'manage_users'), true);
+  assert.equal(afterSave.hasProject('bob', 'any-project', 'delete'), true);
+  afterSave.close();
+
+  await engine.execute('user missing grant_all');
+  assert.equal(messages.at(-1), '% User not found.');
+});
 test('failed save leaves staged accounts available and startup unchanged', async t => {
   const { engine, config, auth, answers, file, messages } = await fixture(t);
   await engine.execute('enable'); await engine.execute('conf t');
@@ -145,6 +173,6 @@ test('help and question-mark show the current mode, and do help lists enabled co
   await engine.execute('enable'); await engine.execute('help');
   assert.match(messages.at(-1), /copy run start/); assert.match(messages.at(-1), /shutdown/);
   await engine.execute('conf t'); await engine.execute('?');
-  assert.match(messages.at(-1), /host <IPv4\/IPv6>/); assert.match(messages.at(-1), /username/);
+  assert.match(messages.at(-1), /host <IPv4\/IPv6>/); assert.match(messages.at(-1), /user <name> grant_all/);
   await engine.execute('do help'); assert.match(messages.at(-1), /show running-config/); assert.equal(engine.mode, 'config');
 });

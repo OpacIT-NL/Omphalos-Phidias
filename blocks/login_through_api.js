@@ -32,7 +32,7 @@ module.exports = {
     const password = Object.hasOwn(inputs, 'password') ? inputs.password : body.password;
     try {
       const database = Object.hasOwn(inputs, 'database') ? inputs.database : ctx.render(options.database);
-      const session = await ctx.authentication(database).login(username, password, 'api', ctx.request.ip);
+      const session = await ctx.authentication(database).login(username, password, 'api', ctx.request.ip, ctx.deployment);
       const result = { token: session.token, token_type: 'Bearer', username: session.username, expires_at: session.expiresAt };
       setOutput('bearer_token', session.token); setOutput('authorization', `Bearer ${session.token}`);
       setOutput('result', result); setOutput('username', session.username); setOutput('error_message', '');

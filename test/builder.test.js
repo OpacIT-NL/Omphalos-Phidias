@@ -53,7 +53,8 @@ test('project creation, atomic saves, conflicts, reload, and downloadable ZIP', 
   assert.deepEqual(project.workspaceCategories, []);
   assert.equal(project.workspaces[0].numberId, 1);
   assert.deepEqual(project.workspaces[0].blocks.map(block => block.numberId), [1, 2]);
-  assert.equal(zipEntries(await store.export(project.id)).has('config.json'), false);
+  const defaultExportConfig = JSON.parse(zipEntries(await store.export(project.id)).get('config.json'));
+  assert.deepEqual(defaultExportConfig, { port: 3001, host: '0.0.0.0', 'log-level': 3, 'project-id': project.id, 'release-channel': 'RC' });
   const probe = require('node:net').createServer();
   await new Promise(resolve => probe.listen(0, '127.0.0.1', resolve));
   const configuredPort = probe.address().port;
@@ -85,7 +86,7 @@ test('project creation, atomic saves, conflicts, reload, and downloadable ZIP', 
   assert.equal(JSON.parse(extracted.get('package.json')).dependencies.argon2, '^0.45.1');
   for (const name of ['api_endpoint.js', 'api_call.js', 'api_reply.js']) assert.ok(extracted.has(`blocks/${name}`));
   for (const name of ['http.js', 'request.js', 'respond.js']) assert.equal(extracted.has(`blocks/${name}`), false);
-  const deployedConfig = JSON.stringify({ port: configuredPort, host: '127.0.0.1', 'log-level': 4 }, null, 2) + '\n';
+  const deployedConfig = JSON.stringify({ port: configuredPort, host: '127.0.0.1', 'log-level': 4, 'project-id': project.id, 'release-channel': 'RC' }, null, 2) + '\n';
   assert.equal(extracted.get('config.json').toString(), deployedConfig);
   const deployment = path.join(directory, 'isolated-export'); await fs.mkdir(deployment);
   for (const [filename, data] of extracted) { const destination = path.join(deployment, filename); await fs.mkdir(path.dirname(destination), { recursive: true }); await fs.writeFile(destination, data); }
@@ -141,7 +142,7 @@ test('saved revisions publish to a browsable RC repository and can be promoted, 
   assert.equal(rcRevision.status, 200);
   const rcFiles = zipEntries(Buffer.from(await rcRevision.arrayBuffer()));
   assert.equal(JSON.parse(rcFiles.get('workspaces.json')).revision, 2);
-  assert.deepEqual(JSON.parse(rcFiles.get('config.json')), { port: 7779, host: '127.0.0.1', 'log-level': 4 });
+  assert.deepEqual(JSON.parse(rcFiles.get('config.json')), { port: 7779, host: '127.0.0.1', 'log-level': 4, 'project-id': project.id, 'release-channel': 'RC' });
   assert.equal((await call('/repo/DelphiRC/latest.zip')).status, 200);
 
   assert.equal((await call(endpoint + '/versions/2/promote', 'POST', {})).status, 200);
@@ -150,11 +151,11 @@ test('saved revisions publish to a browsable RC repository and can be promoted, 
   assert.equal(versions[0].prodUrl, '/repo/DelphiProd/delphi.rev2.zip');
   const prodBeforeNextSave = Buffer.from(await (await call('/repo/DelphiProd/latest.zip')).arrayBuffer());
   assert.equal(JSON.parse(zipEntries(prodBeforeNextSave).get('workspaces.json')).revision, 2);
-  assert.deepEqual(JSON.parse(zipEntries(prodBeforeNextSave).get('config.json')), { port: 7778, host: '0.0.0.0', 'log-level': 2 });
+  assert.deepEqual(JSON.parse(zipEntries(prodBeforeNextSave).get('config.json')), { port: 7778, host: '0.0.0.0', 'log-level': 2, 'project-id': project.id, 'release-channel': 'Prod' });
 
   assert.equal((await call(endpoint + '/deployment-configs/Prod', 'PUT', { port: 7780, host: '127.0.0.1', 'log-level': 1 })).status, 200);
   const reconfiguredProd = zipEntries(Buffer.from(await (await call('/repo/DelphiProd/latest.zip')).arrayBuffer()));
-  assert.deepEqual(JSON.parse(reconfiguredProd.get('config.json')), { port: 7780, host: '127.0.0.1', 'log-level': 1 });
+  assert.deepEqual(JSON.parse(reconfiguredProd.get('config.json')), { port: 7780, host: '127.0.0.1', 'log-level': 1, 'project-id': project.id, 'release-channel': 'Prod' });
 
   revisionTwo.workspaces[0].blocks[1].options.body = 'revision three';
   const revisionThree = await (await call(endpoint, 'PUT', revisionTwo)).json();
@@ -243,6 +244,49 @@ test('password login, protected routes, CSRF, logout, malformed requests and tra
   const logout = await call('/api/logout', 'POST', {}); assert.equal(logout.status, 200);
   assert.match(logout.headers.get('set-cookie'), /Max-Age=0/);
   assert.equal((await call('/api/projects')).status, 401);
+});
+
+test('users and groups receive additive core and per-project ACL permissions', async t => {
+  const { call, rawCall } = await fixture(t);
+  const project = await (await call('/api/projects', 'POST', { name: 'Restricted' })).json();
+  const endpoint = `/api/projects/${project.id}`;
+  assert.equal((await call('/api/access/users', 'POST', { username: 'viewer', password: 'viewer-password-123' })).status, 201);
+  let model = await (await call('/api/access')).json();
+  const viewer = model.users.find(user => user.username === 'viewer');
+  assert.ok(viewer); assert.deepEqual(viewer.corePermissions, []);
+  assert.equal((await rawCall('/api/login', 'POST', { username: 'viewer', password: 'viewer-password-123' })).status, 403);
+
+  assert.equal((await call(`/api/access/grants/core/user/${viewer.id}`, 'PUT', { permissions: ['login'] })).status, 200);
+  assert.equal((await call(`/api/access/grants/projects/${project.id}/user/${viewer.id}`, 'PUT', { permissions: ['view'] })).status, 200);
+  const login = await rawCall('/api/login', 'POST', { username: 'viewer', password: 'viewer-password-123' });
+  assert.equal(login.status, 200);
+  const viewerSession = await login.json();
+  const viewerHeaders = { cookie: login.headers.get('set-cookie').split(';')[0], 'x-csrf-token': viewerSession.csrfToken };
+  const viewerCall = (route, method = 'GET', body) => rawCall(route, method, body, viewerHeaders);
+  const visible = await (await viewerCall('/api/projects')).json();
+  assert.deepEqual(visible.map(item => item.id), [project.id]); assert.deepEqual(visible[0].access, ['view']);
+  assert.equal((await viewerCall(endpoint)).status, 200);
+  assert.equal((await viewerCall(endpoint, 'PUT', project)).status, 403);
+  assert.equal((await viewerCall('/api/projects', 'POST', { name: 'Denied' })).status, 403);
+  assert.equal((await viewerCall('/api/access')).status, 403);
+
+  const groupResponse = await call('/api/access/groups', 'POST', { name: 'Developers' });
+  const group = await groupResponse.json();
+  assert.equal((await call(`/api/access/groups/${group.id}/members`, 'PUT', { usernames: ['viewer'] })).status, 200);
+  assert.equal((await call(`/api/access/grants/projects/${project.id}/group/${group.id}`, 'PUT', { permissions: ['edit'] })).status, 200);
+  const editable = await (await viewerCall(endpoint)).json(); editable.workspaces[0].blocks[1].options.body = 'group edit';
+  assert.equal((await viewerCall(endpoint, 'PUT', editable)).status, 200);
+  assert.equal((await viewerCall(endpoint + '/versions/2/promote', 'POST', {})).status, 403);
+
+  assert.equal((await call(`/api/access/grants/projects/${project.id}/user/${viewer.id}`, 'PUT', { permissions: ['view', 'promote', 'delete'] })).status, 200);
+  assert.equal((await viewerCall(endpoint + '/versions/2/promote', 'POST', {})).status, 200);
+  assert.equal((await viewerCall(endpoint, 'DELETE', {})).status, 200);
+  assert.equal((await call(endpoint)).status, 404);
+
+  assert.equal((await call(`/api/access/grants/core/user/${viewer.id}`, 'PUT', { permissions: [] })).status, 200);
+  assert.equal((await viewerCall('/api/session')).status, 401);
+  model = await (await call('/api/access')).json();
+  assert.ok(model.groups.find(item => item.name === 'Administrators').members.includes('tester'));
 });
 
 test('validation rejects dangling wires, duplicate routes, loops, and invalid options', async t => {
@@ -530,6 +574,25 @@ test('Linux commands run as the automation user and expose success and error out
   const direct = await require('../blocks/linux_command').runCommand('exit 7', '', 5, new AbortController().signal);
   assert.equal(direct.exitCode, 7);
   assert.equal(direct.failed, true);
+});
+
+test('Stop App and Restart App request graceful runtime control', async t => {
+  const definitions = loadDefinitions(path.resolve(__dirname, '../blocks'));
+  for (const [type, expected] of [['stop_app', 'stop'], ['restart_app', 'restart']]) {
+    const document = { version: 1, name: 'Runtime control', workspaces: [{ id: 'main', name: 'Main', active: true, blocks: [
+      { id: 'endpoint', type: 'http', x: 0, y: 0, options: { method: 'POST', path: '/control' } },
+      { id: 'control', type, x: 0, y: 0, options: {} }
+    ], connections: [{ id: 'run-control', from: 'endpoint', output: 'next', to: 'control', input: 'action', kind: 'action' }] }] };
+    let resolveControl;
+    const controlled = new Promise(resolve => { resolveControl = resolve; });
+    const app = createApp({ document, definitions: loadDefinitions(path.resolve(__dirname, '../blocks')), onControl: resolveControl });
+    const address = await app.start(0, '127.0.0.1');
+    const response = await fetch(`http://127.0.0.1:${address.port}/control`, { method: 'POST' });
+    assert.equal(response.status, 204); assert.equal(await controlled, expected);
+    await app.stop();
+  }
+  assert.equal(definitions.get('stop_app').category, 'System');
+  assert.equal(definitions.get('restart_app').category, 'System');
 });
 
 test('startup and interval triggers, disabled workspaces, clean shutdown', async t => {

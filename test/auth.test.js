@@ -6,6 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const argon2 = require('argon2');
+const { DatabaseSync } = require('node:sqlite');
 const { Auth } = require('../lib/auth');
 const { createServer } = require('../server');
 const { createLogger } = require('../lib/logger');
@@ -18,6 +19,19 @@ async function fixture(t) {
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   return { auth, filename, directory };
 }
+
+test('ACL migration preserves existing users and grants them administrator access', async t => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'sentinel-auth-migration-')), filename = path.join(directory, 'auth.sqlite');
+  const legacy = new DatabaseSync(filename);
+  legacy.exec('CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL, created_at INTEGER NOT NULL)');
+  const hash = await argon2.hash(password, { type: argon2.argon2id, memoryCost: 65536, timeCost: 3, parallelism: 1, hashLength: 32 });
+  legacy.prepare('INSERT INTO users (username, password_hash, created_at) VALUES (?, ?, ?)').run('existing', hash, Date.now()); legacy.close();
+  const auth = new Auth(filename); t.after(() => { auth.close(); return fs.rm(directory, { recursive: true, force: true }); });
+  assert.equal(auth.db.prepare('SELECT COUNT(*) AS count FROM users WHERE username = ?').get('existing').count, 1);
+  assert.equal(auth.hasCore('existing', 'manage_users'), true);
+  assert.equal(auth.hasProject('existing', crypto.randomUUID(), 'delete'), true);
+  assert.equal((await auth.login('existing', password, '127.0.0.1')).username, 'existing');
+});
 
 test('SQLite persists salted Argon2id hashes and hashed sessions across restart', async t => {
   const { auth, filename } = await fixture(t);

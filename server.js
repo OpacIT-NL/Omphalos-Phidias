@@ -32,6 +32,7 @@ const assets = new Map([['/', ['index.html', 'text/html']], ['/login', ['login.h
 async function createServer({ directory = loadConfig().directory, repositoryDirectory, authDatabase = loadConfig().authDatabase, secureCookies = loadConfig().secureCookies, logger = createLogger({ level: loadConfig().logLevel, fileLevel: loadConfig().fileLogLevel, directory: path.join(__dirname, 'log') }), closeResourcesOnClose = true } = {}) {
   const store = new Store(directory, repositoryDirectory); await store.init();
   const auth = new Auth(authDatabase, { secureCookies });
+  const projectAccess = (username, id) => ['login_rc', 'login_prod', 'view', 'edit', 'promote', 'delete'].filter(permission => auth.hasProject(username, id, permission));
   const server = http.createServer(async (req, res) => {
     const started = Date.now();
     // Only log the path, never queries, headers, cookies, or request bodies.
@@ -89,26 +90,65 @@ async function createServer({ directory = loadConfig().directory, repositoryDire
       if (url.pathname.startsWith('/api/')) {
         if (!session) return send(401, { error: 'Sign in to continue.' });
         if (!['GET', 'HEAD'].includes(req.method)) auth.checkCSRF(req, session);
-        if (url.pathname === '/api/session' && req.method === 'GET') return send(200, session);
+        if (url.pathname === '/api/session' && req.method === 'GET') return send(200, { ...session, permissions: { manageUsers: auth.hasCore(session.username, 'manage_users'), createProjects: auth.hasCore(session.username, 'create_projects'), console: auth.hasCore(session.username, 'console') } });
         if (url.pathname === '/api/logout' && req.method === 'POST') {
           auth.logout(req);
           res.setHeader('Set-Cookie', auth.cookie());
           logger.info('User signed out');
           return send(200, { ok: true });
         }
+        const accessUserMatch = url.pathname.match(/^\/api\/access\/users(?:\/([^/]+)(?:\/(password))?)?$/);
+        const accessGroupMatch = url.pathname.match(/^\/api\/access\/groups(?:\/(\d+)(?:\/(members))?)?$/);
+        const accessGrantMatch = url.pathname.match(/^\/api\/access\/grants\/(core|projects\/([^/]+))\/(user|group)\/(\d+)$/);
+        if (url.pathname === '/api/access' || accessUserMatch || accessGroupMatch || accessGrantMatch) {
+          auth.requireCore(session.username, 'manage_users');
+          if (url.pathname === '/api/access' && req.method === 'GET') return send(200, auth.accessModel(await store.list()));
+          if (accessUserMatch) {
+            const [, encodedUsername, passwordAction] = accessUserMatch;
+            if (!encodedUsername && req.method === 'POST') {
+              const body = await readBody(req), username = await auth.createManagedUser(body?.username, body?.password);
+              logger.info('User created by %s: %s', session.username, username); return send(201, { username });
+            }
+            let username;
+            try { username = encodedUsername ? decodeURIComponent(encodedUsername) : null; } catch { return send(400, { error: 'Invalid username' }); }
+            if (username && passwordAction === 'password' && req.method === 'PUT') {
+              await auth.resetManagedPassword(username, (await readBody(req))?.password);
+              logger.info('User password reset by %s: %s', session.username, username); return send(200, { ok: true });
+            }
+            if (username && !passwordAction && req.method === 'DELETE') {
+              if (username.toLowerCase() === session.username) throw Object.assign(new Error('You cannot delete your own signed-in account.'), { status: 409 });
+              auth.deleteManagedUser(username); logger.info('User deleted by %s: %s', session.username, username); return send(200, { ok: true });
+            }
+          }
+          if (accessGroupMatch) {
+            const [, idText, membersAction] = accessGroupMatch;
+            if (!idText && req.method === 'POST') return send(201, { id: auth.createGroup((await readBody(req))?.name) });
+            if (idText && membersAction === 'members' && req.method === 'PUT') { auth.setGroupMembers(Number(idText), (await readBody(req))?.usernames); return send(200, { ok: true }); }
+            if (idText && !membersAction && req.method === 'DELETE') { auth.deleteGroup(Number(idText)); return send(200, { ok: true }); }
+          }
+          if (accessGrantMatch && req.method === 'PUT') {
+            const [, scopeText, projectId, principalType, principalId] = accessGrantMatch;
+            auth.setGrants(principalType, Number(principalId), scopeText === 'core' ? 'core' : projectId, (await readBody(req))?.permissions);
+            return send(200, { ok: true });
+          }
+          return send(405, { error: 'Method not allowed' });
+        }
         if (url.pathname === '/api/projects') {
-          if (req.method === 'GET') return send(200, await store.list());
+          if (req.method === 'GET') return send(200, (await store.list()).filter(project => auth.hasProject(session.username, project.id, 'view')).map(project => ({ ...project, access: projectAccess(session.username, project.id) })));
           if (req.method === 'POST') {
+            auth.requireCore(session.username, 'create_projects');
             const project = await store.create((await readBody(req))?.name);
+            auth.grantProjectOwner(session.username, project.id);
             logger.info('Project created: %s', project.id);
-            return send(201, project);
+            return send(201, { ...project, access: projectAccess(session.username, project.id) });
           }
         }
         const deploymentConfigMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/deployment-configs(?:\/(RC|Prod))?$/);
         if (deploymentConfigMatch) {
           const [, id, channel] = deploymentConfigMatch;
-          if (!channel && req.method === 'GET') return send(200, await store.deploymentConfigs(id));
+          if (!channel && req.method === 'GET') { auth.requireProject(session.username, id, 'view'); return send(200, await store.deploymentConfigs(id)); }
           if (channel && req.method === 'PUT') {
+            auth.requireProject(session.username, id, 'edit');
             const configurations = await store.saveDeploymentConfig(id, channel, await readBody(req));
             logger.info('Project %s deployment settings saved: %s', id, channel);
             return send(200, configurations);
@@ -123,6 +163,8 @@ async function createServer({ directory = loadConfig().directory, repositoryDire
             try { name = decodeURIComponent(encodedName); }
             catch { return send(400, { error: 'Invalid template name' }); }
           }
+          if (req.method === 'GET') auth.requireProject(session.username, id, 'view');
+          else auth.requireProject(session.username, id, 'edit');
           if (!name && req.method === 'GET') return send(200, await store.templates(id));
           if (!name) return send(405, { error: 'Method not allowed' });
           if (req.method === 'GET') return send(200, await store.template(id, name));
@@ -143,21 +185,24 @@ async function createServer({ directory = loadConfig().directory, repositoryDire
         const versionMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/versions(?:\/(\d+)(?:\/(promote|restore))?)?$/);
         if (versionMatch) {
           const [, id, revisionText, action] = versionMatch;
-          if (!revisionText && req.method === 'GET') return send(200, await store.versions(id));
+          if (!revisionText && req.method === 'GET') { auth.requireProject(session.username, id, 'view'); return send(200, await store.versions(id)); }
           if (!revisionText) return send(405, { error: 'Method not allowed' });
           const revision = Number(revisionText);
           if (req.method === 'POST' && action === 'promote') {
+            auth.requireProject(session.username, id, 'promote');
             const promoted = await store.promote(id, revision);
             logger.info('Project revision promoted: %s (revision %d)', id, revision);
             return send(200, promoted);
           }
           if (req.method === 'POST' && action === 'restore') {
+            auth.requireProject(session.username, id, 'edit');
             const body = await readBody(req);
             const restored = await store.restore(id, revision, body?.revision);
             logger.info('Project revision restored: %s (revision %d as revision %d)', id, revision, restored.revision);
             return send(200, restored);
           }
           if (req.method === 'DELETE' && !action) {
+            auth.requireProject(session.username, id, 'edit');
             const removed = await store.deleteVersion(id, revision);
             logger.info('Project revision deleted: %s (revision %d)', id, revision);
             return send(200, removed);
@@ -167,6 +212,7 @@ async function createServer({ directory = loadConfig().directory, repositoryDire
         const match = url.pathname.match(/^\/api\/projects\/([^/]+)(?:\/(blocks|export))?$/);
         if (match) {
           const [, id, action] = match;
+          if (req.method === 'GET') auth.requireProject(session.username, id, 'view');
           if (req.method === 'GET' && action === 'blocks') {
             await store.get(id);
             return send(200, [...store.definitions(id).values()].map(({ execute, ...metadata }) => metadata));
@@ -176,13 +222,19 @@ async function createServer({ directory = loadConfig().directory, repositoryDire
             logger.info('Project exported: %s', id);
             res.writeHead(200, { 'content-type': 'application/zip', 'content-disposition': `attachment; filename="phidias-${id}.zip"` }); return res.end(archive);
           }
-          if (req.method === 'GET' && !action) return send(200, await store.get(id));
+          if (req.method === 'GET' && !action) return send(200, { ...(await store.get(id)), access: projectAccess(session.username, id) });
           if (req.method === 'PUT' && !action) {
+            auth.requireProject(session.username, id, 'edit');
             const body = await readBody(req);
             if (!body || typeof body !== 'object') return send(400, { error: 'Expected a project document' });
             const project = await store.save(id, body);
             logger.info('Project saved: %s (revision %d)', id, project.revision);
             return send(200, project);
+          }
+          if (req.method === 'DELETE' && !action) {
+            auth.requireProject(session.username, id, 'delete');
+            const removed = await store.deleteProject(id); auth.deleteProjectGrants(id);
+            logger.info('Project deleted by %s: %s', session.username, id); return send(200, removed);
           }
         }
         return send(404, { error: 'API route not found' });
