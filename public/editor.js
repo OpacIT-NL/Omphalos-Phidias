@@ -9,6 +9,7 @@ const selectedBlocks = new Set(), openWorkspaceIDs = new Set();
 let blockClipboard = null, workspaceClipboard = null, clipboardKind = null, pasteSequence = 0, workspaceContextID = null, draggedWorkspaceID = null;
 let templateNames = [], templateOriginalName = null, templateDirty = false;
 let sessionPermissions = {}, accessData = null, accessSelection = null;
+let webConsoleState = null, webConsolePolling = false;
 let pickerWorldPosition = null;
 let geometryFrame = 0;
 let portDrag = null, suppressPortClick = false;
@@ -174,7 +175,7 @@ async function refreshProjects() { projects = await api('/api/projects'); render
 function setProjectControls(enabled) {
   const canView = enabled && project?.access?.includes('view'), canEdit = enabled && project?.access?.includes('edit');
   for (const selector of ['#export', '#versions']) $(selector).disabled = !canView;
-  for (const selector of ['#templates', '#add-workspace', '#add-workspace-category']) $(selector).disabled = !canEdit;
+  for (const selector of ['#templates', '#clear-block-cache', '#add-workspace', '#add-workspace-category']) $(selector).disabled = !canEdit;
   for (const selector of ['#workspace-settings', '#add-block']) $(selector).disabled = !canEdit || !ws();
   $('#delete-project').disabled = !enabled || !project?.access?.includes('delete');
   $('#save').disabled = !canEdit || !dirty;
@@ -220,6 +221,13 @@ async function save() {
     await refreshProjects(); setProjectControls(true);
   })();
   try { await saving; } catch (error) { $('#save-state').textContent = 'Save failed'; throw error; } finally { saving = null; }
+}
+async function clearBlockCache() {
+  if (!project) return;
+  const result = await api(`/api/projects/${project.id}/blocks/cache`, { method: 'DELETE', body: '{}' });
+  definitions = result.definitions;
+  render();
+  toast(`Block cache cleared. Reloaded ${definitions.length} block definitions.`);
 }
 function latestURL(version, channel) {
   const url = channel === 'Prod' ? version?.prodUrl : version?.rcUrl;
@@ -319,6 +327,56 @@ async function accessEditorAction(action) {
     await api(`/api/access/groups/${principal.id}`, { method: 'DELETE', body: '{}' });
   }
   accessSelection = null; await refreshAccessManager(); toast('Access entry deleted.');
+}
+function appendConsoleLine(message, className = '') {
+  const line = document.createElement('div');
+  line.textContent = String(message);
+  if (className) line.className = className;
+  $('#console-output').append(line);
+  $('#console-output').scrollTop = $('#console-output').scrollHeight;
+}
+function applyWebConsoleState(state) {
+  webConsoleState = state;
+  for (const message of state.output || []) appendConsoleLine(message, String(message).startsWith('%') ? 'console-error' : '');
+  $('#console-prompt').textContent = state.prompt || 'Console$> ';
+  $('#console-input').type = state.secret ? 'password' : 'text';
+  $('#console-input').disabled = Boolean(state.busy);
+  $('#console-form button').disabled = Boolean(state.busy);
+  if (!state.busy) requestAnimationFrame(() => $('#console-input').focus());
+}
+async function pollWebConsole() {
+  if (webConsolePolling) return;
+  webConsolePolling = true;
+  try {
+    while ($('#console-dialog').open && webConsoleState?.busy) {
+      await new Promise(resolve => setTimeout(resolve, 200));
+      if (!$('#console-dialog').open) break;
+      applyWebConsoleState(await api('/api/console'));
+    }
+  } finally { webConsolePolling = false; }
+}
+async function openWebConsole() {
+  $('#console-output').replaceChildren();
+  applyWebConsoleState(await api('/api/console/reset', { method: 'POST', body: '{}' }));
+  $('#console-dialog').showModal();
+  $('#console-input').focus();
+}
+function closeWebConsole() {
+  if ($('#console-dialog').open) $('#console-dialog').close();
+  webConsoleState = null;
+  api('/api/console', { method: 'DELETE', body: '{}' }).catch(() => {});
+}
+async function submitWebConsole(event) {
+  event.preventDefault();
+  if (!webConsoleState || webConsoleState.busy) return;
+  const input = $('#console-input').value;
+  const shown = webConsoleState.secret ? '[hidden]' : input;
+  appendConsoleLine(`${webConsoleState.prompt || 'Console$> '}${shown}`, 'console-command');
+  $('#console-input').value = '';
+  $('#console-input').disabled = true;
+  $('#console-form button').disabled = true;
+  applyWebConsoleState(await api('/api/console/input', { method: 'POST', body: JSON.stringify({ input }) }));
+  if (webConsoleState.busy) pollWebConsole().catch(error => toast(error.message, true));
 }
 async function saveDeploymentConfig(form) {
   const channel = form.dataset.deploymentChannel;
@@ -894,6 +952,7 @@ for (const selector of ['#new-project', '#rail-new-project', '#home-new-project'
 for (const selector of ['#show-home', '[data-home]']) $(selector).onclick = showHome;
 for (const selector of ['#add-block', '#empty-add-block']) $(selector).onclick = () => { const rect = $('#viewport').getBoundingClientRect(); openPicker(rect.left + rect.width / 2 - 170, rect.top + Math.min(100, rect.height / 3)); };
 $('#save').onclick = handle(async () => { await save(); toast('Project saved to the server.'); });
+$('#clear-block-cache').onclick = handle(clearBlockCache);
 $('#versions').onclick = handle(openVersionManager);
 $('#templates').onclick = handle(openTemplateEditor);
 $('#version-close').onclick = () => $('#version-dialog').close();
@@ -913,6 +972,10 @@ $('#template-contents').addEventListener('keydown', event => {
 });
 $('#template-dialog').addEventListener('cancel', event => { event.preventDefault(); closeTemplateEditor(); });
 $('#access-management').onclick = handle(openAccessManager);
+$('#console-management').onclick = handle(openWebConsole);
+$('#console-close').onclick = closeWebConsole;
+$('#console-form').onsubmit = event => { event.preventDefault(); handle(() => submitWebConsole(event))(); };
+$('#console-dialog').addEventListener('cancel', event => { event.preventDefault(); closeWebConsole(); });
 $('#access-close').onclick = () => $('#access-dialog').close();
 $('#access-dialog').addEventListener('cancel', event => { event.preventDefault(); $('#access-dialog').close(); });
 for (const selector of ['#access-users', '#access-groups']) $(selector).onclick = event => {
@@ -948,7 +1011,7 @@ function setTheme(theme) { document.documentElement.dataset.theme = theme; local
 setTheme(localStorage.getItem('phidias-theme') || 'system');
 $('#theme-toggle').onclick = () => setTheme(themes[(themes.indexOf(document.documentElement.dataset.theme) + 1) % themes.length]);
 window.addEventListener('keydown', event => {
-  if ($('#form-dialog').open || $('#version-dialog').open || $('#template-dialog').open || $('#access-dialog').open) return;
+  if ($('#form-dialog').open || $('#version-dialog').open || $('#template-dialog').open || $('#access-dialog').open || $('#console-dialog').open) return;
   const command = event.ctrlKey || event.metaKey;
   const editing = event.target.closest?.('input,textarea,select,[contenteditable]');
   const key = event.key.toLowerCase();
@@ -967,6 +1030,8 @@ window.addEventListener('resize', renderWires);
 async function refreshSession() {
   const session = await api('/api/session'); csrfToken = session.csrfToken; sessionPermissions = session.permissions || {};
   $('#account-name').textContent = session.username; $('#sign-in-again').hidden = true; $('#access-management').hidden = !sessionPermissions.manageUsers;
+  $('#console-management').hidden = !sessionPermissions.console;
+  if (!sessionPermissions.console && $('#console-dialog').open) closeWebConsole();
   for (const selector of ['#new-project', '#rail-new-project', '#home-new-project']) $(selector).disabled = !sessionPermissions.createProjects;
 }
 $('#logout').onclick = handle(async () => {

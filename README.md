@@ -85,6 +85,8 @@ Changes affect the running server but **do not survive restart until `copy run s
 
 Console enable passwords use Argon2id hashes in `config.json`. `show run` and `show start` hide those hashes. Three failed enable attempts temporarily block elevation for 30 seconds. Console access requires access to the server terminal and does not use the web account password.
 
+Accounts with the **Console** core permission also see **CLI** in the editor toolbar. Opening it creates a fresh `Console$>` session in disabled mode. It supports the same `enable`, `conf t`, hidden password prompts, configuration commands, and `copy run start` behavior as the server terminal. Closing and reopening the panel resets it to disabled mode.
+
 The console accepts both an interactive terminal and line-based redirected stdin from process managers such as CubeCoders AMP. AMP commands therefore use the same prompts and modes as a local terminal. When stdin is unavailable or closes, the console detaches while the web server keeps running. Ctrl+C cancels a local terminal command/password prompt (and leaves configuration mode when at its command prompt); use `shutdown` to stop interactively. Ctrl+D detaches the console without stopping the web server. SIGTERM still shuts down the server; unsaved changes are not automatically saved. Logs redraw the active prompt without exposing password input.
 
 ## Startup configuration
@@ -159,7 +161,9 @@ Back up `config.json`, projects, the sibling `repo` directory, and the authentic
 9. Open **Version manager** with **↶** to configure host, port, and log level independently for RC and Prod, download old builds, restore one as a new revision, delete an old revision, or promote a tested revision to Prod. RC saves and direct exports use the RC profile. Promotion packages the selected revision with the Prod profile and updates Prod `latest.zip`; later RC saves do not change Prod. Restoring a revision also restores its saved HTML templates.
 10. Click **Export application** to save edits and download the current project directly.
 
-Administrators can open **Access management** with the user icon in the top-right toolbar. Create users and groups, select one, assign core and per-project permissions, and save. Group membership and direct user grants combine. The built-in Administrators group always has every permission; change its membership to add or remove administrators.
+Project editors can use **Clear block cache** (⟳) in the toolbar after changing block files on disk. It removes cached bundled and project-local block modules, including imported helper modules, reloads the block library, and refreshes the current graph without discarding unsaved workspace edits.
+
+Accounts with **Manage users** can open the **ACL** control panel in the top-right toolbar. Create users and groups, select one, assign core and per-project permissions, and save. Group membership and direct user grants combine. The built-in Administrators group always has every permission; change its membership to add or remove administrators.
 
 Invalid graphs, unknown blocks, incompatible value types, loops, invalid options, and duplicate active HTTP routes are rejected on save and export. Execution follows action wires; connected value blocks are evaluated when their values are needed. Branching blocks expose separate action outputs. Use timer triggers for recurring work.
 
@@ -299,12 +303,16 @@ Use unique lowercase filenames and types containing letters, numbers, `_` or `-`
 | PUT | `/api/access/groups/:id/members` | Replace a group's membership |
 | PUT | `/api/access/grants/core/:type/:id` | Replace direct core grants for a user or group |
 | PUT | `/api/access/grants/projects/:project/:type/:id` | Replace direct project grants for a user or group |
+| GET, DELETE | `/api/console` | Poll or close the current browser console session (Console permission required) |
+| POST | `/api/console/reset` | Start a fresh browser console in disabled mode |
+| POST | `/api/console/input` | Submit a command or answer the current hidden prompt |
 | GET | `/api/projects` | List projects |
 | POST | `/api/projects` | Create with `{ "name": "…" }` |
 | GET | `/api/projects/:id` | Load `workspaces.json` |
 | PUT | `/api/projects/:id` | Save document with current `revision`; conflict returns 409 |
 | DELETE | `/api/projects/:id` | Delete a project and its repository revisions |
 | GET | `/api/projects/:id/blocks` | Read block metadata |
+| DELETE | `/api/projects/:id/blocks/cache` | Clear server-side block modules and return freshly loaded metadata (Edit permission required) |
 | GET | `/api/projects/:id/export` | Download saved project ZIP |
 | GET | `/api/projects/:id/deployment-configs` | Read the separate RC and Prod host, port, and log-level profiles |
 | PUT | `/api/projects/:id/deployment-configs/:channel` | Save the `RC` or `Prod` profile and update that channel's repository ZIPs |

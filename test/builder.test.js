@@ -8,6 +8,7 @@ const { spawn } = require('node:child_process');
 const { once } = require('node:events');
 const { createServer } = require('../server');
 const { createLogger } = require('../lib/logger');
+const { CommandConsole } = require('../lib/console');
 const { createApp, loadDefinitions, render, loadAppConfig } = require('../runtime/app');
 const { validate } = require('../runtime/validate');
 const { crc32 } = require('../lib/zip');
@@ -15,7 +16,10 @@ const { crc32 } = require('../lib/zip');
 async function fixture(t) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'sentinel-test-'));
   const repositoryDirectory = path.join(directory, 'repo');
-  const { server, store, auth } = await createServer({ directory, repositoryDirectory, authDatabase: path.join(directory, 'auth.sqlite'), secureCookies: false, logger: createLogger({ level: 0, directory: path.join(directory, 'logs') }) });
+  const logger = createLogger({ level: 0, directory: path.join(directory, 'logs') });
+  const { server, store, auth, setCommandConsoleFactory } = await createServer({ directory, repositoryDirectory, authDatabase: path.join(directory, 'auth.sqlite'), secureCookies: false, logger });
+  const consoleConfig = { running: { console: { enablePasswordHash: null } }, dirty: () => false };
+  setCommandConsoleFactory(({ ask, write }) => new CommandConsole({ config: consoleConfig, auth, logger, ask, write, shutdown: async () => {}, status: () => 'Test listener' }));
   await auth.createUser('tester', 'a-test-password-12345');
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(async () => { await new Promise(resolve => { server.close(resolve); server.closeAllConnections(); }); await fs.rm(directory, { recursive: true, force: true }); });
@@ -248,6 +252,8 @@ test('password login, protected routes, CSRF, logout, malformed requests and tra
 
 test('users and groups receive additive core and per-project ACL permissions', async t => {
   const { call, rawCall } = await fixture(t);
+  const administratorSession = await (await call('/api/session')).json();
+  assert.equal(administratorSession.permissions.manageUsers, true);
   const project = await (await call('/api/projects', 'POST', { name: 'Restricted' })).json();
   const endpoint = `/api/projects/${project.id}`;
   assert.equal((await call('/api/access/users', 'POST', { username: 'viewer', password: 'viewer-password-123' })).status, 201);
@@ -263,6 +269,10 @@ test('users and groups receive additive core and per-project ACL permissions', a
   const viewerSession = await login.json();
   const viewerHeaders = { cookie: login.headers.get('set-cookie').split(';')[0], 'x-csrf-token': viewerSession.csrfToken };
   const viewerCall = (route, method = 'GET', body) => rawCall(route, method, body, viewerHeaders);
+  const viewerSessionModel = await (await viewerCall('/api/session')).json();
+  assert.equal(viewerSessionModel.permissions.manageUsers, false);
+  assert.equal(viewerSessionModel.permissions.console, false);
+  assert.equal((await viewerCall('/api/console/reset', 'POST', {})).status, 403);
   const visible = await (await viewerCall('/api/projects')).json();
   assert.deepEqual(visible.map(item => item.id), [project.id]); assert.deepEqual(visible[0].access, ['view']);
   assert.equal((await viewerCall(endpoint)).status, 200);
@@ -287,6 +297,42 @@ test('users and groups receive additive core and per-project ACL permissions', a
   assert.equal((await viewerCall('/api/session')).status, 401);
   model = await (await call('/api/access')).json();
   assert.ok(model.groups.find(item => item.name === 'Administrators').members.includes('tester'));
+});
+
+test('editor console is permission-gated and every reset starts disabled', async t => {
+  const { call } = await fixture(t);
+  let response = await call('/api/console/reset', 'POST', {});
+  assert.equal(response.status, 200);
+  let state = await response.json();
+  assert.equal(state.mode, 'disabled'); assert.equal(state.prompt, 'Console$> ');
+
+  response = await call('/api/console/input', 'POST', { input: 'enable' });
+  state = await response.json();
+  assert.equal(state.mode, 'enabled'); assert.equal(state.prompt, 'Console#> ');
+
+  response = await call('/api/console/reset', 'POST', {});
+  state = await response.json();
+  assert.equal(state.mode, 'disabled'); assert.equal(state.prompt, 'Console$> ');
+});
+
+test('block cache endpoint clears project helper modules and returns fresh definitions', async t => {
+  const { call, store } = await fixture(t);
+  const project = await (await call('/api/projects', 'POST', { name: 'Cache reload' })).json();
+  const blocks = path.join(store.location(project.id), 'blocks');
+  const helper = path.join(blocks, 'cache_probe_helper.cjs');
+  const definition = path.join(blocks, 'cache_probe.js');
+  await fs.writeFile(helper, "module.exports = 'Old block name';\n");
+  await fs.writeFile(definition, "const name = require('./cache_probe_helper.cjs'); module.exports = { type: 'cache_probe', name, category: 'Test', fields: [], outputs: [] };\n");
+
+  let library = await (await call(`/api/projects/${project.id}/blocks`)).json();
+  assert.equal(library.find(block => block.type === 'cache_probe').name, 'Old block name');
+  await fs.writeFile(helper, "module.exports = 'Fresh block name';\n");
+  library = await (await call(`/api/projects/${project.id}/blocks`)).json();
+  assert.equal(library.find(block => block.type === 'cache_probe').name, 'Old block name');
+
+  const cleared = await (await call(`/api/projects/${project.id}/blocks/cache`, 'DELETE', {})).json();
+  assert.ok(cleared.cleared > 0);
+  assert.equal(cleared.definitions.find(block => block.type === 'cache_probe').name, 'Fresh block name');
 });
 
 test('validation rejects dangling wires, duplicate routes, loops, and invalid options', async t => {

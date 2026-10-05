@@ -6,6 +6,7 @@ const { Auth } = require('./lib/auth');
 const { loadConfig, ConfigState } = require('./lib/config');
 const { createLogger } = require('./lib/logger');
 const { Store } = require('./lib/store');
+const { WebConsoleSession } = require('./lib/web-console');
 const { readBody } = require('./runtime/app');
 const { version } = require('./package.json');
 const htmlVersion = version.replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
@@ -32,6 +33,22 @@ const assets = new Map([['/', ['index.html', 'text/html']], ['/login', ['login.h
 async function createServer({ directory = loadConfig().directory, repositoryDirectory, authDatabase = loadConfig().authDatabase, secureCookies = loadConfig().secureCookies, logger = createLogger({ level: loadConfig().logLevel, fileLevel: loadConfig().fileLogLevel, directory: path.join(__dirname, 'log') }), closeResourcesOnClose = true } = {}) {
   const store = new Store(directory, repositoryDirectory); await store.init();
   const auth = new Auth(authDatabase, { secureCookies });
+  const webConsoles = new Map();
+  let commandConsoleFactory = null;
+  const consoleKey = session => `${session.username}:${session.csrfToken}`;
+  const closeWebConsole = session => { const key = consoleKey(session), current = webConsoles.get(key); current?.close(); webConsoles.delete(key); };
+  const cleanWebConsoles = () => {
+    const cutoff = Date.now() - 30 * 60 * 1000;
+    for (const [key, current] of webConsoles) if (current.lastUsed < cutoff) { current.close(); webConsoles.delete(key); }
+  };
+  const webConsole = (session, reset = false) => {
+    if (!commandConsoleFactory) throw Object.assign(new Error('The application console is not available.'), { status: 503 });
+    cleanWebConsoles();
+    const key = consoleKey(session);
+    if (reset) closeWebConsole(session);
+    if (!webConsoles.has(key)) webConsoles.set(key, new WebConsoleSession(commandConsoleFactory));
+    return webConsoles.get(key);
+  };
   const projectAccess = (username, id) => ['login_rc', 'login_prod', 'view', 'edit', 'promote', 'delete'].filter(permission => auth.hasProject(username, id, permission));
   const server = http.createServer(async (req, res) => {
     const started = Date.now();
@@ -92,10 +109,19 @@ async function createServer({ directory = loadConfig().directory, repositoryDire
         if (!['GET', 'HEAD'].includes(req.method)) auth.checkCSRF(req, session);
         if (url.pathname === '/api/session' && req.method === 'GET') return send(200, { ...session, permissions: { manageUsers: auth.hasCore(session.username, 'manage_users'), createProjects: auth.hasCore(session.username, 'create_projects'), console: auth.hasCore(session.username, 'console') } });
         if (url.pathname === '/api/logout' && req.method === 'POST') {
+          closeWebConsole(session);
           auth.logout(req);
           res.setHeader('Set-Cookie', auth.cookie());
           logger.info('User signed out');
           return send(200, { ok: true });
+        }
+        if (url.pathname === '/api/console' || url.pathname === '/api/console/reset' || url.pathname === '/api/console/input') {
+          auth.requireCore(session.username, 'console');
+          if (url.pathname === '/api/console/reset' && req.method === 'POST') return send(200, webConsole(session, true).snapshot());
+          if (url.pathname === '/api/console/input' && req.method === 'POST') return send(200, await webConsole(session).submit((await readBody(req))?.input));
+          if (url.pathname === '/api/console' && req.method === 'GET') return send(200, webConsole(session).snapshot());
+          if (url.pathname === '/api/console' && req.method === 'DELETE') { closeWebConsole(session); return send(200, { ok: true }); }
+          return send(405, { error: 'Method not allowed' });
         }
         const accessUserMatch = url.pathname.match(/^\/api\/access\/users(?:\/([^/]+)(?:\/(password))?)?$/);
         const accessGroupMatch = url.pathname.match(/^\/api\/access\/groups(?:\/(\d+)(?:\/(members))?)?$/);
@@ -142,6 +168,15 @@ async function createServer({ directory = loadConfig().directory, repositoryDire
             logger.info('Project created: %s', project.id);
             return send(201, { ...project, access: projectAccess(session.username, project.id) });
           }
+        }
+        const blockCacheMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/blocks\/cache$/);
+        if (blockCacheMatch) {
+          const id = blockCacheMatch[1];
+          auth.requireProject(session.username, id, 'edit');
+          if (req.method !== 'DELETE') return send(405, { error: 'Method not allowed' });
+          const result = await store.clearBlockCache(id);
+          logger.info('Block cache cleared by %s for project %s (%d modules)', session.username, id, result.cleared);
+          return send(200, { cleared: result.cleared, definitions: [...result.definitions.values()].map(({ execute, ...metadata }) => metadata) });
         }
         const deploymentConfigMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/deployment-configs(?:\/(RC|Prod))?$/);
         if (deploymentConfigMatch) {
@@ -253,8 +288,16 @@ async function createServer({ directory = loadConfig().directory, repositoryDire
       send(error.status || 500, { error: error.status ? error.message : 'An unexpected server error occurred' });
     }
   });
-  server.on('close', () => { if (closeResourcesOnClose) { auth.close(); logger.info('Server stopped'); } });
-  return { server, store, auth };
+  server.on('close', () => {
+    for (const current of webConsoles.values()) current.close();
+    webConsoles.clear();
+    if (closeResourcesOnClose) { auth.close(); logger.info('Server stopped'); }
+  });
+  return { server, store, auth, setCommandConsoleFactory(factory) {
+    for (const current of webConsoles.values()) current.close();
+    webConsoles.clear();
+    commandConsoleFactory = factory;
+  } };
 }
 async function listen(server, host, port) {
   await new Promise((resolve, reject) => {
@@ -284,7 +327,7 @@ if (require.main === module) {
   async function shutdown(reason) {
     if (stopping) return;
     stopping = true;
-    if (state?.dirty() || application?.auth.pendingUsers.size) logger?.warning('Stopping with unsaved running configuration or accounts');
+    if (state?.dirty() || application?.auth.pendingChanges) logger?.warning('Stopping with unsaved running configuration or accounts');
     logger?.info('Stopping server (%s)', reason);
     terminal?.close();
     if (application) { await closeListener(application.server); application.auth.close(); }
@@ -312,6 +355,21 @@ if (require.main === module) {
       logger.setFileLevel(next['file-log-level']);
       application.auth.secureCookies = next.auth.secureCookies;
     });
+    const { CommandConsole } = require('./lib/console');
+    const consoleStatus = () => {
+      const address = application.server.address();
+      return `Listener: ${address ? `${address.address}:${address.port}` : 'not listening'}. Storage path changes require a restart.`;
+    };
+    application.setCommandConsoleFactory(({ ask, write }) => new CommandConsole({
+      config: state,
+      auth: application.auth,
+      logger,
+      ask,
+      write,
+      // Respond to the browser before closing its HTTP connection.
+      shutdown: () => { setImmediate(() => shutdown('web console').catch(error => critical('Shutdown failed', error))); },
+      status: consoleStatus
+    }));
     await listen(application.server, config.host, config.port);
     logger.info('OpacIT Omphalos Phidias v%s: http://%s:%d', version, config.host.includes(':') ? `[${config.host}]` : config.host, config.port);
     for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => { shutdown(signal).catch(error => { critical('Shutdown failed', error); process.exit(1); }); });
@@ -320,15 +378,11 @@ if (require.main === module) {
     // is available instead of requiring an interactive terminal.
     if (process.stdin && !process.stdin.destroyed && process.stdin.readable !== false) {
       const { Terminal } = require('./lib/terminal');
-      const { CommandConsole } = require('./lib/console');
       terminal = new Terminal();
       const engine = new CommandConsole({ config: state, auth: application.auth, logger,
         ask: (prompt, secret) => terminal.ask(prompt, secret), write: message => terminal.write(message),
         shutdown: () => shutdown('console'),
-        status: () => {
-          const address = application.server.address();
-          return `Listener: ${address ? `${address.address}:${address.port}` : 'not listening'}. Storage path changes require a restart.`;
-        }
+        status: consoleStatus
       });
       terminal.write('OpacIT Omphalos Phidias console. Type help or enable.');
       await terminal.run(engine);
