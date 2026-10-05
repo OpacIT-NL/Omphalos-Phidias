@@ -155,7 +155,7 @@ Back up `config.json`, projects, the sibling `repo` directory, and the authentic
 
 Invalid graphs, unknown blocks, incompatible value types, loops, invalid options, and duplicate active HTTP routes are rejected on save and export. Execution follows action wires; connected value blocks are evaluated when their values are needed. Branching blocks expose separate action outputs. Use timer triggers for recurring work.
 
-With the default `projects` directory, repository builds are stored in `repo` beside it. A project named `Delphi` publishes RC builds as `/repo/DelphiRC/latest.zip` and `/repo/DelphiRC/delphi.revN.zip`. Promoting revision N creates `/repo/DelphiProd/latest.zip` and `/repo/DelphiProd/delphi.revN.zip`. Repository downloads require a signed-in builder session because exported `workspaces.json` files can contain credentials entered in block options.
+With the default `projects` directory, repository builds are stored in `repo` beside it. A project named `Delphi` publishes RC builds as `/repo/DelphiRC/latest.zip` and `/repo/DelphiRC/delphi.revN.zip`. Promoting revision N creates `/repo/DelphiProd/latest.zip` and `/repo/DelphiProd/delphi.revN.zip`. Open `/repo/` to browse every published project-state folder and continue into a folder to browse its current and numbered ZIPs. Repository browsing and downloads are public and require no builder session. Exported `workspaces.json` files are included in these ZIPs, including credentials entered directly in block options.
 
 ## Deploy independently
 
@@ -287,7 +287,8 @@ Use unique lowercase filenames and types containing letters, numbers, `_` or `-`
 | POST | `/api/projects/:id/versions/:revision/promote` | Copy an RC revision to Prod and update Prod `latest.zip` |
 | POST | `/api/projects/:id/versions/:revision/restore` | Restore a snapshot as a new RC revision; body contains current `{ "revision": N }` |
 | DELETE | `/api/projects/:id/versions/:revision` | Delete a non-current revision from RC and Prod |
-| GET, HEAD | `/repo/:channel/:file.zip` | Download an authenticated revision or `latest.zip` |
+| GET, HEAD | `/repo/` and `/repo/:channel/` | Publicly browse repository folders and ZIPs without authentication |
+| GET, HEAD | `/repo/:channel/:file.zip` | Publicly download a revision or `latest.zip` without authentication |
 
 API clients must keep the session cookie returned by login. Get the session CSRF token from login or `/api/session`, and send it in `X-CSRF-Token` on all authenticated writes. Writes require `Content-Type: application/json`. The API accepts at most 1 MB per request. Paths are derived from server-generated project IDs, not client-supplied filesystem locations.
 

@@ -104,8 +104,8 @@ test('project creation, atomic saves, conflicts, reload, and downloadable ZIP', 
   assert.match(runtimeLog, /\[DEBUG\] Request completed: GET \/hello \(200,/);
 });
 
-test('saved revisions publish to RC and can be promoted, restored, and deleted', async t => {
-  const { call, rawCall } = await fixture(t);
+test('saved revisions publish to a browsable RC repository and can be promoted, restored, and deleted', async t => {
+  const { call, rawCall, base } = await fixture(t);
   const project = await (await call('/api/projects', 'POST', { name: 'Delphi' })).json();
   const endpoint = `/api/projects/${project.id}`;
   project.workspaces[0].blocks[1].options.body = 'revision two';
@@ -116,7 +116,19 @@ test('saved revisions publish to RC and can be promoted, restored, and deleted',
   assert.equal(versions.length, 1);
   assert.deepEqual(versions[0].channels, ['RC']);
   assert.equal(versions[0].rcUrl, '/repo/DelphiRC/delphi.rev2.zip');
-  assert.equal((await rawCall(versions[0].rcUrl)).status, 401);
+  assert.equal((await rawCall(versions[0].rcUrl)).status, 200);
+  const repositoryRedirect = await fetch(base + '/repo', { redirect: 'manual' });
+  assert.equal(repositoryRedirect.status, 308); assert.equal(repositoryRedirect.headers.get('location'), '/repo/');
+  const repositoryIndex = await rawCall('/repo/');
+  assert.equal(repositoryIndex.status, 200); assert.match(await repositoryIndex.text(), /href="\/repo\/DelphiRC\/"/);
+  const folderRedirect = await fetch(base + '/repo/DelphiRC', { redirect: 'manual' });
+  assert.equal(folderRedirect.status, 308); assert.equal(folderRedirect.headers.get('location'), '/repo/DelphiRC/');
+  const folderIndex = await rawCall('/repo/DelphiRC/');
+  const folderHTML = await folderIndex.text();
+  assert.equal(folderIndex.status, 200); assert.match(folderHTML, /href="\/repo\/DelphiRC\/latest\.zip"/); assert.match(folderHTML, /delphi\.rev2\.zip/);
+  const repositoryHead = await fetch(base + '/repo/DelphiRC/latest.zip', { method: 'HEAD' });
+  assert.equal(repositoryHead.status, 200); assert.equal(await repositoryHead.text(), '');
+  assert.equal((await rawCall('/repo/Unknown/')).status, 404);
   const rcRevision = await call(versions[0].rcUrl);
   assert.equal(rcRevision.status, 200);
   assert.equal(JSON.parse(zipEntries(Buffer.from(await rcRevision.arrayBuffer())).get('workspaces.json')).revision, 2);

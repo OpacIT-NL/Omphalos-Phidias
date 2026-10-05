@@ -9,6 +9,25 @@ const { Store } = require('./lib/store');
 const { readBody } = require('./runtime/app');
 const { version } = require('./package.json');
 const htmlVersion = version.replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
+const escapeHTML = value => String(value).replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
+const repositoryPage = (folder, entries) => {
+  const title = folder ? `Repository / ${folder}` : 'Repository';
+  const sorted = entries.slice().sort((left, right) => {
+    if (left.directory !== right.directory) return left.directory ? -1 : 1;
+    if (left.name === 'latest.zip') return -1;
+    if (right.name === 'latest.zip') return 1;
+    const leftRevision = Number(left.name.match(/\.rev(\d+)\.zip$/)?.[1] || -1), rightRevision = Number(right.name.match(/\.rev(\d+)\.zip$/)?.[1] || -1);
+    return rightRevision - leftRevision || left.name.localeCompare(right.name);
+  });
+  const rows = sorted.map(entry => {
+    const href = folder ? `/repo/${encodeURIComponent(folder)}/${encodeURIComponent(entry.name)}` : `/repo/${encodeURIComponent(entry.name)}/`;
+    const size = entry.directory ? 'Folder' : `${Math.max(1, Math.ceil(entry.size / 1024)).toLocaleString()} KB`;
+    const modified = entry.modifiedAt ? new Date(entry.modifiedAt).toLocaleString('en-GB', { timeZone: 'Europe/Amsterdam' }) : '';
+    return `<a class="repo-row" href="${href}"><strong>${entry.directory ? '▸ ' : ''}${escapeHTML(entry.name)}</strong><span>${escapeHTML(size)}</span><time>${escapeHTML(modified)}</time></a>`;
+  }).join('') || '<p class="repo-empty">This repository folder is empty.</p>';
+  const parent = folder ? '<a class="repo-parent" href="/repo/">← Repository</a>' : '';
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHTML(title)} · OpacIT Omphalos Phidias</title><style>:root{color-scheme:light dark;font-family:system-ui,sans-serif;background:#1e1f22;color:#f2f3f5}*{box-sizing:border-box}body{margin:0;padding:32px;background:#1e1f22}.repo{width:min(900px,100%);margin:auto}.repo-head{padding-bottom:18px;border-bottom:1px solid #47494f}.repo-head h1{margin:6px 0 0;font-size:22px}.repo-head small,.repo-parent,.repo-row span,.repo-row time,.repo-empty{color:#b5bac1}.repo-parent{display:inline-block;text-decoration:none}.repo-list{margin-top:12px;border:1px solid #47494f;border-radius:7px;overflow:hidden;background:#2b2d31}.repo-row{display:grid;grid-template-columns:minmax(180px,1fr) 90px 180px;gap:16px;padding:12px 14px;border-bottom:1px solid #47494f;color:#f2f3f5;text-decoration:none}.repo-row:last-child{border-bottom:0}.repo-row:hover{background:#35373c}.repo-row span,.repo-row time{text-align:right;font-size:12px}.repo-empty{padding:28px;text-align:center}@media(max-width:620px){body{padding:16px}.repo-row{grid-template-columns:1fr auto}.repo-row time{display:none}}</style></head><body><main class="repo"><header class="repo-head">${parent}<small>OpacIT Omphalos Phidias</small><h1>${escapeHTML(title)}</h1></header><section class="repo-list">${rows}</section></main></body></html>`;
+};
 const assets = new Map([['/', ['index.html', 'text/html']], ['/login', ['login.html', 'text/html']], ['/login.js', ['login.js', 'text/javascript']], ['/editor.js', ['editor.js', 'text/javascript']], ['/style.css', ['style.css', 'text/css']]]);
 async function createServer({ directory = loadConfig().directory, repositoryDirectory, authDatabase = loadConfig().authDatabase, secureCookies = loadConfig().secureCookies, logger = createLogger({ level: loadConfig().logLevel, fileLevel: loadConfig().fileLogLevel, directory: path.join(__dirname, 'log') }), closeResourcesOnClose = true } = {}) {
   const store = new Store(directory, repositoryDirectory); await store.init();
@@ -44,13 +63,26 @@ async function createServer({ directory = loadConfig().directory, repositoryDire
         return send(200, { username: session.username, csrfToken: session.csrfToken, expiresAt: session.expiresAt });
       }
       const session = auth.session(req);
+      if (url.pathname === '/repo') {
+        res.writeHead(308, { location: '/repo/' }); return res.end();
+      }
+      const repositoryDirectoryMatch = url.pathname.match(/^\/repo\/(?:([a-zA-Z0-9._-]+)\/?)?$/);
+      if (repositoryDirectoryMatch) {
+        if (!['GET', 'HEAD'].includes(req.method)) return send(405, { error: 'Method not allowed' });
+        const folder = repositoryDirectoryMatch[1] || null;
+        if (folder && !url.pathname.endsWith('/')) {
+          res.writeHead(308, { location: `${url.pathname}/` }); return res.end();
+        }
+        const page = repositoryPage(folder, await store.repositoryEntries(folder));
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'content-length': Buffer.byteLength(page) });
+        return res.end(req.method === 'HEAD' ? undefined : page);
+      }
       const repositoryMatch = url.pathname.match(/^\/repo\/([^/]+)\/([^/]+\.zip)$/);
       if (repositoryMatch) {
-        if (!session) return send(401, { error: 'Sign in to download repository builds.' });
         if (!['GET', 'HEAD'].includes(req.method)) return send(405, { error: 'Method not allowed' });
         const archive = await store.repositoryFile(repositoryMatch[1], repositoryMatch[2]);
-        res.setHeader('Cache-Control', repositoryMatch[2] === 'latest.zip' ? 'private, no-cache' : 'private, max-age=31536000, immutable');
-        res.writeHead(200, { 'content-type': 'application/zip', 'content-length': archive.length });
+        res.setHeader('Cache-Control', repositoryMatch[2] === 'latest.zip' ? 'no-cache' : 'public, max-age=31536000, immutable');
+        res.writeHead(200, { 'content-type': 'application/zip', 'content-length': archive.length, 'content-disposition': `attachment; filename="${repositoryMatch[2]}"` });
         return res.end(req.method === 'HEAD' ? undefined : archive);
       }
       if (url.pathname.startsWith('/api/')) {
