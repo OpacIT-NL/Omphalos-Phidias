@@ -139,7 +139,7 @@ Sign-in attempts are limited to 10 per username and 20 per connection IP in 15 m
 
 For offline account recovery, `npm run user:create` and `npm run user:reset-password` remain available after the first launch. Run them with the server stopped: they update SQLite directly and do not participate in the running configuration. To recover a forgotten console enable password, stop the server, set `console.enablePasswordHash` to `null` in your local config, restart, and set a new enable secret from the console.
 
-Back up `config.json`, projects, and the authentication database. For a simple file backup, stop the builder and account commands, then copy SQLite’s database and any `-wal`/`-shm` files together. Keep it on local persistent storage supported by SQLite WAL. Deleting the database removes every saved account and session.
+Back up `config.json`, projects, the sibling `repo` directory, and the authentication database. For a simple file backup, stop the builder and account commands, then copy SQLite’s database and any `-wal`/`-shm` files together. Keep it on local persistent storage supported by SQLite WAL. Deleting the database removes every saved account and session.
 
 ## Build an automation
 
@@ -149,10 +149,13 @@ Back up `config.json`, projects, and the authentication database. For a simple f
 4. Select a block to edit its configuration. Hold Ctrl/Cmd or Shift while clicking blocks to toggle them in a multi-selection, or Shift-drag across the canvas to select every block the rectangle touches. Drag the header of any selected block to move the whole group.
 5. Press Ctrl/Cmd+C and Ctrl/Cmd+V to copy and paste selected blocks. Connections are copied when both endpoint blocks are selected, and pasted blocks and connections receive new IDs. With no block or wire selected, Ctrl/Cmd+C copies the current workspace; Ctrl/Cmd+V then pastes it as a new workspace. Select blocks or a connection and press Delete to remove them.
 6. Add workspace categories with **▤**. Use the **+** beside a category name to create a workspace directly inside it. Drag workspace rows to reorder them or drop them onto another category. Close editor tabs with **×**; this leaves the workspace in the sidebar, where clicking it reopens the tab. Right-click a workspace row or tab to open settings, duplicate it, activate/deactivate it, or delete it. All active workspaces run in the exported application.
-7. Click **Save project** or press Ctrl/Cmd+S. Changes are saved explicitly, not automatically; closing the page with unsaved changes prompts you.
-8. Click **Export application**. This saves edits and downloads a ZIP of the current saved project.
+7. Click **Save project** or press Ctrl/Cmd+S. Changes are saved explicitly, not automatically; closing the page with unsaved changes prompts you. Every successful save also creates a numbered RC ZIP and updates that project's RC `latest.zip`.
+8. Open **Version manager** with **↶** to download old builds, restore one as a new revision, delete an old revision, or promote a tested revision to Prod. Promotion copies only the selected build to Prod and updates Prod `latest.zip`; later RC saves do not change Prod.
+9. Click **Export application** to save edits and download the current project directly.
 
 Invalid graphs, unknown blocks, incompatible value types, loops, invalid options, and duplicate active HTTP routes are rejected on save and export. Execution follows action wires; connected value blocks are evaluated when their values are needed. Branching blocks expose separate action outputs. Use timer triggers for recurring work.
+
+With the default `projects` directory, repository builds are stored in `repo` beside it. A project named `Delphi` publishes RC builds as `/repo/DelphiRC/latest.zip` and `/repo/DelphiRC/delphi.revN.zip`. Promoting revision N creates `/repo/DelphiProd/latest.zip` and `/repo/DelphiProd/delphi.revN.zip`. Repository downloads require a signed-in builder session because exported `workspaces.json` files can contain credentials entered in block options.
 
 ## Deploy independently
 
@@ -214,6 +217,10 @@ You can also copy the entire project folder directly. The builder never starts p
 | Select HTML Table Columns | Accepts HTML and comma-separated column headers from Text blocks, then removes non-selected columns while preserving nested tables |
 | Sort HTML Table | Accepts HTML and a column header from Text blocks, then naturally sorts body rows in ascending or descending order |
 | Create Button Column | Adds a link-button column and replaces `${text1}` in its URL with each row's URL-encoded value from a selected argument column |
+| Convert JSON to HTML Detail | Converts one JSON object into a vertical detail table with a header column and value column; nested objects and lists become nested tables |
+| Select HTML Detail Rows | Accepts detail HTML and comma-separated row headers, then removes non-selected top-level rows while preserving nested tables |
+| Sort HTML Detail Rows | Naturally sorts detail rows by header or value in ascending or descending order |
+| Create Button Detail Row | Adds a link-button row and replaces `${text1}` in its URL with the URL-encoded value from a selected argument row |
 | Convert JSON to HTML Table | Converts layered JSON into escaped HTML tables, with nested objects and lists rendered as tables inside cells |
 
 Cron expressions use `minute hour day-of-month month weekday`; lists, ranges, and steps such as `*/15 * * * *` are supported. Schedules use the deployed application server's local time.
@@ -276,6 +283,11 @@ Use unique lowercase filenames and types containing letters, numbers, `_` or `-`
 | PUT | `/api/projects/:id` | Save document with current `revision`; conflict returns 409 |
 | GET | `/api/projects/:id/blocks` | Read block metadata |
 | GET | `/api/projects/:id/export` | Download saved project ZIP |
+| GET | `/api/projects/:id/versions` | List saved RC and Prod revisions and their repository URLs |
+| POST | `/api/projects/:id/versions/:revision/promote` | Copy an RC revision to Prod and update Prod `latest.zip` |
+| POST | `/api/projects/:id/versions/:revision/restore` | Restore a snapshot as a new RC revision; body contains current `{ "revision": N }` |
+| DELETE | `/api/projects/:id/versions/:revision` | Delete a non-current revision from RC and Prod |
+| GET, HEAD | `/repo/:channel/:file.zip` | Download an authenticated revision or `latest.zip` |
 
 API clients must keep the session cookie returned by login. Get the session CSRF token from login or `/api/session`, and send it in `X-CSRF-Token` on all authenticated writes. Writes require `Content-Type: application/json`. The API accepts at most 1 MB per request. Paths are derived from server-generated project IDs, not client-supplied filesystem locations.
 

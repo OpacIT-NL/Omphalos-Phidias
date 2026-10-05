@@ -18,6 +18,7 @@
       <button id="save" title="Save project (Ctrl+S)" aria-label="Save project" disabled>▣</button>
       <button id="add-block" title="Add block" aria-label="Add block" disabled>◇＋</button>
       <button id="app-settings" title="Application settings" aria-label="Application settings" disabled>⚙</button>
+      <button id="versions" title="Version manager" aria-label="Version manager" disabled>↶</button>
       <button id="export" title="Export application" aria-label="Export application" disabled>⇩</button>
       <span id="save-state" role="status">Ready</span>
       <span class="toolbar-spacer"></span>
@@ -89,5 +90,10 @@
   <div id="toast" role="alert" hidden></div>
 
   <dialog id="form-dialog"><form method="dialog"><h2 id="dialog-title"></h2><div id="dialog-fields"></div><p id="dialog-error" role="alert"></p><div class="dialog-actions"><button id="dialog-cancel" type="button">Cancel</button><button id="dialog-submit" type="submit" value="default" class="primary">Continue</button></div></form></dialog>
+  <dialog id="version-dialog" class="version-dialog">
+    <header><div><h2>Version manager</h2><p>Saved revisions begin in RC. Promote a tested revision to update Prod.</p></div><button id="version-close" type="button" aria-label="Close version manager">×</button></header>
+    <div id="version-latest" class="version-latest"></div>
+    <div id="version-list" class="version-list"></div>
+  </dialog>
 </body>
 </html>

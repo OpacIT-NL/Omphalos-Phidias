@@ -10,8 +10,8 @@ const { readBody } = require('./runtime/app');
 const { version } = require('./package.json');
 const htmlVersion = version.replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
 const assets = new Map([['/', ['index.html', 'text/html']], ['/login', ['login.html', 'text/html']], ['/login.js', ['login.js', 'text/javascript']], ['/editor.js', ['editor.js', 'text/javascript']], ['/style.css', ['style.css', 'text/css']]]);
-async function createServer({ directory = loadConfig().directory, authDatabase = loadConfig().authDatabase, secureCookies = loadConfig().secureCookies, logger = createLogger({ level: loadConfig().logLevel, fileLevel: loadConfig().fileLogLevel, directory: path.join(__dirname, 'log') }), closeResourcesOnClose = true } = {}) {
-  const store = new Store(directory); await store.init();
+async function createServer({ directory = loadConfig().directory, repositoryDirectory, authDatabase = loadConfig().authDatabase, secureCookies = loadConfig().secureCookies, logger = createLogger({ level: loadConfig().logLevel, fileLevel: loadConfig().fileLogLevel, directory: path.join(__dirname, 'log') }), closeResourcesOnClose = true } = {}) {
+  const store = new Store(directory, repositoryDirectory); await store.init();
   const auth = new Auth(authDatabase, { secureCookies });
   const server = http.createServer(async (req, res) => {
     const started = Date.now();
@@ -44,6 +44,15 @@ async function createServer({ directory = loadConfig().directory, authDatabase =
         return send(200, { username: session.username, csrfToken: session.csrfToken, expiresAt: session.expiresAt });
       }
       const session = auth.session(req);
+      const repositoryMatch = url.pathname.match(/^\/repo\/([^/]+)\/([^/]+\.zip)$/);
+      if (repositoryMatch) {
+        if (!session) return send(401, { error: 'Sign in to download repository builds.' });
+        if (!['GET', 'HEAD'].includes(req.method)) return send(405, { error: 'Method not allowed' });
+        const archive = await store.repositoryFile(repositoryMatch[1], repositoryMatch[2]);
+        res.setHeader('Cache-Control', repositoryMatch[2] === 'latest.zip' ? 'private, no-cache' : 'private, max-age=31536000, immutable');
+        res.writeHead(200, { 'content-type': 'application/zip', 'content-length': archive.length });
+        return res.end(req.method === 'HEAD' ? undefined : archive);
+      }
       if (url.pathname.startsWith('/api/')) {
         if (!session) return send(401, { error: 'Sign in to continue.' });
         if (!['GET', 'HEAD'].includes(req.method)) auth.checkCSRF(req, session);
@@ -61,6 +70,30 @@ async function createServer({ directory = loadConfig().directory, authDatabase =
             logger.info('Project created: %s', project.id);
             return send(201, project);
           }
+        }
+        const versionMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/versions(?:\/(\d+)(?:\/(promote|restore))?)?$/);
+        if (versionMatch) {
+          const [, id, revisionText, action] = versionMatch;
+          if (!revisionText && req.method === 'GET') return send(200, await store.versions(id));
+          if (!revisionText) return send(405, { error: 'Method not allowed' });
+          const revision = Number(revisionText);
+          if (req.method === 'POST' && action === 'promote') {
+            const promoted = await store.promote(id, revision);
+            logger.info('Project revision promoted: %s (revision %d)', id, revision);
+            return send(200, promoted);
+          }
+          if (req.method === 'POST' && action === 'restore') {
+            const body = await readBody(req);
+            const restored = await store.restore(id, revision, body?.revision);
+            logger.info('Project revision restored: %s (revision %d as revision %d)', id, revision, restored.revision);
+            return send(200, restored);
+          }
+          if (req.method === 'DELETE' && !action) {
+            const removed = await store.deleteVersion(id, revision);
+            logger.info('Project revision deleted: %s (revision %d)', id, revision);
+            return send(200, removed);
+          }
+          return send(405, { error: 'Method not allowed' });
         }
         const match = url.pathname.match(/^\/api\/projects\/([^/]+)(?:\/(blocks|export))?$/);
         if (match) {

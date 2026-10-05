@@ -154,7 +154,7 @@ function renderProjects() {
 }
 async function refreshProjects() { projects = await api('/api/projects'); renderProjects(); return projects; }
 function setProjectControls(enabled) {
-  for (const selector of ['#export', '#app-settings', '#add-workspace', '#add-workspace-category']) $(selector).disabled = !enabled;
+  for (const selector of ['#export', '#versions', '#app-settings', '#add-workspace', '#add-workspace-category']) $(selector).disabled = !enabled;
   for (const selector of ['#workspace-settings', '#add-block']) $(selector).disabled = !enabled || !ws();
   $('#save').disabled = !enabled || !dirty;
 }
@@ -198,6 +198,56 @@ async function save() {
     await refreshProjects(); setProjectControls(true);
   })();
   try { await saving; } catch (error) { $('#save-state').textContent = 'Save failed'; throw error; } finally { saving = null; }
+}
+function latestURL(version, channel) {
+  const url = channel === 'Prod' ? version?.prodUrl : version?.rcUrl;
+  return url ? url.replace(/[^/]+$/, 'latest.zip') : null;
+}
+function renderVersions(versions) {
+  const rcLatest = versions.find(version => version.channels.includes('RC'));
+  const prodLatest = versions.find(version => version.channels.includes('Prod'));
+  $('#version-latest').innerHTML = [
+    rcLatest ? `<a href="${escapeHTML(latestURL(rcLatest, 'RC'))}" download>Download latest RC</a>` : '<span>No RC build yet</span>',
+    prodLatest ? `<a href="${escapeHTML(latestURL(prodLatest, 'Prod'))}" download>Download latest Prod</a>` : '<span>No production build yet</span>'
+  ].join('');
+  $('#version-list').innerHTML = versions.length ? versions.map(version => {
+    const current = version.revision === project.revision;
+    const links = [version.rcUrl && `<a href="${escapeHTML(version.rcUrl)}" download>RC ZIP</a>`, version.prodUrl && `<a href="${escapeHTML(version.prodUrl)}" download>Prod ZIP</a>`].filter(Boolean).join('');
+    return `<article class="version-row" data-revision="${version.revision}"><div class="version-main"><strong>Revision ${version.revision}</strong><span>${escapeHTML(new Date(version.createdAt).toLocaleString())}</span><small>${escapeHTML(version.name)}</small></div><div class="version-channels"><b class="channel rc">RC</b>${version.channels.includes('Prod') ? '<b class="channel prod">PROD</b>' : ''}${current ? '<b class="channel current">CURRENT</b>' : ''}</div><div class="version-links">${links}</div><div class="version-actions">${version.channels.includes('Prod') ? '' : '<button type="button" data-version-action="promote">Promote to Prod</button>'}<button type="button" data-version-action="restore" ${current ? 'disabled' : ''}>Restore</button><button type="button" class="danger" data-version-action="delete" ${current ? 'disabled' : ''}>Delete</button></div></article>`;
+  }).join('') : '<div class="version-empty"><strong>No saved revisions yet</strong><span>Save the project to create its first RC build.</span></div>';
+}
+async function refreshVersions() {
+  const versions = await api(`/api/projects/${project.id}/versions`);
+  renderVersions(versions);
+}
+async function openVersionManager() {
+  if (!project) return;
+  if (dirty) await save();
+  await refreshVersions();
+  $('#version-dialog').showModal();
+}
+async function versionAction(button) {
+  const revision = Number(button.closest('[data-revision]').dataset.revision), action = button.dataset.versionAction;
+  if (action === 'promote') {
+    if (!confirm(`Promote revision ${revision} to production? This updates the Prod latest.zip file.`)) return;
+    await api(`/api/projects/${project.id}/versions/${revision}/promote`, { method: 'POST', body: '{}' });
+    await refreshVersions(); toast(`Revision ${revision} promoted to Prod.`); return;
+  }
+  if (action === 'delete') {
+    if (!confirm(`Delete revision ${revision} from RC and Prod? This cannot be undone.`)) return;
+    await api(`/api/projects/${project.id}/versions/${revision}`, { method: 'DELETE', body: '{}' });
+    await refreshVersions(); toast(`Revision ${revision} deleted.`); return;
+  }
+  if (action === 'restore') {
+    if (!confirm(`Restore revision ${revision}? It will be saved as a new RC revision.`)) return;
+    const restored = await api(`/api/projects/${project.id}/versions/${revision}/restore`, { method: 'POST', body: JSON.stringify({ revision: project.revision }) });
+    project = restored; workspaceID = restored.workspaces[0]?.id || null;
+    openWorkspaceIDs.clear(); restored.workspaces.forEach(workspace => openWorkspaceIDs.add(workspace.id));
+    dirty = false; generation = 0; clearSelection(true); view = { x: 0, y: 60, zoom: 1 };
+    $('#save-state').textContent = 'Saved to server'; $('#version-dialog').close();
+    await refreshProjects(); setProjectControls(true); render(); requestAnimationFrame(fit);
+    toast(`Revision ${revision} restored as revision ${restored.revision}.`);
+  }
 }
 function workspaceCategoryChoices() {
   return [{ value: '', label: 'Uncategorized' }, ...(project?.workspaceCategories || []).map(category => ({ value: category.id, label: category.name }))];
@@ -688,6 +738,9 @@ for (const selector of ['#new-project', '#rail-new-project', '#home-new-project'
 for (const selector of ['#show-home', '[data-home]']) $(selector).onclick = showHome;
 for (const selector of ['#add-block', '#empty-add-block']) $(selector).onclick = () => { const rect = $('#viewport').getBoundingClientRect(); openPicker(rect.left + rect.width / 2 - 170, rect.top + Math.min(100, rect.height / 3)); };
 $('#save').onclick = handle(async () => { await save(); toast('Project saved to the server.'); });
+$('#versions').onclick = handle(openVersionManager);
+$('#version-close').onclick = () => $('#version-dialog').close();
+$('#version-list').onclick = event => { const button = event.target.closest('[data-version-action]'); if (button) handle(() => versionAction(button))(); };
 $('#export').onclick = handle(async () => {
   if (!project) return; await save(); if (dirty) await save();
   const response = await fetch(`/api/projects/${project.id}/export`);
@@ -700,7 +753,7 @@ function setTheme(theme) { document.documentElement.dataset.theme = theme; local
 setTheme(localStorage.getItem('phidias-theme') || 'system');
 $('#theme-toggle').onclick = () => setTheme(themes[(themes.indexOf(document.documentElement.dataset.theme) + 1) % themes.length]);
 window.addEventListener('keydown', event => {
-  if ($('#form-dialog').open) return;
+  if ($('#form-dialog').open || $('#version-dialog').open) return;
   const command = event.ctrlKey || event.metaKey;
   const editing = event.target.closest?.('input,textarea,select,[contenteditable]');
   const key = event.key.toLowerCase();

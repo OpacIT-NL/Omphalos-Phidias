@@ -14,7 +14,8 @@ const { crc32 } = require('../lib/zip');
 
 async function fixture(t) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'sentinel-test-'));
-  const { server, store, auth } = await createServer({ directory, authDatabase: path.join(directory, 'auth.sqlite'), secureCookies: false, logger: createLogger({ level: 0, directory: path.join(directory, 'logs') }) });
+  const repositoryDirectory = path.join(directory, 'repo');
+  const { server, store, auth } = await createServer({ directory, repositoryDirectory, authDatabase: path.join(directory, 'auth.sqlite'), secureCookies: false, logger: createLogger({ level: 0, directory: path.join(directory, 'logs') }) });
   await auth.createUser('tester', 'a-test-password-12345');
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(async () => { await new Promise(resolve => { server.close(resolve); server.closeAllConnections(); }); await fs.rm(directory, { recursive: true, force: true }); });
@@ -25,7 +26,7 @@ async function fixture(t) {
   const session = await login.json();
   const headers = { cookie: login.headers.get('set-cookie').split(';')[0], 'x-csrf-token': session.csrfToken };
   const call = (route, method = 'GET', body, extra = {}) => rawCall(route, method, body, { ...headers, ...extra });
-  return { directory, store, auth, call, rawCall, headers, base };
+  return { directory, repositoryDirectory, store, auth, call, rawCall, headers, base };
 }
 function zipEntries(zip) {
   const extracted = new Map(); let offset = 0;
@@ -101,6 +102,51 @@ test('project creation, atomic saves, conflicts, reload, and downloadable ZIP', 
   assert.match(runtimeLog, /\[INFO\] My project listening on 127\.0\.0\.1:/);
   assert.match(runtimeLog, /\[INFO\] My project stopped/);
   assert.match(runtimeLog, /\[DEBUG\] Request completed: GET \/hello \(200,/);
+});
+
+test('saved revisions publish to RC and can be promoted, restored, and deleted', async t => {
+  const { call, rawCall } = await fixture(t);
+  const project = await (await call('/api/projects', 'POST', { name: 'Delphi' })).json();
+  const endpoint = `/api/projects/${project.id}`;
+  project.workspaces[0].blocks[1].options.body = 'revision two';
+  const revisionTwo = await (await call(endpoint, 'PUT', project)).json();
+  assert.equal(revisionTwo.revision, 2);
+
+  let versions = await (await call(endpoint + '/versions')).json();
+  assert.equal(versions.length, 1);
+  assert.deepEqual(versions[0].channels, ['RC']);
+  assert.equal(versions[0].rcUrl, '/repo/DelphiRC/delphi.rev2.zip');
+  assert.equal((await rawCall(versions[0].rcUrl)).status, 401);
+  const rcRevision = await call(versions[0].rcUrl);
+  assert.equal(rcRevision.status, 200);
+  assert.equal(JSON.parse(zipEntries(Buffer.from(await rcRevision.arrayBuffer())).get('workspaces.json')).revision, 2);
+  assert.equal((await call('/repo/DelphiRC/latest.zip')).status, 200);
+
+  assert.equal((await call(endpoint + '/versions/2/promote', 'POST', {})).status, 200);
+  versions = await (await call(endpoint + '/versions')).json();
+  assert.deepEqual(versions[0].channels, ['RC', 'Prod']);
+  assert.equal(versions[0].prodUrl, '/repo/DelphiProd/delphi.rev2.zip');
+  const prodBeforeNextSave = Buffer.from(await (await call('/repo/DelphiProd/latest.zip')).arrayBuffer());
+  assert.equal(JSON.parse(zipEntries(prodBeforeNextSave).get('workspaces.json')).revision, 2);
+
+  revisionTwo.workspaces[0].blocks[1].options.body = 'revision three';
+  const revisionThree = await (await call(endpoint, 'PUT', revisionTwo)).json();
+  assert.equal(revisionThree.revision, 3);
+  const rcLatest = Buffer.from(await (await call('/repo/DelphiRC/latest.zip')).arrayBuffer());
+  assert.equal(JSON.parse(zipEntries(rcLatest).get('workspaces.json')).revision, 3);
+  const prodLatest = Buffer.from(await (await call('/repo/DelphiProd/latest.zip')).arrayBuffer());
+  assert.equal(JSON.parse(zipEntries(prodLatest).get('workspaces.json')).revision, 2);
+
+  const restoredResponse = await call(endpoint + '/versions/2/restore', 'POST', { revision: 3 });
+  assert.equal(restoredResponse.status, 200);
+  const restored = await restoredResponse.json();
+  assert.equal(restored.revision, 4);
+  assert.equal(restored.workspaces[0].blocks[1].options.body, 'revision two');
+  assert.equal((await call(endpoint + '/versions/4', 'DELETE', {})).status, 409);
+  assert.equal((await call(endpoint + '/versions/3', 'DELETE', {})).status, 200);
+  versions = await (await call(endpoint + '/versions')).json();
+  assert.deepEqual(versions.map(version => version.revision), [4, 2]);
+  assert.equal((await call('/repo/DelphiRC/delphi.rev3.zip')).status, 404);
 });
 
 test('password login, protected routes, CSRF, logout, malformed requests and traversal', async t => {
