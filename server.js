@@ -81,7 +81,8 @@ async function createServer({ directory = loadConfig().directory, repositoryDire
       if (repositoryMatch) {
         if (!['GET', 'HEAD'].includes(req.method)) return send(405, { error: 'Method not allowed' });
         const archive = await store.repositoryFile(repositoryMatch[1], repositoryMatch[2]);
-        res.setHeader('Cache-Control', repositoryMatch[2] === 'latest.zip' ? 'no-cache' : 'public, max-age=31536000, immutable');
+        // Deployment profiles can repackage a revision for its channel, so clients must revalidate numbered ZIPs too.
+        res.setHeader('Cache-Control', 'no-cache');
         res.writeHead(200, { 'content-type': 'application/zip', 'content-length': archive.length, 'content-disposition': `attachment; filename="${repositoryMatch[2]}"` });
         return res.end(req.method === 'HEAD' ? undefined : archive);
       }
@@ -102,6 +103,42 @@ async function createServer({ directory = loadConfig().directory, repositoryDire
             logger.info('Project created: %s', project.id);
             return send(201, project);
           }
+        }
+        const deploymentConfigMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/deployment-configs(?:\/(RC|Prod))?$/);
+        if (deploymentConfigMatch) {
+          const [, id, channel] = deploymentConfigMatch;
+          if (!channel && req.method === 'GET') return send(200, await store.deploymentConfigs(id));
+          if (channel && req.method === 'PUT') {
+            const configurations = await store.saveDeploymentConfig(id, channel, await readBody(req));
+            logger.info('Project %s deployment settings saved: %s', id, channel);
+            return send(200, configurations);
+          }
+          return send(405, { error: 'Method not allowed' });
+        }
+        const templateMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/templates(?:\/([^/]+))?$/);
+        if (templateMatch) {
+          const [, id, encodedName] = templateMatch;
+          let name = null;
+          if (encodedName) {
+            try { name = decodeURIComponent(encodedName); }
+            catch { return send(400, { error: 'Invalid template name' }); }
+          }
+          if (!name && req.method === 'GET') return send(200, await store.templates(id));
+          if (!name) return send(405, { error: 'Method not allowed' });
+          if (req.method === 'GET') return send(200, await store.template(id, name));
+          if (req.method === 'PUT') {
+            const body = await readBody(req);
+            const saved = await store.saveTemplate(id, name, body?.contents, body?.previousName ?? null, body?.revision);
+            logger.info('Project template saved: %s/%s (revision %d)', id, name, saved.project.revision);
+            return send(200, saved);
+          }
+          if (req.method === 'DELETE') {
+            const body = await readBody(req);
+            const project = await store.deleteTemplate(id, name, body?.revision);
+            logger.info('Project template deleted: %s/%s (revision %d)', id, name, project.revision);
+            return send(200, project);
+          }
+          return send(405, { error: 'Method not allowed' });
         }
         const versionMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/versions(?:\/(\d+)(?:\/(promote|restore))?)?$/);
         if (versionMatch) {

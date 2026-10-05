@@ -7,14 +7,31 @@ let project = null, projects = [], definitions = [], workspaceID = null, selecte
 let csrfToken = '', dirty = false, generation = 0, saving = null, view = { x: 0, y: 60, zoom: 1 }, toastTimer;
 const selectedBlocks = new Set(), openWorkspaceIDs = new Set();
 let blockClipboard = null, workspaceClipboard = null, clipboardKind = null, pasteSequence = 0, workspaceContextID = null, draggedWorkspaceID = null;
+let templateNames = [], templateOriginalName = null, templateDirty = false;
 let pickerWorldPosition = null;
 let geometryFrame = 0;
 let portDrag = null, suppressPortClick = false;
-const nodeResizeObserver = new ResizeObserver(() => scheduleNodeGeometry());
+const observedNodeSizes = new WeakMap();
+const nodeResizeObserver = new ResizeObserver(entries => {
+  for (const entry of entries) {
+    const node = entry.target;
+    if (!node.isConnected || !project) continue;
+    const size = { width: Math.round(entry.borderBoxSize?.[0]?.inlineSize ?? entry.contentRect.width), height: Math.round(entry.borderBoxSize?.[0]?.blockSize ?? entry.contentRect.height) };
+    const previous = observedNodeSizes.get(node);
+    observedNodeSizes.set(node, size);
+    if (!previous || (previous.width === size.width && previous.height === size.height)) continue;
+    const block = ws()?.blocks.find(item => item.id === node.dataset.node);
+    if (!block) continue;
+    block.width = size.width; block.height = size.height; markDirty();
+  }
+  scheduleNodeGeometry();
+});
 const ws = () => project?.workspaces.find(item => item.id === workspaceID);
 const def = type => definitions.find(item => item.type === type);
 const nextNumberId = items => Math.max(0, ...items.map(item => Number.isInteger(item.numberId) && item.numberId > 0 ? item.numberId : 0)) + 1;
-const nodeWidth = block => (def(block.type)?.fields.length ? 500 : 300);
+const defaultNodeWidth = block => (def(block.type)?.fields.length ? 500 : 300);
+const nodeWidth = block => Number.isFinite(block.width) ? block.width : defaultNodeWidth(block);
+const nodeHeight = block => Number.isFinite(block.height) ? block.height : 300;
 const typeColors = { action: '#23a559', string: '#e67e22', number: '#168df0', boolean: '#d42ee7', object: '#6f42c1', array: '#e83e8c', unspecified: '#8b949e' };
 
 function toast(message, error = false) {
@@ -154,7 +171,7 @@ function renderProjects() {
 }
 async function refreshProjects() { projects = await api('/api/projects'); renderProjects(); return projects; }
 function setProjectControls(enabled) {
-  for (const selector of ['#export', '#versions', '#app-settings', '#add-workspace', '#add-workspace-category']) $(selector).disabled = !enabled;
+  for (const selector of ['#export', '#versions', '#templates', '#add-workspace', '#add-workspace-category']) $(selector).disabled = !enabled;
   for (const selector of ['#workspace-settings', '#add-block']) $(selector).disabled = !enabled || !ws();
   $('#save').disabled = !enabled || !dirty;
 }
@@ -220,10 +237,27 @@ async function refreshVersions() {
   const versions = await api(`/api/projects/${project.id}/versions`);
   renderVersions(versions);
 }
+function renderDeploymentConfigs(configurations) {
+  for (const channel of ['RC', 'Prod']) {
+    const form = document.querySelector(`[data-deployment-channel="${channel}"]`);
+    const config = configurations[channel] || { host: '0.0.0.0', port: 3001, 'log-level': 3 };
+    form.elements.host.value = config.host;
+    form.elements.port.value = config.port;
+    form.elements['log-level'].value = config['log-level'];
+  }
+}
+async function saveDeploymentConfig(form) {
+  const channel = form.dataset.deploymentChannel;
+  const config = { host: form.elements.host.value.trim(), port: Number(form.elements.port.value), 'log-level': Number(form.elements['log-level'].value) };
+  const configurations = await api(`/api/projects/${project.id}/deployment-configs/${channel}`, { method: 'PUT', body: JSON.stringify(config) });
+  renderDeploymentConfigs(configurations);
+  toast(`${channel} deployment settings saved.`);
+}
 async function openVersionManager() {
   if (!project) return;
   if (dirty) await save();
-  await refreshVersions();
+  const [versions, configurations] = await Promise.all([api(`/api/projects/${project.id}/versions`), api(`/api/projects/${project.id}/deployment-configs`)]);
+  renderVersions(versions); renderDeploymentConfigs(configurations);
   $('#version-dialog').showModal();
 }
 async function versionAction(button) {
@@ -248,6 +282,69 @@ async function versionAction(button) {
     await refreshProjects(); setProjectControls(true); render(); requestAnimationFrame(fit);
     toast(`Revision ${revision} restored as revision ${restored.revision}.`);
   }
+}
+function renderTemplateList() {
+  $('#template-list').innerHTML = templateNames.length ? templateNames.map(name => `<button type="button" data-template-name="${escapeHTML(name)}" class="${name === templateOriginalName ? 'active' : ''}"><span>◇</span><strong>${escapeHTML(name)}</strong></button>`).join('') : '<p>No templates yet</p>';
+}
+function setTemplateState(message = '') {
+  $('#template-state').textContent = message || (templateDirty ? 'Unsaved template changes' : templateOriginalName ? 'Saved' : '');
+  $('#template-save').disabled = !templateDirty;
+  $('#template-delete').disabled = !templateOriginalName;
+}
+function clearTemplateEditor() {
+  templateOriginalName = null; templateDirty = false;
+  $('#template-name').value = ''; $('#template-contents').value = '';
+  $('#template-name').disabled = true; $('#template-contents').disabled = true;
+  setTemplateState(); renderTemplateList();
+}
+async function selectTemplate(name, force = false) {
+  if (!force && templateDirty && !confirm('Discard unsaved template changes?')) return;
+  const template = await api(`/api/projects/${project.id}/templates/${encodeURIComponent(name)}`);
+  templateOriginalName = template.name; templateDirty = false;
+  $('#template-name').disabled = false; $('#template-contents').disabled = false;
+  $('#template-name').value = template.name; $('#template-contents').value = template.contents;
+  setTemplateState(); renderTemplateList();
+}
+function newTemplate(type = 'html') {
+  if (templateDirty && !confirm('Discard unsaved template changes?')) return;
+  templateOriginalName = null; templateDirty = true;
+  $('#template-name').disabled = false; $('#template-contents').disabled = false;
+  $('#template-name').value = type === 'css' ? 'styles.css' : 'template.html';
+  $('#template-contents').value = type === 'css' ? ':root {\n  color-scheme: light dark;\n}\n\nbody {\n  margin: 0;\n  font-family: system-ui, sans-serif;\n}\n' : '<!doctype html>\n<html lang="en">\n<head>\n  <meta charset="utf-8">\n  <title>%title%</title>\n  <style>%styles%</style>\n</head>\n<body>\n  %content%\n</body>\n</html>\n';
+  setTemplateState(); renderTemplateList(); $('#template-name').focus(); $('#template-name').select();
+}
+async function openTemplateEditor() {
+  if (!project) return;
+  if (dirty) await save();
+  templateNames = await api(`/api/projects/${project.id}/templates`);
+  clearTemplateEditor(); $('#template-dialog').showModal();
+  if (templateNames.length) await selectTemplate(templateNames[0], true);
+}
+async function saveTemplate() {
+  const name = $('#template-name').value.trim();
+  if (!name) throw new Error('Enter a template filename.');
+  setTemplateState('Saving…');
+  try {
+    const result = await api(`/api/projects/${project.id}/templates/${encodeURIComponent(name)}`, { method: 'PUT', body: JSON.stringify({ contents: $('#template-contents').value, previousName: templateOriginalName, revision: project.revision }) });
+    project.revision = result.project.revision; project.updatedAt = result.project.updatedAt;
+    templateOriginalName = result.template.name; templateDirty = false;
+    templateNames = await api(`/api/projects/${project.id}/templates`);
+    setTemplateState(); renderTemplateList(); await refreshProjects(); setProjectControls(true);
+    toast(`Template ${result.template.name} saved as project revision ${project.revision}.`);
+  } catch (error) { setTemplateState(); throw error; }
+}
+async function deleteTemplate() {
+  if (!templateOriginalName || !confirm(`Delete ${templateOriginalName}? This creates a new project revision.`)) return;
+  const name = templateOriginalName;
+  const saved = await api(`/api/projects/${project.id}/templates/${encodeURIComponent(name)}`, { method: 'DELETE', body: JSON.stringify({ revision: project.revision }) });
+  project.revision = saved.revision; project.updatedAt = saved.updatedAt;
+  templateNames = await api(`/api/projects/${project.id}/templates`); clearTemplateEditor();
+  if (templateNames.length) await selectTemplate(templateNames[0], true);
+  await refreshProjects(); setProjectControls(true); toast(`Template ${name} deleted.`);
+}
+function closeTemplateEditor() {
+  if (templateDirty && !confirm('Close the template editor and discard unsaved changes?')) return;
+  templateDirty = false; $('#template-dialog').close();
 }
 function workspaceCategoryChoices() {
   return [{ value: '', label: 'Uncategorized' }, ...(project?.workspaceCategories || []).map(category => ({ value: category.id, label: category.name }))];
@@ -284,7 +381,8 @@ function renderLibrary() {
 }
 function optionEditor(field, value) {
   const key = escapeHTML(field.key), label = escapeHTML(field.label);
-  const open = `<label class="option-field" data-option-field="${key}"><span>${label}</span>`;
+  const textClass = ['select', 'number', 'checkbox'].includes(field.type) ? '' : ' text-option-field';
+  const open = `<label class="option-field${textClass}" data-option-field="${key}"><span>${label}</span>`;
   if (field.type === 'select') return `${open}<select class="option-control" data-field="${key}">${(field.choices || []).map(choice => `<option value="${escapeHTML(choice)}" ${value === choice ? 'selected' : ''}>${escapeHTML(choice)}</option>`).join('')}</select></label>`;
   if (field.type === 'number') return `${open}<input class="option-control" type="number" data-field="${key}" value="${escapeHTML(value)}" ${field.min !== undefined ? `min="${field.min}"` : ''} ${field.max !== undefined ? `max="${field.max}"` : ''} step="any"></label>`;
   if (field.type === 'checkbox') return `${open}<input class="option-checkbox" type="checkbox" data-field="${key}" ${value ? 'checked' : ''}></label>`;
@@ -302,7 +400,8 @@ function renderGraph() {
     const outputHTML = outputs.map(port => `<div class="port-row output-row" data-port-kind="${port.kind}" data-field-link="${escapeHTML(port.id)}"><span>${escapeHTML(port.name)}</span><button class="port ${pending?.from === block.id && pending.output === port.id ? 'pending' : ''}" style="--port-color:${portColor(port)}" data-output="${escapeHTML(port.id)}" data-from="${block.id}" data-kind="${port.kind}" data-types="${escapeHTML((port.types || []).join(','))}" aria-label="Connect ${escapeHTML(port.name)} output"></button></div>`).join('');
     const optionHTML = definition.fields.map(field => optionEditor(field, block.options[field.key])).join('');
     const classes = [inputs.length && 'has-inputs', definition.fields.length && 'has-options', outputs.length && 'has-outputs'].filter(Boolean).join(' ');
-    return `<article class="node ${selectedBlocks.has(block.id) ? 'selected' : ''}" data-node="${block.id}" style="left:${block.x}px;top:${block.y}px;width:${nodeWidth(block)}px"><div class="node-head"><span class="block-number">#${escapeHTML(block.numberId)}</span><strong>${escapeHTML(definition.name)}</strong><span class="node-category">[${escapeHTML(definition.category)}]</span><span class="drag-grip">⠿</span></div><div class="node-body ${classes}" style="--port-row-count:${Math.max(inputs.length, outputs.length, 1)}"><div class="port-column input-ports">${inputHTML}</div><div class="option-column">${optionHTML || (!inputs.length && !outputs.length ? `<p>${escapeHTML(definition.description)}</p>` : '')}</div><div class="port-column output-ports">${outputHTML}</div></div></article>`;
+    const height = Number.isFinite(block.height) ? `;height:${block.height}px` : '';
+    return `<article class="node ${selectedBlocks.has(block.id) ? 'selected' : ''}" data-node="${block.id}" style="left:${block.x}px;top:${block.y}px;width:${nodeWidth(block)}px${height}"><div class="node-head"><span class="block-number">#${escapeHTML(block.numberId)}</span><strong>${escapeHTML(definition.name)}</strong><span class="node-category">[${escapeHTML(definition.category)}]</span><span class="drag-grip">⠿</span></div><div class="node-body ${classes}" style="--port-row-count:${Math.max(inputs.length, outputs.length, 1)}"><div class="port-column input-ports">${inputHTML}</div><div class="option-column">${optionHTML || (!inputs.length && !outputs.length ? `<p>${escapeHTML(definition.description)}</p>` : '')}</div><div class="port-column output-ports">${outputHTML}</div></div></article>`;
   }).join('');
   $('#nodes').querySelectorAll('[data-field]').forEach(input => {
     input.addEventListener('input', () => {
@@ -421,7 +520,7 @@ function addBlock(type, position = pickerWorldPosition) {
   const definition = def(type); if (!definition) return;
   const rect = $('#viewport').getBoundingClientRect();
   const width = definition.fields.length ? 500 : 300;
-  const block = { id: uid(), numberId: nextNumberId(ws().blocks), type, x: Math.round(position?.x ?? (rect.width / 2 - view.x) / view.zoom - width / 2), y: Math.round(position?.y ?? (rect.height / 2 - view.y) / view.zoom - 80), options: Object.fromEntries(definition.fields.map(field => [field.key, field.default])) };
+  const block = { id: uid(), numberId: nextNumberId(ws().blocks), type, x: Math.round(position?.x ?? (rect.width / 2 - view.x) / view.zoom - width / 2), y: Math.round(position?.y ?? (rect.height / 2 - view.y) / view.zoom - 80), width, options: Object.fromEntries(definition.fields.map(field => [field.key, field.default])) };
   ws().blocks.push(block); selectBlock(block.id); markDirty(); closePicker(); renderGraph();
 }
 function connect(to, input, kind, types) {
@@ -447,7 +546,7 @@ function zoom(amount, x = $('#viewport').clientWidth / 2, y = $('#viewport').cli
 function fit() {
   if (!ws()?.blocks.length) { view = { x: 0, y: 60, zoom: 1 }; updateView(); return; }
   const blocks = ws().blocks, left = Math.min(...blocks.map(b => b.x)), top = Math.min(...blocks.map(b => b.y));
-  const width = Math.max(...blocks.map(block => block.x + nodeWidth(block))) - left, height = Math.max(...blocks.map(b => b.y + 300)) - top, viewport = $('#viewport');
+  const width = Math.max(...blocks.map(block => block.x + nodeWidth(block))) - left, height = Math.max(...blocks.map(block => block.y + nodeHeight(block))) - top, viewport = $('#viewport');
   view.zoom = Math.max(.25, Math.min(1, (viewport.clientWidth - 80) / width, (viewport.clientHeight - 100) / height));
   view.x = (viewport.clientWidth - width * view.zoom) / 2 - left * view.zoom; view.y = (viewport.clientHeight - height * view.zoom) / 2 - top * view.zoom; updateView();
 }
@@ -716,31 +815,29 @@ $('#workspace-settings').onclick = handle(async () => {
   if (!values) return;
   project.name = values.project; workspace.name = values.name; workspace.categoryId = values.categoryId || null; workspace.active = values.active; markDirty(); render();
 });
-$('#app-settings').onclick = handle(async () => {
-  if (!project) return;
-  const current = { port: 3001, host: '0.0.0.0', 'log-level': 3, ...(project.appConfig || {}) };
-  const values = await modal('Application settings', [
-    { name: 'port', label: 'Port', type: 'number', value: current.port },
-    { name: 'host', label: 'Host IP address', value: current.host },
-    { name: 'log-level', label: 'Log level (0–4)', type: 'number', value: current['log-level'] }
-  ], 'Apply');
-  if (!values) return;
-  const port = Number(values.port);
-  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Port must be an integer between 1 and 65535.');
-  if (!values.host) throw new Error('Enter a host IP address.');
-  const logLevel = Number(values['log-level']);
-  if (!Number.isInteger(logLevel) || logLevel < 0 || logLevel > 4) throw new Error('Log level must be an integer between 0 and 4.');
-  project.appConfig = { port, host: values.host, 'log-level': logLevel };
-  markDirty();
-  toast('Application settings will be included in the export after saving.');
-});
+for (const form of document.querySelectorAll('[data-deployment-channel]')) form.onsubmit = handle(async event => { event.preventDefault(); await saveDeploymentConfig(form); });
 for (const selector of ['#new-project', '#rail-new-project', '#home-new-project']) $(selector).onclick = handle(createProject);
 for (const selector of ['#show-home', '[data-home]']) $(selector).onclick = showHome;
 for (const selector of ['#add-block', '#empty-add-block']) $(selector).onclick = () => { const rect = $('#viewport').getBoundingClientRect(); openPicker(rect.left + rect.width / 2 - 170, rect.top + Math.min(100, rect.height / 3)); };
 $('#save').onclick = handle(async () => { await save(); toast('Project saved to the server.'); });
 $('#versions').onclick = handle(openVersionManager);
+$('#templates').onclick = handle(openTemplateEditor);
 $('#version-close').onclick = () => $('#version-dialog').close();
 $('#version-list').onclick = event => { const button = event.target.closest('[data-version-action]'); if (button) handle(() => versionAction(button))(); };
+$('#template-new-html').onclick = () => newTemplate('html');
+$('#template-new-css').onclick = () => newTemplate('css');
+$('#template-save').onclick = handle(saveTemplate);
+$('#template-delete').onclick = handle(deleteTemplate);
+$('#template-close').onclick = closeTemplateEditor;
+$('#template-list').onclick = event => { const button = event.target.closest('[data-template-name]'); if (button) handle(() => selectTemplate(button.dataset.templateName))(); };
+for (const selector of ['#template-name', '#template-contents']) $(selector).addEventListener('input', () => { templateDirty = true; setTemplateState(); });
+$('#template-contents').addEventListener('keydown', event => {
+  if (event.key !== 'Tab') return;
+  event.preventDefault();
+  const input = event.currentTarget, start = input.selectionStart, end = input.selectionEnd;
+  input.setRangeText('  ', start, end, 'end'); input.dispatchEvent(new Event('input', { bubbles: true }));
+});
+$('#template-dialog').addEventListener('cancel', event => { event.preventDefault(); closeTemplateEditor(); });
 $('#export').onclick = handle(async () => {
   if (!project) return; await save(); if (dirty) await save();
   const response = await fetch(`/api/projects/${project.id}/export`);
@@ -753,7 +850,7 @@ function setTheme(theme) { document.documentElement.dataset.theme = theme; local
 setTheme(localStorage.getItem('phidias-theme') || 'system');
 $('#theme-toggle').onclick = () => setTheme(themes[(themes.indexOf(document.documentElement.dataset.theme) + 1) % themes.length]);
 window.addEventListener('keydown', event => {
-  if ($('#form-dialog').open || $('#version-dialog').open) return;
+  if ($('#form-dialog').open || $('#version-dialog').open || $('#template-dialog').open) return;
   const command = event.ctrlKey || event.metaKey;
   const editing = event.target.closest?.('input,textarea,select,[contenteditable]');
   const key = event.key.toLowerCase();
@@ -767,7 +864,7 @@ window.addEventListener('keydown', event => {
   if (event.key === 'Escape') { if (!$('#block-picker').hidden) closePicker(); else if (!$('#context-menu').hidden) closeContextMenu(); else { pending = null; renderGraph(); } }
   if (['Delete', 'Backspace'].includes(event.key) && !editing) { event.preventDefault(); deleteSelection(); }
 });
-window.addEventListener('beforeunload', event => { if (dirty) { event.preventDefault(); event.returnValue = ''; } });
+window.addEventListener('beforeunload', event => { if (dirty || templateDirty) { event.preventDefault(); event.returnValue = ''; } });
 window.addEventListener('resize', renderWires);
 async function refreshSession() { const session = await api('/api/session'); csrfToken = session.csrfToken; $('#account-name').textContent = session.username; $('#sign-in-again').hidden = true; }
 $('#logout').onclick = handle(async () => {

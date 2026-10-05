@@ -114,7 +114,7 @@ function createApp({ directory = __dirname, document, definitions, onError, logg
     const execution = seed.execution || { vars: Object.create(null), values: new Map(), evaluated: new Set() };
     const context = {
       vars: execution.vars, values: execution.values, evaluated: execution.evaluated,
-      request, response, env: process.env, signal, shared, appName: document.name, logger,
+      request, response, env: process.env, signal, shared, appName: document.name, directory, logger,
       legacyValues: seed.legacyValues || []
     };
     context.render = value => render(value, context);

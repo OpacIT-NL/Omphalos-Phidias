@@ -48,6 +48,8 @@ function validate(document, definitions) {
       const def = definitions.get(block.type);
       if (!def) fail(`Unknown block: ${block.type}`);
       if (!Number.isFinite(block.x) || !Number.isFinite(block.y) || !block.options || typeof block.options !== 'object' || Array.isArray(block.options)) fail('Invalid block position or options');
+      if (block.width !== undefined && (!Number.isFinite(block.width) || block.width < 240)) fail('Invalid block width');
+      if (block.height !== undefined && (!Number.isFinite(block.height) || block.height < 120)) fail('Invalid block height');
       for (const field of def.fields) {
         if (!Object.hasOwn(block.options, field.key) && field.default !== undefined) {
           block.options[field.key] = block.type === 'respond' && field.key === 'format' ? 'Auto' : structuredClone(field.default);

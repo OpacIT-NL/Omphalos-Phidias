@@ -146,12 +146,13 @@ Back up `config.json`, projects, the sibling `repo` directory, and the authentic
 1. Create a project. It starts with `GET /hello` connected to an HTTP response.
 2. Click a block in the library or drag it onto the canvas.
 3. Click an output port, then a compatible input port. Green ports carry actions and gold ports carry values. Action outputs have one wire; value outputs can feed multiple blocks. Each value input accepts one wire.
-4. Select a block to edit its configuration. Hold Ctrl/Cmd or Shift while clicking blocks to toggle them in a multi-selection, or Shift-drag across the canvas to select every block the rectangle touches. Drag the header of any selected block to move the whole group.
+4. Select a block to edit its configuration. Hold Ctrl/Cmd or Shift while clicking blocks to toggle them in a multi-selection, or Shift-drag across the canvas to select every block the rectangle touches. Drag the header of any selected block to move the whole group. Drag a block's lower-right resize handle to make it as large as needed; text option fields grow with the available space and custom dimensions are saved in `workspaces.json`.
 5. Press Ctrl/Cmd+C and Ctrl/Cmd+V to copy and paste selected blocks. Connections are copied when both endpoint blocks are selected, and pasted blocks and connections receive new IDs. With no block or wire selected, Ctrl/Cmd+C copies the current workspace; Ctrl/Cmd+V then pastes it as a new workspace. Select blocks or a connection and press Delete to remove them.
 6. Add workspace categories with **▤**. Use the **+** beside a category name to create a workspace directly inside it. Drag workspace rows to reorder them or drop them onto another category. Close editor tabs with **×**; this leaves the workspace in the sidebar, where clicking it reopens the tab. Right-click a workspace row or tab to open settings, duplicate it, activate/deactivate it, or delete it. All active workspaces run in the exported application.
 7. Click **Save project** or press Ctrl/Cmd+S. Changes are saved explicitly, not automatically; closing the page with unsaved changes prompts you. Every successful save also creates a numbered RC ZIP and updates that project's RC `latest.zip`.
-8. Open **Version manager** with **↶** to download old builds, restore one as a new revision, delete an old revision, or promote a tested revision to Prod. Promotion copies only the selected build to Prod and updates Prod `latest.zip`; later RC saves do not change Prod.
-9. Click **Export application** to save edits and download the current project directly.
+8. Open **HTML and CSS templates** with **</>** to create and edit `.html` and `.css` files. Saving, renaming, or deleting a file creates a project revision and updates its RC build. Use placeholders such as `%title%`, `%styles%`, and `%content%` in HTML files. `Get Template` can read a CSS file as text so it can be inserted into `%styles%` with `Apply Variable`.
+9. Open **Version manager** with **↶** to configure host, port, and log level independently for RC and Prod, download old builds, restore one as a new revision, delete an old revision, or promote a tested revision to Prod. RC saves and direct exports use the RC profile. Promotion packages the selected revision with the Prod profile and updates Prod `latest.zip`; later RC saves do not change Prod. Restoring a revision also restores its saved HTML templates.
+10. Click **Export application** to save edits and download the current project directly.
 
 Invalid graphs, unknown blocks, incompatible value types, loops, invalid options, and duplicate active HTTP routes are rejected on save and export. Execution follows action wires; connected value blocks are evaluated when their values are needed. Branching blocks expose separate action outputs. Use timer triggers for recurring work.
 
@@ -168,7 +169,7 @@ node app.js
 npm start
 ```
 
-`npm install` installs Argon2 plus the FTP, SSH, and MySQL clients used by authentication and imported network/database blocks. Visit `http://localhost:3001/hello` for the starter workflow. Use **Application settings** in the builder toolbar to set a project's host, port, and log level before exporting; its ZIP will contain a ready-to-use `config.json`. Without saved application settings, first launch creates `config.json` with port `3001`, host `0.0.0.0`, and log level `3`. `PORT` and `HOST` remain optional process-level overrides. A pre-generated config is included in every later export for that project, so review it before extracting an update over an existing deployment. Stop it with SIGINT or SIGTERM. Run it under your normal process manager or service manager for unattended hosting.
+`npm install` installs Argon2 plus the FTP, SSH, and MySQL clients used by authentication and imported network/database blocks. Visit `http://localhost:3001/hello` for the starter workflow. In **Version manager**, set separate host, port, and log-level profiles for RC and Prod. Direct exports and RC repository ZIPs contain the RC `config.json`; promoted ZIPs contain the Prod `config.json`. Changing a profile updates the corresponding existing repository ZIPs and `latest.zip`. Without a saved profile, first launch creates `config.json` with port `3001`, host `0.0.0.0`, and log level `3`. `PORT` and `HOST` remain optional process-level overrides. Stop it with SIGINT or SIGTERM. Run it under your normal process manager or service manager for unattended hosting.
 
 Each server-side project and exported ZIP contains:
 
@@ -176,7 +177,9 @@ Each server-side project and exported ZIP contains:
 projects/<project-id>/
 ├── app.js             # Standalone runtime
 ├── workspaces.json    # Project, workspaces, blocks, connections, positions
+├── deployment-configs.json # Builder-side RC and Prod deployment profiles
 ├── blocks/            # Executable block definitions
+├── html/              # HTML and CSS templates edited in the builder
 ├── auth.js            # Browser-session and API-token authentication runtime
 ├── logger.js          # Console and per-launch file logger
 ├── legacy.js          # Discord App Builder block compatibility
@@ -221,6 +224,9 @@ You can also copy the entire project folder directly. The builder never starts p
 | Select HTML Detail Rows | Accepts detail HTML and comma-separated row headers, then removes non-selected top-level rows while preserving nested tables |
 | Sort HTML Detail Rows | Naturally sorts detail rows by header or value in ascending or descending order |
 | Create Button Detail Row | Adds a link-button row and replaces `${text1}` in its URL with the URL-encoded value from a selected argument row |
+| Get Template | Reads a `.html` or `.css` file from the exported application's `html` folder using a connected template-name input |
+| Apply Variable | Replaces every `%name%` placeholder with connected text or HTML; enter `name` without percent signs |
+| Markdown to HTML | Converts headings, emphasis, links, lists, quotes, inline code, and fenced code to HTML while escaping raw HTML |
 | Convert JSON to HTML Table | Converts layered JSON into escaped HTML tables, with nested objects and lists rendered as tables inside cells |
 
 Cron expressions use `minute hour day-of-month month weekday`; lists, ranges, and steps such as `*/15 * * * *` are supported. Schedules use the deployed application server's local time.
@@ -283,6 +289,12 @@ Use unique lowercase filenames and types containing letters, numbers, `_` or `-`
 | PUT | `/api/projects/:id` | Save document with current `revision`; conflict returns 409 |
 | GET | `/api/projects/:id/blocks` | Read block metadata |
 | GET | `/api/projects/:id/export` | Download saved project ZIP |
+| GET | `/api/projects/:id/deployment-configs` | Read the separate RC and Prod host, port, and log-level profiles |
+| PUT | `/api/projects/:id/deployment-configs/:channel` | Save the `RC` or `Prod` profile and update that channel's repository ZIPs |
+| GET | `/api/projects/:id/templates` | List project HTML and CSS templates |
+| GET | `/api/projects/:id/templates/:name` | Read one project HTML or CSS template |
+| PUT | `/api/projects/:id/templates/:name` | Create, edit, or rename a template and create a revision |
+| DELETE | `/api/projects/:id/templates/:name` | Delete a template and create a revision |
 | GET | `/api/projects/:id/versions` | List saved RC and Prod revisions and their repository URLs |
 | POST | `/api/projects/:id/versions/:revision/promote` | Copy an RC revision to Prod and update Prod `latest.zip` |
 | POST | `/api/projects/:id/versions/:revision/restore` | Restore a snapshot as a new RC revision; body contains current `{ "revision": N }` |

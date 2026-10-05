@@ -48,7 +48,7 @@ test('project creation, atomic saves, conflicts, reload, and downloadable ZIP', 
   const library = await (await call(endpoint + '/blocks')).json();
   const replyFormat = library.find(block => block.type === 'respond').fields.find(field => field.key === 'format');
   assert.equal(replyFormat.default, 'JSON'); assert.ok(replyFormat.choices.includes('HTML'));
-  for (const file of ['app.js', 'workspaces.json', 'blocks/api_endpoint.js', 'blocks/get_sub_endpoint_by_name.js', 'blocks/linux_command.js', 'validate.js', 'cron.js', 'auth.js', 'logger.js', 'package.json']) await fs.access(path.join(directory, project.id, file));
+  for (const file of ['app.js', 'workspaces.json', 'html', 'blocks/api_endpoint.js', 'blocks/get_sub_endpoint_by_name.js', 'blocks/linux_command.js', 'validate.js', 'cron.js', 'auth.js', 'logger.js', 'package.json']) await fs.access(path.join(directory, project.id, file));
   assert.equal(project.appConfig, null);
   assert.deepEqual(project.workspaceCategories, []);
   assert.equal(project.workspaces[0].numberId, 1);
@@ -58,13 +58,18 @@ test('project creation, atomic saves, conflicts, reload, and downloadable ZIP', 
   await new Promise(resolve => probe.listen(0, '127.0.0.1', resolve));
   const configuredPort = probe.address().port;
   await new Promise(resolve => probe.close(resolve));
-  project.appConfig = { port: configuredPort, host: '127.0.0.1', 'log-level': 4 };
+  assert.deepEqual(await (await call(endpoint + '/deployment-configs')).json(), { RC: null, Prod: null });
+  const deploymentSettings = await call(endpoint + '/deployment-configs/RC', 'PUT', { port: configuredPort, host: '127.0.0.1', 'log-level': 4 });
+  assert.equal(deploymentSettings.status, 200);
   project.workspaceCategories = [{ id: 'public-api', name: 'Public API' }];
   project.workspaces[0].categoryId = 'public-api';
+  project.workspaces[0].blocks[1].width = 740;
+  project.workspaces[0].blocks[1].height = 420;
   project.workspaces[0].blocks[1].options.body = 'Updated application';
   const results = await Promise.all([call(endpoint, 'PUT', project), call(endpoint, 'PUT', project)]);
   assert.deepEqual(results.map(res => res.status).sort(), [200, 409]);
   const stored = await store.get(project.id); assert.equal(stored.revision, 2); assert.equal(stored.workspaces[0].blocks[1].options.body, 'Updated application');
+  assert.equal(stored.workspaces[0].blocks[1].width, 740); assert.equal(stored.workspaces[0].blocks[1].height, 420);
   assert.deepEqual(stored.workspaceCategories, [{ id: 'public-api', name: 'Public API' }]); assert.equal(stored.workspaces[0].categoryId, 'public-api');
   assert.equal((await (await call('/api/projects')).json()).length, 1);
   await fs.copyFile(path.join(directory, project.id, 'blocks/api_endpoint.js'), path.join(directory, project.id, 'blocks/http.js'));
@@ -73,6 +78,7 @@ test('project creation, atomic saves, conflicts, reload, and downloadable ZIP', 
   const extracted = zipEntries(zip);
   const exportedProject = JSON.parse(extracted.get('workspaces.json'));
   assert.equal(exportedProject.revision, 2); assert.equal(exportedProject.workspaceCategories[0].name, 'Public API'); assert.equal(exportedProject.workspaces[0].categoryId, 'public-api');
+  assert.equal(exportedProject.workspaces[0].blocks[1].width, 740); assert.equal(exportedProject.workspaces[0].blocks[1].height, 420);
   assert.equal(exportedProject.workspaces[0].numberId, 1); assert.deepEqual(exportedProject.workspaces[0].blocks.map(block => block.numberId), [1, 2]);
   assert.ok(extracted.has('auth.js'));
   assert.ok(extracted.has('logger.js'));
@@ -108,6 +114,8 @@ test('saved revisions publish to a browsable RC repository and can be promoted, 
   const { call, rawCall, base } = await fixture(t);
   const project = await (await call('/api/projects', 'POST', { name: 'Delphi' })).json();
   const endpoint = `/api/projects/${project.id}`;
+  assert.equal((await call(endpoint + '/deployment-configs/RC', 'PUT', { port: 7779, host: '127.0.0.1', 'log-level': 4 })).status, 200);
+  assert.equal((await call(endpoint + '/deployment-configs/Prod', 'PUT', { port: 7778, host: '0.0.0.0', 'log-level': 2 })).status, 200);
   project.workspaces[0].blocks[1].options.body = 'revision two';
   const revisionTwo = await (await call(endpoint, 'PUT', project)).json();
   assert.equal(revisionTwo.revision, 2);
@@ -131,7 +139,9 @@ test('saved revisions publish to a browsable RC repository and can be promoted, 
   assert.equal((await rawCall('/repo/Unknown/')).status, 404);
   const rcRevision = await call(versions[0].rcUrl);
   assert.equal(rcRevision.status, 200);
-  assert.equal(JSON.parse(zipEntries(Buffer.from(await rcRevision.arrayBuffer())).get('workspaces.json')).revision, 2);
+  const rcFiles = zipEntries(Buffer.from(await rcRevision.arrayBuffer()));
+  assert.equal(JSON.parse(rcFiles.get('workspaces.json')).revision, 2);
+  assert.deepEqual(JSON.parse(rcFiles.get('config.json')), { port: 7779, host: '127.0.0.1', 'log-level': 4 });
   assert.equal((await call('/repo/DelphiRC/latest.zip')).status, 200);
 
   assert.equal((await call(endpoint + '/versions/2/promote', 'POST', {})).status, 200);
@@ -140,6 +150,11 @@ test('saved revisions publish to a browsable RC repository and can be promoted, 
   assert.equal(versions[0].prodUrl, '/repo/DelphiProd/delphi.rev2.zip');
   const prodBeforeNextSave = Buffer.from(await (await call('/repo/DelphiProd/latest.zip')).arrayBuffer());
   assert.equal(JSON.parse(zipEntries(prodBeforeNextSave).get('workspaces.json')).revision, 2);
+  assert.deepEqual(JSON.parse(zipEntries(prodBeforeNextSave).get('config.json')), { port: 7778, host: '0.0.0.0', 'log-level': 2 });
+
+  assert.equal((await call(endpoint + '/deployment-configs/Prod', 'PUT', { port: 7780, host: '127.0.0.1', 'log-level': 1 })).status, 200);
+  const reconfiguredProd = zipEntries(Buffer.from(await (await call('/repo/DelphiProd/latest.zip')).arrayBuffer()));
+  assert.deepEqual(JSON.parse(reconfiguredProd.get('config.json')), { port: 7780, host: '127.0.0.1', 'log-level': 1 });
 
   revisionTwo.workspaces[0].blocks[1].options.body = 'revision three';
   const revisionThree = await (await call(endpoint, 'PUT', revisionTwo)).json();
@@ -161,6 +176,42 @@ test('saved revisions publish to a browsable RC repository and can be promoted, 
   assert.equal((await call('/repo/DelphiRC/delphi.rev3.zip')).status, 404);
 });
 
+test('HTML templates are edited through the API, included in builds, and restored with revisions', async t => {
+  const { call } = await fixture(t);
+  const project = await (await call('/api/projects', 'POST', { name: 'Templates' })).json();
+  const endpoint = `/api/projects/${project.id}`;
+  assert.deepEqual(await (await call(endpoint + '/templates')).json(), []);
+
+  let response = await call(endpoint + '/templates/page.html', 'PUT', { contents: '<h1>%title%</h1>', previousName: null, revision: 1 });
+  assert.equal(response.status, 200);
+  let saved = await response.json(); assert.equal(saved.project.revision, 2);
+  assert.deepEqual(await (await call(endpoint + '/templates')).json(), ['page.html']);
+  assert.deepEqual(await (await call(endpoint + '/templates/page.html')).json(), { name: 'page.html', contents: '<h1>%title%</h1>' });
+  let archive = zipEntries(Buffer.from(await (await call('/repo/TemplatesRC/latest.zip')).arrayBuffer()));
+  assert.equal(archive.get('html/page.html').toString(), '<h1>%title%</h1>');
+
+  response = await call(endpoint + '/templates/page.html', 'PUT', { contents: '<main>%content%</main>', previousName: 'page.html', revision: 2 });
+  saved = await response.json(); assert.equal(saved.project.revision, 3);
+  const restored = await (await call(endpoint + '/versions/2/restore', 'POST', { revision: 3 })).json();
+  assert.equal(restored.revision, 4);
+  assert.equal((await (await call(endpoint + '/templates/page.html')).json()).contents, '<h1>%title%</h1>');
+
+  response = await call(endpoint + '/templates/home.html', 'PUT', { contents: '<h1>%title%</h1>', previousName: 'page.html', revision: 4 });
+  saved = await response.json(); assert.equal(saved.project.revision, 5);
+  assert.equal((await call(endpoint + '/templates/page.html')).status, 404);
+  assert.equal((await call(endpoint + '/templates/home.html', 'PUT', { contents: 'duplicate', previousName: null, revision: 5 })).status, 409);
+  response = await call(endpoint + '/templates/home.html', 'DELETE', { revision: 5 });
+  assert.equal(response.status, 200); assert.equal((await response.json()).revision, 6);
+  assert.deepEqual(await (await call(endpoint + '/templates')).json(), []);
+  archive = zipEntries(Buffer.from(await (await call('/repo/TemplatesRC/latest.zip')).arrayBuffer()));
+  assert.equal(archive.has('html/home.html'), false);
+  response = await call(endpoint + '/templates/styles.css', 'PUT', { contents: 'body { color: purple; }', previousName: null, revision: 6 });
+  assert.equal(response.status, 200); assert.equal((await response.json()).project.revision, 7);
+  assert.deepEqual(await (await call(endpoint + '/templates')).json(), ['styles.css']);
+  archive = zipEntries(Buffer.from(await (await call('/repo/TemplatesRC/latest.zip')).arrayBuffer()));
+  assert.equal(archive.get('html/styles.css').toString(), 'body { color: purple; }');
+});
+
 test('password login, protected routes, CSRF, logout, malformed requests and traversal', async t => {
   const { call, rawCall, headers, base } = await fixture(t);
   assert.equal((await rawCall('/api/projects')).status, 401);
@@ -173,7 +224,10 @@ test('password login, protected routes, CSRF, logout, malformed requests and tra
   assert.match(await (await fetch(base + '/login')).text(), /autocomplete="current-password"/);
   assert.equal((await call('/api/projects')).status, 200);
   const editorPage = await fetch(base + '/', { headers: { cookie: headers.cookie } });
-  assert.match(await editorPage.text(), /id="app-settings"/);
+  const editorHTML = await editorPage.text();
+  assert.doesNotMatch(editorHTML, /id="app-settings"/);
+  assert.match(editorHTML, /data-deployment-channel="RC"/);
+  assert.match(editorHTML, /data-deployment-channel="Prod"/);
   assert.equal((await rawCall('/api/projects', 'POST', { name: 'Denied' }, { cookie: headers.cookie })).status, 403);
   assert.equal((await call('/api/projects', 'POST', { name: 'Denied' }, { 'x-csrf-token': 'wrong' })).status, 403);
   assert.equal((await call('/api/projects', 'POST', { name: 'Denied' }, { origin: 'https://attacker.invalid' })).status, 403);
@@ -207,16 +261,19 @@ test('validation rejects dangling wires, duplicate routes, loops, and invalid op
   reject((ws, document) => { document.workspaceCategories = [{ id: 'api', name: 'API' }]; ws.categoryId = 'missing'; }, /workspace category/);
   reject((ws, document) => { document.workspaceCategories = [{ id: 'api', name: 'API' }, { id: 'api', name: 'Duplicate' }]; }, /duplicate workspace category/);
   reject(ws => { ws.blocks[1].numberId = ws.blocks[0].numberId; }, /duplicate block number ID/);
+  reject(ws => { ws.blocks[1].width = 100; }, /Invalid block width/);
+  reject(ws => { ws.blocks[1].height = 100; }, /Invalid block height/);
   reject((ws, document) => { const duplicate = structuredClone(ws); duplicate.id = 'other'; document.workspaces.push(duplicate); }, /duplicate workspace number ID/);
   const legacy = structuredClone(project);
   delete legacy.workspaces[0].numberId;
   legacy.workspaces[0].blocks.forEach(block => delete block.numberId);
   assert.doesNotThrow(() => validate(legacy, definitions));
   assert.equal(legacy.workspaces[0].numberId, 1); assert.deepEqual(legacy.workspaces[0].blocks.map(block => block.numberId), [1, 2]);
+  const enormous = structuredClone(project); enormous.workspaces[0].blocks[1].width = 100000; enormous.workspaces[0].blocks[1].height = 100000; assert.doesNotThrow(() => validate(enormous, definitions));
   const paused = structuredClone(project.workspaces[0]); paused.id = 'paused'; paused.numberId = 2; paused.active = false; project.workspaces.push(paused); assert.doesNotThrow(() => validate(project, definitions));
-  const invalidPort = structuredClone(project); invalidPort.appConfig = { port: 70000, host: '127.0.0.1' }; await assert.rejects(store.save(project.id, invalidPort), /Application port/);
-  const invalidHost = structuredClone(project); invalidHost.appConfig = { port: 3001, host: 'localhost', 'log-level': 3 }; await assert.rejects(store.save(project.id, invalidHost), /Application host/);
-  const invalidLogLevel = structuredClone(project); invalidLogLevel.appConfig = { port: 3001, host: '127.0.0.1', 'log-level': 5 }; await assert.rejects(store.save(project.id, invalidLogLevel), /Application log level/);
+  await assert.rejects(store.saveDeploymentConfig(project.id, 'RC', { port: 70000, host: '127.0.0.1' }), /Application port/);
+  await assert.rejects(store.saveDeploymentConfig(project.id, 'Prod', { port: 3001, host: 'localhost', 'log-level': 3 }), /Application host/);
+  await assert.rejects(store.saveDeploymentConfig(project.id, 'RC', { port: 3001, host: '127.0.0.1', 'log-level': 5 }), /Application log level/);
 });
 
 test('runtime logs the workspace and block numeric IDs for workflow errors', async t => {
