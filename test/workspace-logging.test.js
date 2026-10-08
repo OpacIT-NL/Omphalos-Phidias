@@ -162,7 +162,7 @@ test('workspace logging settings are optional for older workspaces and validated
   assert.throws(() => validate(document, definitions), /logging settings/);
 });
 
-test('application Force Console input log audits stdin regardless of log level', async t => {
+test('application force-console setting forces Console Log blocks without auditing stdin', async t => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'phidias-console-input-log-'));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   await fs.writeFile(path.join(directory, 'config.json'), JSON.stringify({
@@ -184,17 +184,24 @@ test('application Force Console input log audits stdin regardless of log level',
     name: 'Console audit',
     workspaces: [{
       id: 'main', numberId: 1, name: 'Main', active: true, blocks: [
-        { id: 'input', numberId: 1, type: 'bot_input', x: 0, y: 0, options: {} }
-      ], connections: []
+        { id: 'input', numberId: 1, type: 'bot_input', x: 0, y: 0, options: {} },
+        { id: 'http', numberId: 2, type: 'http', x: 0, y: 200, options: { method: 'GET', path: '/forced-log' } },
+        { id: 'console', numberId: 3, type: 'console_log', x: 300, y: 200, options: { value: 'forced console block message' } },
+        { id: 'reply', numberId: 4, type: 'respond', x: 600, y: 200, options: { status: 200, format: 'Text', body: 'ok', headers: '{}' } }
+      ], connections: [
+        { id: 'to-console', from: 'http', output: 'next', to: 'console', input: 'action', kind: 'action' },
+        { id: 'to-reply', from: 'console', output: 'action', to: 'reply', input: 'action', kind: 'action' }
+      ]
     }]
   };
   const app = createApp({ directory, document, definitions: loadDefinitions(path.resolve(__dirname, '../blocks')), logger, stdin });
   await app.start(0, '127.0.0.1');
   t.after(() => app.stop());
   stdin.write('complete console command\n');
-  for (let attempt = 0; attempt < 50 && !lines.some(line => line.includes('complete console command')); attempt++) {
-    await new Promise(resolve => setTimeout(resolve, 10));
-  }
-  assert.match(lines.join(''), /\[INFO\] Console input: complete console command/);
-  assert.match(await fs.readFile(logger.filename, 'utf8'), /\[INFO\] Console input: complete console command/);
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.doesNotMatch(lines.join(''), /complete console command/);
+  assert.doesNotMatch(await fs.readFile(logger.filename, 'utf8'), /complete console command/);
+  assert.equal((await fetch(`http://127.0.0.1:${app.server.address().port}/forced-log`)).status, 200);
+  assert.match(lines.join(''), /\[INFO\] forced console block message/);
+  assert.match(await fs.readFile(logger.filename, 'utf8'), /\[INFO\] forced console block message/);
 });

@@ -191,6 +191,16 @@ async function executeLegacy(definition, ctx, block, connectedInputs, follow) {
     await Promise.all(branches);
     return stored;
   }
+  if (definition.type === 'console_log') {
+    let content = getInput('value');
+    if (content === undefined) content = api.GetOptionValue('value', null, '');
+    const write = ctx.forceConsoleLog ? (ctx.logger?.forceInfo || ctx.logger?.info) : ctx.logger?.info;
+    if (write) write.call(ctx.logger, content);
+    else console.log(content);
+    api.RunNextBlock('action');
+    await Promise.all(branches);
+    return stored;
+  }
   if (definition.type === 'database_query') {
     try {
       const database = await ctx.database();

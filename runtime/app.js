@@ -184,7 +184,8 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
     const context = {
       vars: execution.vars, values: execution.values, evaluated: execution.evaluated,
       request, response, env: process.env, signal, shared, appName: document.name, directory, logger, deployment, database: getDatabase,
-      legacyValues: seed.legacyValues || [], runId, loggedInUser: seed.loggedInUser || 'svc_automation'
+      legacyValues: seed.legacyValues || [], runId, loggedInUser: seed.loggedInUser || 'svc_automation',
+      forceConsoleLog: applicationConfig['force-console-input-log']
     };
     context.render = value => render(value, context);
     context.setLoggedInUser = session => {
@@ -455,10 +456,6 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
         if (trigger === 'startup') track(run(ws, block)).catch(reportError);
         if (trigger === 'stdin') {
           const listener = line => {
-            if (applicationConfig['force-console-input-log']) {
-              const write = logger?.forceInfo || logger?.info;
-              write?.call(logger, 'Console input: %s', line);
-            }
             track(run(ws, block, null, null, { legacyValues: [line] })).catch(reportError);
           };
           stdinInterface ||= readline.createInterface({ input: stdin, terminal: false, crlfDelay: Infinity });
