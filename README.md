@@ -66,6 +66,7 @@ Configuration commands:
 | `port <1-65535>` | Change the listening port immediately |
 | `log-level <0-4>` | Change console log filtering immediately |
 | `file-log-level <0-4>` | Change file log filtering immediately |
+| `console force-input-log <true-or-false>` | Always audit console commands to both logging destinations; hidden answers remain redacted |
 | `username <name>` | Create or reset an account using hidden password prompts |
 | `user create <name>` | Create a new account; rejects an existing username |
 | `user password <name>` | Reset an existing account’s password |
@@ -105,7 +106,8 @@ Generated defaults:
     "secureCookies": false
   },
   "console": {
-    "enablePasswordHash": null
+    "enablePasswordHash": null,
+    "forceInputLog": false
   }
 }
 ```
@@ -126,6 +128,8 @@ Use `log-level <0-4>` in configuration mode to control console filtering and `fi
 
 Each event is independently filtered for the console and the launch-specific file such as `log/2026-10-01-1.txt` beside `server.js`. The date is the UTC date on which the process started. A second start on the same date creates `2026-10-01-2.txt`, then `-3.txt`, and so on; an existing launch file is never reused. Entries include a UTC timestamp and severity; multiline errors are escaped into one log entry. Enabled console Critical/Error/Warning messages go to stderr, and Info/Debug messages go to stdout. Console prompts and command replies are always shown, independently of log level.
 
+Set `console force-input-log true` in configuration mode to write every terminal and browser-console input to both the console and launch log file regardless of their configured thresholds. Save it with `copy run start`. Hidden enable and account password answers are recorded as `[hidden]`; passwords are never written to the log.
+
 Info records startup, shutdown, sign-in/sign-out, and project create/save/export activity. Warning records rejected requests, Error records unexpected request failures, and Debug records request paths, status codes, and durations. Startup failures and uncaught failures are Critical. Request bodies, query strings, authorization headers, cookies, and passwords are not included in request logs.
 
 The `log/` directory is created automatically and excluded from Git and release ZIPs. Files are not automatically deleted; manage retention on your server. If a file write fails, the original console entry remains available along with a Critical diagnostic. Exported automations use the same severity levels and launch-file naming in their own `log/` directory; their application `log-level` currently controls both destinations.
@@ -138,7 +142,9 @@ There is no default web account or public registration endpoint. Web authenticat
 
 Core permissions are **Login**, **Manage users**, **Create projects**, and **Console**. Project permissions are **Login to RC**, **Login to Prod**, **View Builder Project**, **Edit Builder Project**, **Promote to Prod**, and **Delete Project**. Grants are additive: a user receives the union of direct grants and every group grant. A newly created project grants all project permissions directly to its creator. The local Cisco-style terminal still requires OS-level terminal access and its enable secret; the Console ACL is recorded for authenticated console integrations.
 
-The ACL schema is added with `CREATE TABLE IF NOT EXISTS`; the updater never replaces `auth.sqlite`. On the first ACL migration, every existing user is placed in the built-in **Administrators** group, which has every core permission and wildcard access to existing and future projects. This preserves access during upgrades. The first account created in a completely empty database becomes the bootstrap administrator. Later accounts start with no permissions until an administrator assigns them.
+The ACL and database-credential schemas are added with `CREATE TABLE IF NOT EXISTS`; the updater never replaces `auth.sqlite`. On the first ACL migration, every existing user is placed in the built-in **Administrators** group, which has every core permission and wildcard access to existing and future projects. This preserves access during upgrades. The first account created in a completely empty database becomes the bootstrap administrator. Later accounts start with no permissions until an administrator assigns them.
+
+Administrators can create MySQL credential sets in the Version manager. RC and Prod settings select their credential sets independently. The password remains in the protected `auth.sqlite`; public repository ZIPs contain only the credential-set ID and the path to that SQLite database. Every **Database SQL Query** block in the generated application uses one shared pool for the selected set. Restart the application after changing a credential set. The old **Database SQL File Option** block is retained only as a hidden no-op so existing workspace graphs continue to load.
 
 Sessions use random 256-bit cookies with `HttpOnly`, `SameSite=Strict`, and `Secure` when configured. They expire after eight hours. Saved sessions survive builder restarts; sessions for unsaved accounts remain in memory until `copy run start`. Signing out revokes the current session; resetting or deleting an account revokes its sessions. State-changing authenticated API calls require the session’s `X-CSRF-Token`, and cross-origin writes are rejected.
 
@@ -152,13 +158,13 @@ Back up `config.json`, projects, the sibling `repo` directory, and the authentic
 
 1. Create a project. It starts with `GET /hello` connected to an HTTP response.
 2. Click a block in the library or drag it onto the canvas.
-3. Click an output port, then a compatible input port. Green ports carry actions and gold ports carry values. Action outputs have one wire; value outputs can feed multiple blocks. Each value input accepts one wire.
+3. Click an output port, then a compatible input port, or drag a wire between them. A dragged wire snaps to a nearby compatible port before you release it. Green ports carry actions and gold ports carry values. Action outputs have one wire; value outputs can feed multiple blocks. Each value input accepts one wire.
 4. Select a block to edit its configuration. Hold Ctrl/Cmd or Shift while clicking blocks to toggle them in a multi-selection, or Shift-drag across the canvas to select every block the rectangle touches. Drag the header of any selected block to move the whole group. Drag a block's lower-right resize handle to make it as large as needed; text option fields grow with the available space and custom dimensions are saved in `workspaces.json`.
 5. Press Ctrl/Cmd+C and Ctrl/Cmd+V to copy and paste selected blocks. Connections are copied when both endpoint blocks are selected, and pasted blocks and connections receive new IDs. With no block or wire selected, Ctrl/Cmd+C copies the current workspace; Ctrl/Cmd+V then pastes it as a new workspace. Select blocks or a connection and press Delete to remove them.
-6. Add workspace categories with **▤**. Use the **+** beside a category name to create a workspace directly inside it. Drag workspace rows to reorder them or drop them onto another category. Close editor tabs with **×**; this leaves the workspace in the sidebar, where clicking it reopens the tab. Right-click a workspace row or tab to open settings, duplicate it, activate/deactivate it, or delete it. All active workspaces run in the exported application.
+6. Add workspace groups with **▤**. Use the **+** beside a group name to create a workspace directly inside it. Drag group headers to reorder groups; use **✎** to rename one or **×** to delete it. Deleting a group moves its workspaces to Uncategorized. Drag workspace rows to reorder them or drop them onto another group. Close editor tabs with **×**; this leaves the workspace in the sidebar, where clicking it reopens the tab. Right-click a workspace row or tab to open settings, duplicate it, activate/deactivate it, or delete it. Workspace settings can also force structured INFO logs and route block-run events through **On Workspace Log**. All active workspaces run in the exported application.
 7. Click **Save project** or press Ctrl/Cmd+S. Changes are saved explicitly, not automatically; closing the page with unsaved changes prompts you. Every successful save also creates a numbered RC ZIP and updates that project's RC `latest.zip`.
 8. Open **HTML and CSS templates** with **</>** to create and edit `.html` and `.css` files. Saving, renaming, or deleting a file creates a project revision and updates its RC build. Use placeholders such as `%title%`, `%styles%`, and `%content%` in HTML files. `Get Template` can read a CSS file as text so it can be inserted into `%styles%` with `Apply Variable`.
-9. Open **Version manager** with **↶** to configure host, port, and log level independently for RC and Prod, download old builds, restore one as a new revision, delete an old revision, or promote a tested revision to Prod. RC saves and direct exports use the RC profile. Promotion packages the selected revision with the Prod profile and updates Prod `latest.zip`; later RC saves do not change Prod. Restoring a revision also restores its saved HTML templates.
+9. Open **Version manager** with **↶** to configure host, port, log level, update URL, and forced Console Input logging independently for RC and Prod, download old builds, restore one as a new revision, delete an old revision, or promote a tested revision to Prod. Point each update URL at that channel's public `latest.zip`. RC saves and direct exports use the RC profile. Promotion packages the selected revision with the Prod profile and updates Prod `latest.zip`; later RC saves do not change Prod. Restoring a revision also restores its saved HTML templates.
 10. Click **Export application** to save edits and download the current project directly.
 
 Project editors can use **Clear block cache** (⟳) in the toolbar after changing block files on disk. It removes cached bundled and project-local block modules, including imported helper modules, reloads the block library, and refreshes the current graph without discarding unsaved workspace edits.
@@ -167,7 +173,7 @@ Accounts with **Manage users** can open the **ACL** control panel in the top-rig
 
 Invalid graphs, unknown blocks, incompatible value types, loops, invalid options, and duplicate active HTTP routes are rejected on save and export. Execution follows action wires; connected value blocks are evaluated when their values are needed. Branching blocks expose separate action outputs. Use timer triggers for recurring work.
 
-With the default `projects` directory, repository builds are stored in `repo` beside it. A project named `Delphi` publishes RC builds as `/repo/DelphiRC/latest.zip` and `/repo/DelphiRC/delphi.revN.zip`. Promoting revision N creates `/repo/DelphiProd/latest.zip` and `/repo/DelphiProd/delphi.revN.zip`. Open `/repo/` to browse every published project-state folder and continue into a folder to browse its current and numbered ZIPs. Repository browsing and downloads are public and require no builder session. Exported `workspaces.json` files are included in these ZIPs, including credentials entered directly in block options.
+With the default `projects` directory, repository builds are stored in `repo` beside it. A project named `Delphi` publishes RC builds as `/repo/DelphiRC/latest.zip` and `/repo/DelphiRC/delphi.revN.zip`. Promoting revision N creates `/repo/DelphiProd/latest.zip` and `/repo/DelphiProd/delphi.revN.zip`. Open `/repo/` to browse every published project-state folder and continue into a folder to browse its current and numbered ZIPs. Repository browsing and downloads are public and require no builder session. Exported `workspaces.json` files are included in these ZIPs. Database credential-set passwords are not included in repository archives.
 
 ## Deploy independently
 
@@ -180,7 +186,7 @@ node app.js
 npm start
 ```
 
-`npm install` installs Argon2 plus the FTP, SSH, and MySQL clients used by authentication and imported network/database blocks. Visit `http://localhost:3001/hello` for the starter workflow. In **Version manager**, set separate host, port, and log-level profiles for RC and Prod. Direct exports and RC repository ZIPs contain the RC `config.json`; promoted ZIPs contain the Prod `config.json`. Every generated config also contains the immutable `project-id` and its `release-channel` (`RC` or `Prod`) so authentication blocks can select the correct ACL. Changing a profile updates the corresponding existing repository ZIPs and `latest.zip`. An unset profile uses port `3001`, host `0.0.0.0`, and log level `3`. `PORT` and `HOST` remain optional process-level overrides. Stop it with SIGINT or SIGTERM. Run it under your normal process manager or service manager for unattended hosting.
+`npm install` installs Argon2 plus the FTP, SSH, and MySQL clients used by authentication and imported network/database blocks. Visit `http://localhost:3001/hello` for the starter workflow. In **Version manager**, set separate host, port, log-level, update URL, and **Force Console input log** profiles for RC and Prod. Direct exports and RC repository ZIPs contain the RC `config.json`; promoted ZIPs contain the Prod `config.json`. Every generated config contains `auth.database`, the immutable `project-id`, and its `release-channel` (`RC` or `Prod`) so all authentication blocks use one SQLite file and select the correct ACL. A configured channel also receives its own `update-url`. Changing a profile updates the corresponding existing repository ZIPs and `latest.zip`. An unset profile uses port `3001`, host `0.0.0.0`, log level `3`, and disabled forced Console Input logging. `PORT` and `HOST` remain optional process-level overrides. Stop it with SIGINT or SIGTERM. Run it under your normal process manager or service manager for unattended hosting.
 
 Each server-side project and exported ZIP contains:
 
@@ -192,6 +198,7 @@ projects/<project-id>/
 ├── blocks/            # Executable block definitions
 ├── html/              # HTML and CSS templates edited in the builder
 ├── auth.js            # Browser-session and API-token authentication runtime
+├── favicon.ico        # Multi-resolution exported-application browser icon
 ├── logger.js          # Console and per-launch file logger
 ├── legacy.js          # Discord App Builder block compatibility
 ├── validate.js        # Runtime graph validation
@@ -199,11 +206,17 @@ projects/<project-id>/
 └── README.md
 ```
 
-Standalone automations create `log/yyyy-mm-dd-N.txt` when `node app.js` starts. `N` begins at `1` each UTC date and increases for every restart that day. Lifecycle messages (listening, stopping, and stopped) are always written to stdout so process managers such as AMP can show application state; their file copies still follow the configured level. Workflow errors, HTTP request diagnostics, **Write to log**, and console output from blocks use the automation's configured log level. Level meanings are the same as the builder table above.
+Standalone automations create `log/yyyy-mm-dd-N.txt` when `node app.js` starts. `N` begins at `1` each UTC date and increases for every restart that day. **Restart App** closes the current cycle after its stopped message, allocates the next numbered file, and writes the restarting and listening messages into the new cycle just like a complete process restart. Lifecycle messages (listening, stopping, and stopped) are always written to stdout so process managers such as AMP can show application state; their file copies still follow the configured level. Workflow errors, HTTP request diagnostics, **Write to log**, and console output from blocks use the automation's configured log level. Level meanings are the same as the builder table above.
+
+The deployment profile's **Force Console input log** option writes every complete stdin line received by an exported application's Console Input trigger to its console and launch log file, bypassing the application log level. Its generated `config.json` field is `"force-console-input-log"`.
+
+Each workspace has two independent logging controls. **Force log** writes an INFO event for every executed block to the application console and launch file even when the application log level would normally filter it. **Log all runs to log block** invokes every **On Workspace Log** trigger in that workspace. Each event includes timestamps, duration, success state, workspace and block identities, action input, connected inputs, configured options, outputs, and error details. Every external HTTP, startup, interval, cron, or console-input trigger receives a UUID Run ID; emitter/receiver continuations retain it across workspaces. Unauthenticated and scheduled runs use `svc_automation` as the username. Authentication blocks attach a recognized browser/API username to subsequent events. Log-handler branches do not generate further workspace-log events, preventing recursion.
 
 Every workspace and block also has a persistent numeric ID shown in the editor, alongside its internal UUID. New workspaces and blocks receive the next ascending number in their own scope; reordering does not change it. Workflow failures identify the exact location, for example: `Block triggered error (Workspace #1: MyWorkspace > Block #14: Request API)`. Older projects receive numeric IDs automatically when they are loaded.
 
 You can also copy the entire project folder directly. The builder never starts project workflows on its own server. Edits to a builder project do not update an already deployed copy: export and deploy again, run `npm install` when dependencies change, then restart that application. Existing managed projects use the current bundled definitions in the editor and receive the current bundled runtime/blocks when exported; their stored project folders are not overwritten. Project-only custom block types remain available.
+
+The builder serves its Phidias favicon from `public/favicon.ico`. Every project export includes a separate automation favicon and serves it from `/favicon.ico` before workflow route matching, so it remains available to login pages, HTML replies, and nested endpoint pages. Regenerate both multi-resolution ICO files with `node scripts/generate-favicons.js`.
 
 ## Included blocks
 
@@ -212,6 +225,7 @@ You can also copy the entire project folder directly. The builder never starts p
 | On startup | Runs once when the application starts |
 | On interval | Runs every N seconds; skips overlapping ticks |
 | On cron | Runs once per matching minute using a five-field local-time cron expression |
+| On Workspace Log | Receives each structured block-run event from a workspace with Log all runs to log block enabled and outputs Action, Logged In User, Content, and Run ID |
 | HTTP endpoint | Starts the longest matching method/path workflow; Body and Headers outputs expose the incoming request; ANY accepts every HTTP method |
 | Get sub-endpoint by name | Outputs the path following the matched HTTP endpoint, such as `/vhins` for `/systems/vhins` |
 | Write to log | Writes to standard output |
@@ -221,6 +235,7 @@ You can also copy the entire project folder directly. The builder never starts p
 | HTTP request | Calls an HTTP(S) URL with JSON, HTML, or text request bodies and stores status, response headers, and body |
 | HTTP response | Sends JSON by default, with HTML and text available from the Reply format menu |
 | Linux command | Runs `/bin/sh -c` as the deployed automation's OS user and exposes stdout, stderr, and exit code |
+| Update Application | Uses this build's RC or Prod `update-url` to download `latest.zip` with `wget` and extract it in the application directory with `unzip`; command output always reaches the console and log file |
 | Stop App | Gracefully closes the exported automation runtime and exits the Node.js process |
 | Restart App | Gracefully reloads the exported automation runtime in the same process, preserving compatibility with process managers such as AMP |
 | List Folder Contents | Accepts a connected text folder path and outputs detailed entries, file paths, and subfolder paths, optionally including nested contents |
@@ -241,10 +256,43 @@ You can also copy the entire project folder directly. The builder never starts p
 | Apply Variable | Replaces every `%name%` placeholder with connected text or HTML; enter `name` without percent signs |
 | Markdown to HTML | Converts headings, emphasis, links, lists, quotes, inline code, and fenced code to HTML while escaping raw HTML |
 | Convert JSON to HTML Table | Converts layered JSON into escaped HTML tables, with nested objects and lists rendered as tables inside cells |
+| JSON to Cartesian Chart | Creates responsive line, area, grouped bar, stacked bar, horizontal bar, or scatter chart HTML from JSON rows, labels/datasets, or key-value objects |
+| JSON to Circular Chart | Creates responsive pie or donut chart HTML from JSON, with slice sorting, small-slice grouping, custom palettes, labels, legends, and themes |
+| Math Operation | Adds, subtracts, multiplies, divides, calculates modulo or powers, or selects the minimum/maximum of two connected numbers |
+| Percentage Calculator | Calculates ratios, percentage amounts, percentage changes, percentage-point differences, and percentage-based increases or decreases |
+| Aggregate Numbers | Calculates count, sum, average, minimum, maximum, median, range, variance, and standard deviation from JSON or lists |
+| Transform JSON Numbers | Adds or replaces calculated numeric fields across JSON rows or key-value data and outputs object/list data directly compatible with graph blocks |
+
+The chart blocks return self-contained HTML with responsive inline SVG, so their output can connect directly to **Apply Variable** or an HTML **HTTP response**. They require no browser-side chart library or network access. Both blocks automatically recognize these JSON layouts:
+
+```json
+[
+  { "Month": "January", "Sales": 42, "Costs": 18 },
+  { "Month": "February", "Sales": 51, "Costs": 21 }
+]
+```
+
+```json
+{
+  "labels": ["January", "February"],
+  "datasets": [
+    { "label": "Sales", "data": [42, 51], "color": "#69b7e6" },
+    { "label": "Costs", "data": [18, 21], "color": "#e8ad60" }
+  ]
+}
+```
+
+```json
+{ "Online": 18, "Warning": 3, "Offline": 1 }
+```
+
+Use **Category / X Field** and **Series / Y Fields** to override automatic row mapping. Cartesian charts can aggregate duplicate categories by sum, average, minimum, maximum, or count; sort and limit points; treat missing values as gaps, zeroes, or skipped points; and control axes, grids, values, sizing, colors, and themes. Connect Number blocks or other numeric outputs to **X Minimum**, **X Maximum**, **Y Minimum**, and **Y Maximum** for explicit bounds. Scatter charts use all four bounds, horizontal bars use the X bounds, and charts with categorical X labels use the Y bounds. Scatter datasets may use `{ "x": 10, "y": 25 }` points. Circular charts can sort and limit slices, combine small slices into Other, adjust the donut radius, and control labels, values, legends, sizing, colors, and themes.
+
+Math blocks always output numeric values rather than formatted strings, so their results remain usable by later calculations and charts. **Transform JSON Numbers** can calculate from a constant, a connected number, or another field in each row. For example, select `Used` as the source, `Total` as the operand field, `Value as Percentage of Operand` as the operation, and `UsagePercent` as the result field. The returned rows retain their original fields and add a numeric `UsagePercent` field that can be selected as a chart series. Nested field paths such as `metrics.used` are supported.
 
 Cron expressions use `minute hour day-of-month month weekday`; lists, ranges, and steps such as `*/15 * * * *` are supported. Schedules use the deployed application server's local time.
 
-The imported library additionally includes text/number/list/object manipulation, comparisons, dates, files/folders, console input, emitters/receivers, arbitrary JavaScript, API requests with reusable session-cookie input/output and returned session-token output, FTP/FTPS, SSH, and MySQL blocks. Network and database credentials are stored in exported `workspaces.json` when entered directly, so prefer protected files or environment-oriented custom blocks for secrets.
+The imported library additionally includes text/number/list/object manipulation, comparisons, dates, files/folders, console input, emitters/receivers, arbitrary JavaScript, API requests with reusable session-cookie input/output and returned session-token output, FTP/FTPS, SSH, and MySQL blocks. Network credentials entered directly into block options are stored in exported `workspaces.json`, so prefer protected files or environment-oriented custom blocks for those secrets. MySQL Query uses the credential set selected in application settings.
 
 Text fields support templates such as:
 
@@ -259,7 +307,7 @@ An entire field containing one template preserves its value's type, so `{{reques
 
 HTTP endpoints expose `request.method`, `request.path`, `request.endpoint`, `request.subpath`, `request.query`, `request.headers`, and `request.body`. A request uses the longest endpoint prefix that ends on a path-segment boundary: `/systems/vhins` matches `/systems`, while `/systematic` does not. An exact endpoint takes priority over a shorter prefix. **Get sub-endpoint by name** outputs the unmatched part with a leading slash (`/vhins` in this example), or `/` when the endpoint itself was requested. Body carries the request body as text or parsed JSON, while Headers exposes incoming headers as an object. HTTP request and response blocks accept configured JSON headers or connected header objects. API Call offers JSON, HTML, and Text body formats; API Reply offers the same formats and defaults to JSON. JSON request bodies are parsed when Content-Type contains `application/json`. An endpoint without an executed response block returns 204. Unmatched routes return 404; workflow failures are logged and return 500 if no response was sent. Outbound non-2xx HTTP statuses are stored in the result for branching, rather than automatically thrown.
 
-Authentication blocks accept the SQLite path from a connected Text block or use the path configured in the block as a fallback. One Text block can feed the same path into multiple authentication blocks. Relative paths resolve from the deployed application's directory; absolute paths can point at the builder's authentication database when both processes can securely access it. The `users` table and Argon2id password hashes are compatible with the builder. For generated builds, login and session checks read `project-id` and `release-channel` from `config.json` and require that project's **Login to RC** or **Login to Prod** permission. Revoking that permission invalidates subsequent checks for an existing automation session. Older manually assembled applications without release identity retain their legacy authentication behavior. Workflow browser sessions and API tokens use separate `automation_sessions` records, so they do not reuse editor sessions. Raw session tokens are returned only to the client and only SHA-256 token hashes are stored in SQLite.
+All authentication blocks use `auth.database` from the deployed application's `config.json`; they no longer contain a database field or connector. Relative paths resolve from the deployed application's directory, while generated builds point at the builder authentication database. On builder startup, existing projects are migrated by removing saved authentication-block database options and incoming database wires without changing users, groups, ACLs, or sessions. The `users` table and Argon2id password hashes are compatible with the builder. Login and session checks read `project-id` and `release-channel` from `config.json` and require that project's **Login to RC** or **Login to Prod** permission. Revoking that permission invalidates subsequent checks for an existing automation session. Older manually assembled applications without release identity retain their legacy authentication behavior. Workflow browser sessions and API tokens use separate `automation_sessions` records, so they do not reuse editor sessions. Raw session tokens are returned only to the client and only SHA-256 token hashes are stored in SQLite.
 
 **Display Login** can follow a normal **GET** HTTP endpoint, either directly or through matching emitter/receiver blocks in another active workspace. When that endpoint can reach Display Login, the runtime routes the form's POST submission directly to the login block; unrelated POST requests cannot enter the protected GET branch. **ANY** endpoints remain supported. A successful login sends a `303` redirect to the same path. Its `phidias_session` cookie is `HttpOnly`, `SameSite=Strict`, and has no `Expires` or `Max-Age`, so it is a browser-session cookie. Browser sessions also expire server-side after 24 hours. **Login Through API** accepts `username` and `password` from connected inputs or a JSON/form request body. Its API token expires after eight hours and must be sent as `Authorization: Bearer <token>`. Use **Logout** with Session type set to Browser or API to revoke the current credential.
 
@@ -314,7 +362,7 @@ Use unique lowercase filenames and types containing letters, numbers, `_` or `-`
 | GET | `/api/projects/:id/blocks` | Read block metadata |
 | DELETE | `/api/projects/:id/blocks/cache` | Clear server-side block modules and return freshly loaded metadata (Edit permission required) |
 | GET | `/api/projects/:id/export` | Download saved project ZIP |
-| GET | `/api/projects/:id/deployment-configs` | Read the separate RC and Prod host, port, and log-level profiles |
+| GET | `/api/projects/:id/deployment-configs` | Read the separate RC and Prod host, port, log-level, update URL, and forced Console Input logging profiles |
 | PUT | `/api/projects/:id/deployment-configs/:channel` | Save the `RC` or `Prod` profile and update that channel's repository ZIPs |
 | GET | `/api/projects/:id/templates` | List project HTML and CSS templates |
 | GET | `/api/projects/:id/templates/:name` | Read one project HTML or CSS template |

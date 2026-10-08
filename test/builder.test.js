@@ -8,6 +8,7 @@ const { spawn } = require('node:child_process');
 const { once } = require('node:events');
 const { createServer } = require('../server');
 const { createLogger } = require('../lib/logger');
+const { Store } = require('../lib/store');
 const { CommandConsole } = require('../lib/console');
 const { createApp, loadDefinitions, render, loadAppConfig } = require('../runtime/app');
 const { validate } = require('../runtime/validate');
@@ -52,19 +53,19 @@ test('project creation, atomic saves, conflicts, reload, and downloadable ZIP', 
   const library = await (await call(endpoint + '/blocks')).json();
   const replyFormat = library.find(block => block.type === 'respond').fields.find(field => field.key === 'format');
   assert.equal(replyFormat.default, 'JSON'); assert.ok(replyFormat.choices.includes('HTML'));
-  for (const file of ['app.js', 'workspaces.json', 'html', 'blocks/api_endpoint.js', 'blocks/get_sub_endpoint_by_name.js', 'blocks/linux_command.js', 'validate.js', 'cron.js', 'auth.js', 'logger.js', 'package.json']) await fs.access(path.join(directory, project.id, file));
+  for (const file of ['app.js', 'favicon.ico', 'workspaces.json', 'html', 'blocks/api_endpoint.js', 'blocks/get_sub_endpoint_by_name.js', 'blocks/linux_command.js', 'blocks/update_app.js', 'validate.js', 'cron.js', 'auth.js', 'logger.js', 'package.json']) await fs.access(path.join(directory, project.id, file));
   assert.equal(project.appConfig, null);
   assert.deepEqual(project.workspaceCategories, []);
   assert.equal(project.workspaces[0].numberId, 1);
   assert.deepEqual(project.workspaces[0].blocks.map(block => block.numberId), [1, 2]);
   const defaultExportConfig = JSON.parse(zipEntries(await store.export(project.id)).get('config.json'));
-  assert.deepEqual(defaultExportConfig, { port: 3001, host: '0.0.0.0', 'log-level': 3, 'project-id': project.id, 'release-channel': 'RC' });
+  assert.deepEqual(defaultExportConfig, { port: 3001, host: '0.0.0.0', 'log-level': 3, 'force-console-input-log': false, auth: { database: path.join(directory, 'auth.sqlite') }, 'project-id': project.id, 'release-channel': 'RC' });
   const probe = require('node:net').createServer();
   await new Promise(resolve => probe.listen(0, '127.0.0.1', resolve));
   const configuredPort = probe.address().port;
   await new Promise(resolve => probe.close(resolve));
   assert.deepEqual(await (await call(endpoint + '/deployment-configs')).json(), { RC: null, Prod: null });
-  const deploymentSettings = await call(endpoint + '/deployment-configs/RC', 'PUT', { port: configuredPort, host: '127.0.0.1', 'log-level': 4 });
+  const deploymentSettings = await call(endpoint + '/deployment-configs/RC', 'PUT', { port: configuredPort, host: '127.0.0.1', 'log-level': 4, 'force-console-input-log': true });
   assert.equal(deploymentSettings.status, 200);
   project.workspaceCategories = [{ id: 'public-api', name: 'Public API' }];
   project.workspaces[0].categoryId = 'public-api';
@@ -87,10 +88,13 @@ test('project creation, atomic saves, conflicts, reload, and downloadable ZIP', 
   assert.equal(exportedProject.workspaces[0].numberId, 1); assert.deepEqual(exportedProject.workspaces[0].blocks.map(block => block.numberId), [1, 2]);
   assert.ok(extracted.has('auth.js'));
   assert.ok(extracted.has('logger.js'));
+  assert.deepEqual(extracted.get('favicon.ico').subarray(0, 4), Buffer.from([0, 0, 1, 0]));
   assert.equal(JSON.parse(extracted.get('package.json')).dependencies.argon2, '^0.45.1');
   for (const name of ['api_endpoint.js', 'api_call.js', 'api_reply.js']) assert.ok(extracted.has(`blocks/${name}`));
+  for (const name of ['json_to_cartesian_chart.js', 'json_to_circular_chart.js', 'chart_helpers.cjs']) assert.ok(extracted.has(`blocks/${name}`));
+  for (const name of ['math_operation.js', 'percentage_calculator.js', 'aggregate_numbers.js', 'transform_json_numbers.js', 'math_helpers.cjs']) assert.ok(extracted.has(`blocks/${name}`));
   for (const name of ['http.js', 'request.js', 'respond.js']) assert.equal(extracted.has(`blocks/${name}`), false);
-  const deployedConfig = JSON.stringify({ port: configuredPort, host: '127.0.0.1', 'log-level': 4, 'project-id': project.id, 'release-channel': 'RC' }, null, 2) + '\n';
+  const deployedConfig = JSON.stringify({ port: configuredPort, host: '127.0.0.1', 'log-level': 4, 'force-console-input-log': true, auth: { database: path.join(directory, 'auth.sqlite') }, 'project-id': project.id, 'release-channel': 'RC' }, null, 2) + '\n';
   assert.equal(extracted.get('config.json').toString(), deployedConfig);
   const deployment = path.join(directory, 'isolated-export'); await fs.mkdir(deployment);
   for (const [filename, data] of extracted) { const destination = path.join(deployment, filename); await fs.mkdir(path.dirname(destination), { recursive: true }); await fs.writeFile(destination, data); }
@@ -106,6 +110,9 @@ test('project creation, atomic saves, conflicts, reload, and downloadable ZIP', 
   assert.equal(Number(address), configuredPort);
   assert.equal(await fs.readFile(path.join(deployment, 'config.json'), 'utf8'), deployedConfig);
   const runtimeResponse = await fetch(`http://127.0.0.1:${address}/hello`); assert.equal(runtimeResponse.status, 200); assert.equal(await runtimeResponse.text(), 'Updated application');
+  const runtimeFavicon = await fetch(`http://127.0.0.1:${address}/favicon.ico`);
+  assert.equal(runtimeFavicon.status, 200); assert.equal(runtimeFavicon.headers.get('content-type'), 'image/x-icon');
+  assert.deepEqual(Buffer.from(await runtimeFavicon.arrayBuffer()), extracted.get('favicon.ico'));
   const exited = once(child, 'exit'); child.kill('SIGTERM'); await exited;
   const runtimeLogs = await fs.readdir(path.join(deployment, 'log'));
   assert.equal(runtimeLogs.length, 1); assert.match(runtimeLogs[0], /^\d{4}-\d{2}-\d{2}-1\.txt$/);
@@ -116,11 +123,13 @@ test('project creation, atomic saves, conflicts, reload, and downloadable ZIP', 
 });
 
 test('saved revisions publish to a browsable RC repository and can be promoted, restored, and deleted', async t => {
-  const { call, rawCall, base } = await fixture(t);
+  const { call, rawCall, base, directory } = await fixture(t);
   const project = await (await call('/api/projects', 'POST', { name: 'Delphi' })).json();
   const endpoint = `/api/projects/${project.id}`;
-  assert.equal((await call(endpoint + '/deployment-configs/RC', 'PUT', { port: 7779, host: '127.0.0.1', 'log-level': 4 })).status, 200);
-  assert.equal((await call(endpoint + '/deployment-configs/Prod', 'PUT', { port: 7778, host: '0.0.0.0', 'log-level': 2 })).status, 200);
+  const rcUpdateUrl = 'https://builder.example/repo/DelphiRC/latest.zip';
+  const prodUpdateUrl = 'https://builder.example/repo/DelphiProd/latest.zip';
+  assert.equal((await call(endpoint + '/deployment-configs/RC', 'PUT', { port: 7779, host: '127.0.0.1', 'log-level': 4, 'force-console-input-log': true, 'update-url': rcUpdateUrl })).status, 200);
+  assert.equal((await call(endpoint + '/deployment-configs/Prod', 'PUT', { port: 7778, host: '0.0.0.0', 'log-level': 2, 'update-url': prodUpdateUrl })).status, 200);
   project.workspaces[0].blocks[1].options.body = 'revision two';
   const revisionTwo = await (await call(endpoint, 'PUT', project)).json();
   assert.equal(revisionTwo.revision, 2);
@@ -146,7 +155,7 @@ test('saved revisions publish to a browsable RC repository and can be promoted, 
   assert.equal(rcRevision.status, 200);
   const rcFiles = zipEntries(Buffer.from(await rcRevision.arrayBuffer()));
   assert.equal(JSON.parse(rcFiles.get('workspaces.json')).revision, 2);
-  assert.deepEqual(JSON.parse(rcFiles.get('config.json')), { port: 7779, host: '127.0.0.1', 'log-level': 4, 'project-id': project.id, 'release-channel': 'RC' });
+  assert.deepEqual(JSON.parse(rcFiles.get('config.json')), { port: 7779, host: '127.0.0.1', 'log-level': 4, 'force-console-input-log': true, 'update-url': rcUpdateUrl, auth: { database: path.join(directory, 'auth.sqlite') }, 'project-id': project.id, 'release-channel': 'RC' });
   assert.equal((await call('/repo/DelphiRC/latest.zip')).status, 200);
 
   assert.equal((await call(endpoint + '/versions/2/promote', 'POST', {})).status, 200);
@@ -155,11 +164,11 @@ test('saved revisions publish to a browsable RC repository and can be promoted, 
   assert.equal(versions[0].prodUrl, '/repo/DelphiProd/delphi.rev2.zip');
   const prodBeforeNextSave = Buffer.from(await (await call('/repo/DelphiProd/latest.zip')).arrayBuffer());
   assert.equal(JSON.parse(zipEntries(prodBeforeNextSave).get('workspaces.json')).revision, 2);
-  assert.deepEqual(JSON.parse(zipEntries(prodBeforeNextSave).get('config.json')), { port: 7778, host: '0.0.0.0', 'log-level': 2, 'project-id': project.id, 'release-channel': 'Prod' });
+  assert.deepEqual(JSON.parse(zipEntries(prodBeforeNextSave).get('config.json')), { port: 7778, host: '0.0.0.0', 'log-level': 2, 'force-console-input-log': false, 'update-url': prodUpdateUrl, auth: { database: path.join(directory, 'auth.sqlite') }, 'project-id': project.id, 'release-channel': 'Prod' });
 
-  assert.equal((await call(endpoint + '/deployment-configs/Prod', 'PUT', { port: 7780, host: '127.0.0.1', 'log-level': 1 })).status, 200);
+  assert.equal((await call(endpoint + '/deployment-configs/Prod', 'PUT', { port: 7780, host: '127.0.0.1', 'log-level': 1, 'force-console-input-log': true, 'update-url': prodUpdateUrl })).status, 200);
   const reconfiguredProd = zipEntries(Buffer.from(await (await call('/repo/DelphiProd/latest.zip')).arrayBuffer()));
-  assert.deepEqual(JSON.parse(reconfiguredProd.get('config.json')), { port: 7780, host: '127.0.0.1', 'log-level': 1, 'project-id': project.id, 'release-channel': 'Prod' });
+  assert.deepEqual(JSON.parse(reconfiguredProd.get('config.json')), { port: 7780, host: '127.0.0.1', 'log-level': 1, 'force-console-input-log': true, 'update-url': prodUpdateUrl, auth: { database: path.join(directory, 'auth.sqlite') }, 'project-id': project.id, 'release-channel': 'Prod' });
 
   revisionTwo.workspaces[0].blocks[1].options.body = 'revision three';
   const revisionThree = await (await call(endpoint, 'PUT', revisionTwo)).json();
@@ -179,6 +188,49 @@ test('saved revisions publish to a browsable RC repository and can be promoted, 
   versions = await (await call(endpoint + '/versions')).json();
   assert.deepEqual(versions.map(version => version.revision), [4, 2]);
   assert.equal((await call('/repo/DelphiRC/delphi.rev3.zip')).status, 404);
+});
+
+test('database credential sets stay in auth.sqlite and selected application settings resolve at runtime', async t => {
+  const { call, auth, directory } = await fixture(t);
+  const project = await (await call('/api/projects', 'POST', { name: 'Database app' })).json();
+  const createdResponse = await call('/api/database-credentials', 'POST', { name: 'Reporting', host: 'mysql.internal', port: 3307, username: 'reporter', password: 'super-secret', database: 'reports' });
+  assert.equal(createdResponse.status, 201);
+  const credential = await createdResponse.json();
+  assert.equal(Object.hasOwn(credential, 'password'), false);
+  const listed = await (await call('/api/database-credentials')).json();
+  assert.equal(listed.length, 1); assert.equal(Object.hasOwn(listed[0], 'password'), false);
+  const endpoint = `/api/projects/${project.id}`;
+  const saved = await call(endpoint + '/deployment-configs/RC', 'PUT', { port: 3001, host: '127.0.0.1', 'log-level': 3, 'database-credential-set': credential.id });
+  assert.equal(saved.status, 200);
+  const archive = zipEntries(Buffer.from(await (await call(endpoint + '/export')).arrayBuffer()));
+  const config = JSON.parse(archive.get('config.json'));
+  assert.deepEqual(config.auth, { database: path.join(directory, 'auth.sqlite') });
+  assert.deepEqual(config.database, { 'credential-set': credential.id });
+  assert.doesNotMatch(archive.get('config.json').toString(), /super-secret/);
+  assert.doesNotMatch(archive.get('workspaces.json').toString(), /super-secret/);
+  assert.equal((await call(`/api/database-credentials/${credential.id}`, 'DELETE', {})).status, 409);
+  assert.equal(auth.databaseCredential(credential.id).password, 'super-secret');
+});
+
+test('startup migration removes authentication database options and their incoming wires', async t => {
+  const { call, directory, repositoryDirectory } = await fixture(t);
+  const project = await (await call('/api/projects', 'POST', { name: 'Legacy login project' })).json();
+  const workspace = project.workspaces[0];
+  const authenticationTypes = ['display_login', 'check_if_logged_in', 'login_through_api', 'check_api_token', 'logout', 'get_current_logged_in_user'];
+  workspace.blocks.push({ id: 'legacy-path', numberId: 3, type: 'text', x: 0, y: 0, options: { text: '/old/auth.sqlite' } });
+  authenticationTypes.forEach((type, index) => {
+    workspace.blocks.push({ id: `legacy-auth-${index}`, numberId: index + 4, type, x: 0, y: 0, options: { database: '/old/auth.sqlite', ...(['logout', 'get_current_logged_in_user'].includes(type) ? { sessionType: 'Browser' } : {}) } });
+    workspace.connections.push({ id: `legacy-database-wire-${index}`, from: 'legacy-path', output: 'text', to: `legacy-auth-${index}`, input: 'database', kind: 'value' });
+  });
+  const filename = path.join(directory, project.id, 'workspaces.json');
+  await fs.writeFile(filename, JSON.stringify(project, null, 2));
+  await new Store(directory, repositoryDirectory).init();
+  const migrated = JSON.parse(await fs.readFile(filename, 'utf8'));
+  for (const type of authenticationTypes) {
+    const block = migrated.workspaces[0].blocks.find(item => item.type === type);
+    assert.equal(Object.hasOwn(block.options, 'database'), false);
+  }
+  assert.equal(migrated.workspaces[0].connections.some(connection => connection.input === 'database'), false);
 });
 
 test('HTML templates are edited through the API, included in builds, and restored with revisions', async t => {
@@ -226,10 +278,15 @@ test('password login, protected routes, CSRF, logout, malformed requests and tra
   assert.equal(wrong.status, 401); assert.equal(missing.status, 401); assert.deepEqual(await wrong.json(), await missing.json());
   const page = await fetch(base + '/', { redirect: 'manual' });
   assert.equal(page.status, 303); assert.equal(page.headers.get('location'), '/login');
-  assert.match(await (await fetch(base + '/login')).text(), /autocomplete="current-password"/);
+  const loginHTML = await (await fetch(base + '/login')).text();
+  assert.match(loginHTML, /autocomplete="current-password"/); assert.match(loginHTML, /rel="icon" href="\/favicon\.ico"/);
+  const builderFavicon = await fetch(base + '/favicon.ico');
+  assert.equal(builderFavicon.status, 200); assert.equal(builderFavicon.headers.get('content-type'), 'image/x-icon');
+  assert.deepEqual(Buffer.from(await builderFavicon.arrayBuffer()).subarray(0, 4), Buffer.from([0, 0, 1, 0]));
   assert.equal((await call('/api/projects')).status, 200);
   const editorPage = await fetch(base + '/', { headers: { cookie: headers.cookie } });
   const editorHTML = await editorPage.text();
+  assert.match(editorHTML, /rel="icon" href="\/favicon\.ico"/);
   assert.doesNotMatch(editorHTML, /id="app-settings"/);
   assert.match(editorHTML, /data-deployment-channel="RC"/);
   assert.match(editorHTML, /data-deployment-channel="Prod"/);
@@ -364,6 +421,8 @@ test('validation rejects dangling wires, duplicate routes, loops, and invalid op
   await assert.rejects(store.saveDeploymentConfig(project.id, 'RC', { port: 70000, host: '127.0.0.1' }), /Application port/);
   await assert.rejects(store.saveDeploymentConfig(project.id, 'Prod', { port: 3001, host: 'localhost', 'log-level': 3 }), /Application host/);
   await assert.rejects(store.saveDeploymentConfig(project.id, 'RC', { port: 3001, host: '127.0.0.1', 'log-level': 5 }), /Application log level/);
+  await assert.rejects(store.saveDeploymentConfig(project.id, 'RC', { port: 3001, host: '127.0.0.1', 'force-console-input-log': 'yes' }), /true or false/);
+  await assert.rejects(store.saveDeploymentConfig(project.id, 'RC', { port: 3001, host: '127.0.0.1', 'update-url': 'ftp://updates.example/latest.zip' }), /HTTP or HTTPS/);
 });
 
 test('runtime logs the workspace and block numeric IDs for workflow errors', async t => {
@@ -641,6 +700,36 @@ test('Stop App and Restart App request graceful runtime control', async t => {
   assert.equal(definitions.get('restart_app').category, 'System');
 });
 
+test('Update Application follows the configured release channel and command sequence', async () => {
+  const block = require('../blocks/update_app');
+  const commands = [], lines = [];
+  const ctx = {
+    directory: '/srv/delphi',
+    deployment: { channel: 'RC', updateUrl: 'https://builder.example/repo/DelphiRC/latest.zip' },
+    signal: new AbortController().signal,
+    logger: { forceInfo(_format, message) { lines.push(message); } }
+  };
+  const output = await block.performUpdate(ctx, async (executable, args, display) => {
+    commands.push({ executable, args, display });
+    return { failed: false, exitCode: 0, output: '' };
+  });
+  assert.deepEqual(commands, [
+    { executable: 'rm', args: ['-f', 'current.zip'], display: 'rm current.zip' },
+    { executable: 'wget', args: ['-O', 'latest.zip', ctx.deployment.updateUrl], display: `wget ${ctx.deployment.updateUrl}` },
+    { executable: 'unzip', args: ['-o', 'latest.zip'], display: 'unzip -o latest.zip' }
+  ]);
+  assert.deepEqual(lines, [
+    '[SYSTEM] Updating to latest RC revision...',
+    '[UpdateManager] Deleting current zip',
+    '[UpdateManager] Downloading latest version',
+    '[UpdateManager] Unzipping latest.zip',
+    '[UpdateManager] Update completed',
+    '[SYSTEM] New version installed. Please restart the Node server to apply the update.'
+  ]);
+  assert.match(output, /latest RC revision/);
+  await assert.rejects(block.performUpdate({ ...ctx, deployment: { channel: 'Prod', updateUrl: null } }, async () => {}), /No update URL.*Prod/);
+});
+
 test('startup and interval triggers, disabled workspaces, clean shutdown', async t => {
   const definitions = loadDefinitions(path.resolve(__dirname, '../blocks')); let runs = 0;
   definitions.set('count', { type: 'count', fields: [], outputs: [], execute: async () => { runs++; } });
@@ -675,14 +764,18 @@ test('cron triggers follow five-field local schedules and reject invalid express
 test('generated app config is created once, validated, and preserved', async t => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'phidias-app-config-'));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
-  assert.deepEqual(loadAppConfig(directory), { port: 3001, host: '0.0.0.0', 'log-level': 3 });
+  assert.deepEqual(loadAppConfig(directory), { port: 3001, host: '0.0.0.0', 'log-level': 3, 'force-console-input-log': false, auth: { database: 'data/auth.sqlite' } });
   const filename = path.join(directory, 'config.json');
   const configured = JSON.stringify({ port: 4321, host: '127.0.0.1' }, null, 2) + '\n';
   await fs.writeFile(filename, configured);
-  assert.deepEqual(loadAppConfig(directory), { port: 4321, host: '127.0.0.1', 'log-level': 3 });
+  assert.deepEqual(loadAppConfig(directory), { port: 4321, host: '127.0.0.1', 'log-level': 3, 'force-console-input-log': false, auth: { database: 'data/auth.sqlite' } });
   assert.equal(await fs.readFile(filename, 'utf8'), configured);
   await fs.writeFile(filename, '{broken');
   assert.throws(() => loadAppConfig(directory), /Invalid config.json/);
+  await fs.writeFile(filename, JSON.stringify({ port: 4321, host: '127.0.0.1', 'force-console-input-log': 'yes' }));
+  assert.throws(() => loadAppConfig(directory), /force-console-input-log/);
+  await fs.writeFile(filename, JSON.stringify({ port: 4321, host: '127.0.0.1', database: { 'credential-set': 'bad', 'auth-database': '/tmp/auth.sqlite' } }));
+  assert.throws(() => loadAppConfig(directory), /database/);
 });
 
 test('templates preserve objects and do not traverse prototypes or evaluate code', () => {

@@ -59,6 +59,7 @@ function normalizeDefinition(definition, filename) {
     name: definition.name || type,
     description: definition.description || 'Imported Discord App Builder block.',
     category: definition.category || 'Imported',
+    hidden: Boolean(definition.hidden),
     trigger,
     fields,
     inputs: inputPorts,
@@ -187,6 +188,19 @@ async function executeLegacy(definition, ctx, block, connectedInputs, follow) {
     api.StoreOutputValue(source.readResponseSession(response.headers), 'session');
     api.StoreOutputValue(source.readSessionToken(response.headers, data), 'session_token');
     api.RunNextBlock('action');
+    await Promise.all(branches);
+    return stored;
+  }
+  if (definition.type === 'database_query') {
+    try {
+      const database = await ctx.database();
+      const [rows] = await database.execute(String(getInput('query', '')));
+      api.StoreOutputValue(rows, 'response');
+      api.RunNextBlock('action');
+    } catch (error) {
+      api.StoreOutputValue(error.message, 'errormsg');
+      api.RunNextBlock('erroraction');
+    }
     await Promise.all(branches);
     return stored;
   }

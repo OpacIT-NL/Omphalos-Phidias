@@ -36,6 +36,31 @@ test('lifecycle notices remain visible to AMP when Info logging is disabled', as
   assert.match(output.lines.join(''), /\[INFO\] Automation listening on 0\.0\.0\.0:3001/);
   assert.equal(await fs.readFile(logger.filename, 'utf8'), '');
 });
+test('forced Info records bypass console and file thresholds', async t => {
+  const folder = await directory(t), output = capture();
+  const logger = createLogger({ level: 0, fileLevel: 0, directory: folder, ...output, now: () => new Date('2026-10-08T12:00:00.000Z') });
+  logger.info('Filtered Info');
+  logger.forceInfo('Forced Info %s', 'record');
+  assert.doesNotMatch(output.lines.join(''), /Filtered Info/);
+  assert.match(output.lines.join(''), /\[INFO\] Forced Info record/);
+  const file = await fs.readFile(logger.filename, 'utf8');
+  assert.doesNotMatch(file, /Filtered Info/);
+  assert.match(file, /\[INFO\] Forced Info record/);
+});
+test('starting a new log cycle allocates the next launch file', async t => {
+  const folder = await directory(t), output = capture();
+  const logger = createLogger({ level: 4, directory: folder, ...output, now: () => new Date('2026-10-08T12:00:00.000Z') });
+  const first = logger.filename;
+  logger.info('Before restart');
+  const second = logger.startNewCycle();
+  assert.equal(logger.filename, second);
+  assert.equal(path.basename(first), '2026-10-08-1.txt');
+  assert.equal(path.basename(second), '2026-10-08-2.txt');
+  logger.info('After restart');
+  assert.match(await fs.readFile(first, 'utf8'), /Before restart/);
+  assert.doesNotMatch(await fs.readFile(first, 'utf8'), /After restart/);
+  assert.match(await fs.readFile(second, 'utf8'), /After restart/);
+});
 test('console and file levels filter independently and can change while running', async t => {
   const folder = await directory(t), output = capture();
   const logger = createLogger({ level: 1, fileLevel: 4, directory: folder, ...output, now: () => new Date('2026-09-26T12:34:56.000Z') });
@@ -51,7 +76,7 @@ test('console and file levels filter independently and can change while running'
   file = await fs.readFile(logger.filename, 'utf8');
   assert.doesNotMatch(file, /Console only/);
 });
-test('each logger launch gets the next daily file and keeps multiline entries on one line', async t => {
+test('each logger launch gets the next daily file and renders multiline entries as prefixed lines', async t => {
   const folder = await directory(t), output = capture();
   let time = new Date('2026-09-26T23:59:59Z');
   const options = { directory: folder, ...output, now: () => time };
@@ -67,7 +92,9 @@ test('each logger launch gets the next daily file and keeps multiline entries on
   assert.equal(path.basename(secondLogger.filename), '2026-09-26-2.txt');
   assert.equal(path.basename(thirdLogger.filename), '2026-09-27-1.txt');
   assert.match(await fs.readFile(firstLogger.filename, 'utf8'), /First entry[\s\S]*\[ERROR\] Error: Third entry/);
-  assert.match(await fs.readFile(secondLogger.filename, 'utf8'), /Second entry\\nforged log\\r\\u001b/);
+  const multiline = await fs.readFile(secondLogger.filename, 'utf8');
+  assert.equal(multiline, '2026-09-26T23:59:59.000Z [WARNING] Second entry\n2026-09-26T23:59:59.000Z [WARNING] forged log\n2026-09-26T23:59:59.000Z [WARNING] \\u001b\n');
+  assert.doesNotMatch(multiline, /\\n|\\r/);
   assert.match(await fs.readFile(thirdLogger.filename, 'utf8'), /New date/);
 });
 test('invalid log levels are rejected; file failures still report to console', async t => {

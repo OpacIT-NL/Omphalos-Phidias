@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>OpacIT Omphalos Phidias</title>
+  <link rel="icon" href="/favicon.ico" sizes="any">
   <link rel="stylesheet" href="/style.css">
   <script src="/editor.js" defer></script>
 </head>
@@ -47,7 +48,7 @@
         <div class="sidebar-project" hidden>
           <header><div><strong id="project-title"></strong><span>Automation project</span></div><button id="workspace-settings" title="Project and workspace settings" disabled>•••</button></header>
           <div class="workspace-groups">
-            <div class="category-row"><span>⌄</span><strong>WORKSPACES</strong><button id="add-workspace-category" title="Add workspace category" aria-label="Add workspace category" disabled>▤</button><button id="add-workspace" title="Add workspace" aria-label="Add workspace" disabled>＋</button></div>
+            <div class="category-row"><span>⌄</span><strong>WORKSPACES</strong><button id="add-workspace-category" title="Add workspace group" aria-label="Add workspace group" disabled>▤</button><button id="add-workspace" title="Add workspace" aria-label="Add workspace" disabled>＋</button></div>
             <div id="workspace-list"></div>
           </div>
           <footer><span id="workspace-status">No workspace</span><br><span class="app-version">Phidias v{{APP_VERSION}}</span></footer>
@@ -96,9 +97,16 @@
   <dialog id="form-dialog"><form method="dialog"><h2 id="dialog-title"></h2><div id="dialog-fields"></div><p id="dialog-error" role="alert"></p><div class="dialog-actions"><button id="dialog-cancel" type="button">Cancel</button><button id="dialog-submit" type="submit" value="default" class="primary">Continue</button></div></form></dialog>
   <dialog id="version-dialog" class="version-dialog">
     <header><div><h2>Version manager</h2><p>Saved revisions begin in RC. Promote a tested revision to update Prod.</p></div><button id="version-close" type="button" aria-label="Close version manager">×</button></header>
+    <section class="database-credentials" aria-label="Database credential sets">
+      <div><b>Database credential sets</b><small>Stored in auth.sqlite. Generated applications resolve the selected set when they start.</small></div>
+      <select id="database-credential-manager" aria-label="Database credential set"></select>
+      <button id="database-credential-new" type="button" hidden>＋ New</button>
+      <button id="database-credential-edit" type="button" hidden>Edit</button>
+      <button id="database-credential-delete" type="button" class="danger" hidden>Delete</button>
+    </section>
     <section class="deployment-settings" aria-label="Deployment settings">
-      <form data-deployment-channel="RC"><header><div><b>RC settings</b><small>Used for exports and RC builds</small></div><span class="channel rc">RC</span></header><div><label>Host<input name="host" required autocomplete="off" spellcheck="false"></label><label>Port<input name="port" required type="number" min="1" max="65535"></label><label>Log level<select name="log-level"><option value="0">0 · Critical</option><option value="1">1 · Error</option><option value="2">2 · Warning</option><option value="3">3 · Info</option><option value="4">4 · Debug</option></select></label><button type="submit">Save RC settings</button></div></form>
-      <form data-deployment-channel="Prod"><header><div><b>Production settings</b><small>Used when a revision is promoted</small></div><span class="channel prod">PROD</span></header><div><label>Host<input name="host" required autocomplete="off" spellcheck="false"></label><label>Port<input name="port" required type="number" min="1" max="65535"></label><label>Log level<select name="log-level"><option value="0">0 · Critical</option><option value="1">1 · Error</option><option value="2">2 · Warning</option><option value="3">3 · Info</option><option value="4">4 · Debug</option></select></label><button type="submit">Save Prod settings</button></div></form>
+      <form data-deployment-channel="RC"><header><div><b>RC settings</b><small>Used for exports and RC builds</small></div><span class="channel rc">RC</span></header><div><label>Host<input name="host" required autocomplete="off" spellcheck="false"></label><label>Port<input name="port" required type="number" min="1" max="65535"></label><label>Log level<select name="log-level"><option value="0">0 · Critical</option><option value="1">1 · Error</option><option value="2">2 · Warning</option><option value="3">3 · Info</option><option value="4">4 · Debug</option></select></label><button type="submit">Save RC settings</button><label class="deployment-wide">Update URL<input name="update-url" type="url" maxlength="2048" placeholder="https://builder.example/repo/MyAppRC/latest.zip" autocomplete="off" spellcheck="false"></label><label class="deployment-database">Database credential set<select name="database-credential-set"></select></label><label class="deployment-checkbox"><input name="force-console-input-log" type="checkbox">Force Console input log</label></div></form>
+      <form data-deployment-channel="Prod"><header><div><b>Production settings</b><small>Used when a revision is promoted</small></div><span class="channel prod">PROD</span></header><div><label>Host<input name="host" required autocomplete="off" spellcheck="false"></label><label>Port<input name="port" required type="number" min="1" max="65535"></label><label>Log level<select name="log-level"><option value="0">0 · Critical</option><option value="1">1 · Error</option><option value="2">2 · Warning</option><option value="3">3 · Info</option><option value="4">4 · Debug</option></select></label><button type="submit">Save Prod settings</button><label class="deployment-wide">Update URL<input name="update-url" type="url" maxlength="2048" placeholder="https://builder.example/repo/MyAppProd/latest.zip" autocomplete="off" spellcheck="false"></label><label class="deployment-database">Database credential set<select name="database-credential-set"></select></label><label class="deployment-checkbox"><input name="force-console-input-log" type="checkbox">Force Console input log</label></div></form>
     </section>
     <div id="version-latest" class="version-latest"></div>
     <div id="version-list" class="version-list"></div>

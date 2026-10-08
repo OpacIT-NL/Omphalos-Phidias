@@ -12,6 +12,15 @@ const node = (id, type, options) => ({ id, type, x: 0, y: 0, options });
 const edge = (id, from, output, to, input = 'action', kind = 'action') => ({ id, from, output, to, input, kind });
 const reply = (id, status, format, body) => node(id, 'respond', { status, format, body, headers: '{}' });
 
+test('authentication blocks expose no per-block SQLite path setting or connector', () => {
+  const definitions = loadDefinitions(path.resolve(__dirname, '../blocks'));
+  for (const type of ['display_login', 'check_if_logged_in', 'login_through_api', 'check_api_token', 'logout', 'get_current_logged_in_user']) {
+    const definition = definitions.get(type);
+    assert.equal(definition.fields.some(field => field.key === 'database'), false);
+    assert.equal(definition.inputPorts.some(port => port.id === 'database'), false);
+  }
+});
+
 test('workflow browser sessions and API bearer tokens use a builder-compatible auth database', async t => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'phidias-workflow-auth-'));
   const database = path.join(directory, 'builder-auth.sqlite');
@@ -20,44 +29,35 @@ test('workflow browser sessions and API bearer tokens use a builder-compatible a
   builderAuth.close();
 
   const blocks = [
-    node('database-path', 'text', { text: database }),
     node('browser-endpoint', 'http', { method: 'GET', path: '/protected' }),
-    node('browser-check', 'check_if_logged_in', { database: './unused-auth.sqlite' }),
-    node('browser-login', 'display_login', { database: './unused-auth.sqlite' }),
-    node('browser-user', 'get_current_logged_in_user', { database: './unused-auth.sqlite', sessionType: 'Browser' }),
+    node('browser-check', 'check_if_logged_in', {}),
+    node('browser-login', 'display_login', {}),
+    node('browser-user', 'get_current_logged_in_user', { sessionType: 'Browser' }),
     reply('browser-ok', 200, 'Text', 'missing user'),
     node('cross-browser-endpoint', 'http', { method: 'GET', path: '/cross-protected' }),
     node('cross-browser-emitter-id', 'text', { text: 'cross-browser-auth' }),
     node('cross-browser-emitter', 'emitter', { restriction_type: 'all', search_type: 'number' }),
 
     node('browser-logout-endpoint', 'http', { method: 'POST', path: '/browser-logout' }),
-    node('browser-logout', 'logout', { database: './unused-auth.sqlite', sessionType: 'Browser' }),
+    node('browser-logout', 'logout', { sessionType: 'Browser' }),
     reply('browser-logout-ok', 200, 'Text', 'logged out'),
 
     node('api-login-endpoint', 'http', { method: 'POST', path: '/api-login' }),
-    node('api-login', 'login_through_api', { database: './unused-auth.sqlite' }),
+    node('api-login', 'login_through_api', {}),
     reply('api-login-ok', 200, 'JSON', '{}'),
     reply('api-login-error', 401, 'JSON', 'login failed'),
 
     node('api-protected-endpoint', 'http', { method: 'GET', path: '/api-protected' }),
-    node('api-check', 'check_api_token', { database: './unused-auth.sqlite' }),
-    node('api-user', 'get_current_logged_in_user', { database: './unused-auth.sqlite', sessionType: 'API' }),
+    node('api-check', 'check_api_token', {}),
+    node('api-user', 'get_current_logged_in_user', { sessionType: 'API' }),
     reply('api-protected-ok', 200, 'Text', 'missing user'),
     reply('api-protected-denied', 401, 'JSON', 'unauthorized'),
 
     node('api-logout-endpoint', 'http', { method: 'POST', path: '/api-logout' }),
-    node('api-logout', 'logout', { database: './unused-auth.sqlite', sessionType: 'API' }),
+    node('api-logout', 'logout', { sessionType: 'API' }),
     reply('api-logout-ok', 200, 'Text', 'logged out')
   ];
   const connections = [
-    edge('db1', 'database-path', 'text', 'browser-check', 'database', 'value'),
-    edge('db2', 'database-path', 'text', 'browser-login', 'database', 'value'),
-    edge('db3', 'database-path', 'text', 'browser-user', 'database', 'value'),
-    edge('db4', 'database-path', 'text', 'browser-logout', 'database', 'value'),
-    edge('db5', 'database-path', 'text', 'api-login', 'database', 'value'),
-    edge('db6', 'database-path', 'text', 'api-check', 'database', 'value'),
-    edge('db7', 'database-path', 'text', 'api-user', 'database', 'value'),
-    edge('db8', 'database-path', 'text', 'api-logout', 'database', 'value'),
     edge('b1', 'browser-endpoint', 'next', 'browser-check'),
     edge('b2', 'browser-check', 'false', 'browser-login'),
     edge('b3', 'browser-check', 'true', 'browser-user'),
@@ -91,12 +91,11 @@ test('workflow browser sessions and API bearer tokens use a builder-compatible a
   const crossWorkspace = {
     id: 'cross-auth', name: 'Shared browser authentication', active: true,
     blocks: [
-      node('cross-database-path', 'text', { text: database }),
       node('cross-receiver-id', 'text', { text: 'cross-browser-auth' }),
       node('cross-receiver', 'receiver', {}),
-      node('cross-check', 'check_if_logged_in', { database: './unused-auth.sqlite' }),
-      node('cross-login', 'display_login', { database: './unused-auth.sqlite' }),
-      node('cross-user', 'get_current_logged_in_user', { database: './unused-auth.sqlite', sessionType: 'Browser' }),
+      node('cross-check', 'check_if_logged_in', {}),
+      node('cross-login', 'display_login', {}),
+      node('cross-user', 'get_current_logged_in_user', { sessionType: 'Browser' }),
       reply('cross-ok', 200, 'Text', 'missing user')
     ],
     connections: [
@@ -106,13 +105,11 @@ test('workflow browser sessions and API bearer tokens use a builder-compatible a
       edge('cr4', 'cross-check', 'true', 'cross-user'),
       edge('cr5', 'cross-login', 'authenticated', 'cross-user'),
       edge('cr6', 'cross-user', 'found', 'cross-ok'),
-      edge('cr7', 'cross-user', 'username', 'cross-ok', 'body', 'value'),
-      edge('cr8', 'cross-database-path', 'text', 'cross-check', 'database', 'value'),
-      edge('cr9', 'cross-database-path', 'text', 'cross-login', 'database', 'value'),
-      edge('cr10', 'cross-database-path', 'text', 'cross-user', 'database', 'value')
+      edge('cr7', 'cross-user', 'username', 'cross-ok', 'body', 'value')
     ]
   };
   const document = { version: 1, name: 'Secured application', workspaces: [{ id: 'main', name: 'Main', active: true, blocks, connections }, crossWorkspace] };
+  await fs.writeFile(path.join(directory, 'config.json'), JSON.stringify({ port: 3001, host: '127.0.0.1', 'log-level': 3, auth: { database } }));
   const errors = [];
   const app = createApp({ directory, document, definitions: loadDefinitions(path.resolve(__dirname, '../blocks')), onError: error => errors.push(error) });
   const address = await app.start(0, '127.0.0.1');
@@ -127,6 +124,7 @@ test('workflow browser sessions and API bearer tokens use a builder-compatible a
   assert.match(loginHTML, /OpacIT Omphalos/);
   assert.match(loginHTML, /Phidias · Secured application/);
   assert.match(loginHTML, /autocomplete="current-password"/);
+  assert.match(loginHTML, /rel="icon" href="\/favicon\.ico"/);
 
   const wrongLogin = await fetch(base + '/protected', {
     method: 'POST', redirect: 'manual', headers: { 'content-type': 'application/x-www-form-urlencoded' },
@@ -208,16 +206,15 @@ test('login blocks enforce the project and RC or Prod identity packaged in confi
   auth.setGrants('user', rcUser.id, projectId, ['login_rc']);
   auth.close();
   const blocks = [
-    node('db', 'text', { text: database }),
     node('endpoint', 'http', { method: 'GET', path: '/login' }),
-    node('login', 'display_login', { database: './unused.sqlite' }),
+    node('login', 'display_login', {}),
     reply('ok', 200, 'Text', 'signed in')
   ];
   const document = { version: 1, name: 'ACL app', workspaces: [{ id: 'main', name: 'Main', active: true, blocks, connections: [
-    edge('db-login', 'db', 'text', 'login', 'database', 'value'), edge('start', 'endpoint', 'next', 'login'), edge('done', 'login', 'authenticated', 'ok')
+    edge('start', 'endpoint', 'next', 'login'), edge('done', 'login', 'authenticated', 'ok')
   ] }] };
   const definitions = loadDefinitions(path.resolve(__dirname, '../blocks'));
-  const writeConfig = channel => fs.writeFile(path.join(directory, 'config.json'), JSON.stringify({ port: 3001, host: '127.0.0.1', 'log-level': 3, 'project-id': projectId, 'release-channel': channel }));
+  const writeConfig = channel => fs.writeFile(path.join(directory, 'config.json'), JSON.stringify({ port: 3001, host: '127.0.0.1', 'log-level': 3, auth: { database }, 'project-id': projectId, 'release-channel': channel }));
   const submit = (base, username, password) => fetch(base + '/login', { method: 'POST', redirect: 'manual', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ username, password }) });
 
   await writeConfig('RC');

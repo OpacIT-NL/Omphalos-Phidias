@@ -6,9 +6,10 @@ const initials = name => String(name || 'Project').split(/[\s_-]+/).filter(Boole
 let project = null, projects = [], definitions = [], workspaceID = null, selectedEdge = null, pending = null;
 let csrfToken = '', dirty = false, generation = 0, saving = null, view = { x: 0, y: 60, zoom: 1 }, toastTimer;
 const selectedBlocks = new Set(), openWorkspaceIDs = new Set();
-let blockClipboard = null, workspaceClipboard = null, clipboardKind = null, pasteSequence = 0, workspaceContextID = null, draggedWorkspaceID = null;
+let blockClipboard = null, workspaceClipboard = null, clipboardKind = null, pasteSequence = 0, workspaceContextID = null, draggedWorkspaceID = null, draggedWorkspaceCategoryID = null;
 let templateNames = [], templateOriginalName = null, templateDirty = false;
 let sessionPermissions = {}, accessData = null, accessSelection = null;
+let databaseCredentials = [];
 let webConsoleState = null, webConsolePolling = false;
 let pickerWorldPosition = null;
 let geometryFrame = 0;
@@ -30,6 +31,7 @@ const nodeResizeObserver = new ResizeObserver(entries => {
 });
 const ws = () => project?.workspaces.find(item => item.id === workspaceID);
 const def = type => definitions.find(item => item.type === type);
+const canEditProject = () => Boolean(project?.access?.includes('edit'));
 const nextNumberId = items => Math.max(0, ...items.map(item => Number.isInteger(item.numberId) && item.numberId > 0 ? item.numberId : 0)) + 1;
 const defaultNodeWidth = block => (def(block.type)?.fields.length ? 500 : 300);
 const nodeWidth = block => Number.isFinite(block.width) ? block.width : defaultNodeWidth(block);
@@ -60,7 +62,7 @@ function modalField(field) {
   const checked = field.type === 'checkbox' && field.value ? 'checked' : '';
   const value = field.type === 'checkbox' ? '' : 'value="' + escapeHTML(field.value || '') + '"';
   const maxlength = field.type === 'password' ? 1000 : 100;
-  return '<label class="field"><span>' + label + '</span><input name="' + name + '" type="' + (field.type || 'text') + '" ' + checked + ' ' + value + ' maxlength="' + maxlength + '" required autocomplete="off"></label>';
+  return '<label class="field"><span>' + label + '</span><input name="' + name + '" type="' + (field.type || 'text') + '" ' + checked + ' ' + value + ' maxlength="' + maxlength + '" ' + (field.optional ? '' : 'required') + ' autocomplete="off"></label>';
 }
 function modal(title, fields, submit = 'Continue') {
   return new Promise(resolve => {
@@ -253,12 +255,18 @@ async function refreshVersions() {
   renderVersions(versions);
 }
 function renderDeploymentConfigs(configurations) {
+  const choices = '<option value="">No database</option>' + databaseCredentials.map(item => `<option value="${escapeHTML(item.id)}">${escapeHTML(item.name)} · ${escapeHTML(item.username)}@${escapeHTML(item.host)}:${item.port}/${escapeHTML(item.database)}</option>`).join('');
+  $('#database-credential-manager').innerHTML = databaseCredentials.length ? databaseCredentials.map(item => `<option value="${escapeHTML(item.id)}">${escapeHTML(item.name)}</option>`).join('') : '<option value="">No credential sets</option>';
   for (const channel of ['RC', 'Prod']) {
     const form = document.querySelector(`[data-deployment-channel="${channel}"]`);
-    const config = configurations[channel] || { host: '0.0.0.0', port: 3001, 'log-level': 3 };
+    const config = configurations[channel] || { host: '0.0.0.0', port: 3001, 'log-level': 3, 'force-console-input-log': false, 'update-url': '' };
     form.elements.host.value = config.host;
     form.elements.port.value = config.port;
     form.elements['log-level'].value = config['log-level'];
+    form.elements['force-console-input-log'].checked = Boolean(config['force-console-input-log']);
+    form.elements['update-url'].value = config['update-url'] || '';
+    form.elements['database-credential-set'].innerHTML = choices;
+    form.elements['database-credential-set'].value = config['database-credential-set'] || '';
     for (const control of form.elements) control.disabled = !project.access?.includes('edit');
   }
 }
@@ -380,7 +388,14 @@ async function submitWebConsole(event) {
 }
 async function saveDeploymentConfig(form) {
   const channel = form.dataset.deploymentChannel;
-  const config = { host: form.elements.host.value.trim(), port: Number(form.elements.port.value), 'log-level': Number(form.elements['log-level'].value) };
+  const config = {
+    host: form.elements.host.value.trim(),
+    port: Number(form.elements.port.value),
+    'log-level': Number(form.elements['log-level'].value),
+    'force-console-input-log': form.elements['force-console-input-log'].checked,
+    'database-credential-set': form.elements['database-credential-set'].value || null,
+    'update-url': form.elements['update-url'].value.trim() || null
+  };
   const configurations = await api(`/api/projects/${project.id}/deployment-configs/${channel}`, { method: 'PUT', body: JSON.stringify(config) });
   renderDeploymentConfigs(configurations);
   toast(`${channel} deployment settings saved.`);
@@ -388,9 +403,44 @@ async function saveDeploymentConfig(form) {
 async function openVersionManager() {
   if (!project) return;
   if (dirty) await save();
-  const [versions, configurations] = await Promise.all([api(`/api/projects/${project.id}/versions`), api(`/api/projects/${project.id}/deployment-configs`)]);
+  const [versions, configurations, credentials] = await Promise.all([api(`/api/projects/${project.id}/versions`), api(`/api/projects/${project.id}/deployment-configs`), api('/api/database-credentials')]);
+  databaseCredentials = credentials;
   renderVersions(versions); renderDeploymentConfigs(configurations);
   $('#version-dialog').showModal();
+}
+async function refreshDatabaseCredentials(selectedId = null) {
+  const [configurations, credentials] = await Promise.all([api(`/api/projects/${project.id}/deployment-configs`), api('/api/database-credentials')]);
+  databaseCredentials = credentials; renderDeploymentConfigs(configurations);
+  if (selectedId && databaseCredentials.some(item => item.id === selectedId)) $('#database-credential-manager').value = selectedId;
+}
+async function createDatabaseCredential() {
+  const values = await modal('Create database credential set', [
+    { name: 'name', label: 'Credential-set name' }, { name: 'host', label: 'Database host' },
+    { name: 'port', label: 'Port', type: 'number', value: 3306 }, { name: 'username', label: 'Username' },
+    { name: 'password', label: 'Password', type: 'password' }, { name: 'database', label: 'Database name' }
+  ], 'Create');
+  if (!values) return;
+  const created = await api('/api/database-credentials', { method: 'POST', body: JSON.stringify({ ...values, port: Number(values.port) }) });
+  await refreshDatabaseCredentials(created.id); toast('Database credential set created.');
+}
+async function editDatabaseCredential() {
+  const id = $('#database-credential-manager').value, current = databaseCredentials.find(item => item.id === id);
+  if (!current) throw new Error('Select a database credential set.');
+  const values = await modal('Edit database credential set', [
+    { name: 'name', label: 'Credential-set name', value: current.name }, { name: 'host', label: 'Database host', value: current.host },
+    { name: 'port', label: 'Port', type: 'number', value: current.port }, { name: 'username', label: 'Username', value: current.username },
+    { name: 'password', label: 'New password (leave blank to keep current)', type: 'password', optional: true }, { name: 'database', label: 'Database name', value: current.database }
+  ], 'Save');
+  if (!values) return;
+  await api(`/api/database-credentials/${id}`, { method: 'PUT', body: JSON.stringify({ ...values, port: Number(values.port) }) });
+  await refreshDatabaseCredentials(id); toast('Database credential set updated. Restart deployed applications to use changed credentials.');
+}
+async function deleteDatabaseCredential() {
+  const id = $('#database-credential-manager').value, current = databaseCredentials.find(item => item.id === id);
+  if (!current) throw new Error('Select a database credential set.');
+  if (!confirm(`Delete database credential set "${current.name}"?`)) return;
+  await api(`/api/database-credentials/${id}`, { method: 'DELETE', body: '{}' });
+  await refreshDatabaseCredentials(); toast('Database credential set deleted.');
 }
 async function versionAction(button) {
   const revision = Number(button.closest('[data-revision]').dataset.revision), action = button.dataset.versionAction;
@@ -482,11 +532,15 @@ function workspaceCategoryChoices() {
   return [{ value: '', label: 'Uncategorized' }, ...(project?.workspaceCategories || []).map(category => ({ value: category.id, label: category.name }))];
 }
 function workspaceRow(item) {
-  return '<button class="workspace-row ' + (item.id === workspaceID ? 'active ' : '') + (item.active ? '' : 'disabled') + '" data-workspace="' + escapeHTML(item.id) + '" draggable="true" title="Drag to reorder or move to another category"><span class="workspace-number">#' + escapeHTML(item.numberId) + '</span><span>' + escapeHTML(item.name) + '</span>' + (item.active ? '' : '<i>PAUSED</i>') + '</button>';
+  return '<button class="workspace-row ' + (item.id === workspaceID ? 'active ' : '') + (item.active ? '' : 'disabled') + '" data-workspace="' + escapeHTML(item.id) + '" draggable="' + canEditProject() + '" title="Drag to reorder or move to another category"><span class="workspace-number">#' + escapeHTML(item.numberId) + '</span><span>' + escapeHTML(item.name) + '</span>' + (item.active ? '' : '<i>PAUSED</i>') + '</button>';
 }
 function workspaceGroup(category, items) {
   const id = category?.id || '', name = category?.name || 'Uncategorized';
-  return '<section class="workspace-category" data-workspace-category="' + escapeHTML(id) + '"><div class="workspace-category-title"><span>⌄</span><strong>' + escapeHTML(name) + '</strong><small>' + items.length + '</small><button data-add-workspace-to-category="' + escapeHTML(id) + '" title="Add workspace to ' + escapeHTML(name) + '" aria-label="Add workspace to ' + escapeHTML(name) + '">＋</button></div>' + items.map(workspaceRow).join('') + '</section>';
+  const editable = canEditProject(), custom = Boolean(category);
+  const categoryActions = custom
+    ? '<button data-edit-workspace-category="' + escapeHTML(id) + '" title="Rename ' + escapeHTML(name) + '" aria-label="Rename ' + escapeHTML(name) + '"' + (editable ? '' : ' disabled') + '>✎</button><button data-delete-workspace-category="' + escapeHTML(id) + '" title="Delete ' + escapeHTML(name) + '" aria-label="Delete ' + escapeHTML(name) + '"' + (editable ? '' : ' disabled') + '>×</button>'
+    : '';
+  return '<section class="workspace-category" data-workspace-category="' + escapeHTML(id) + '"><div class="workspace-category-title' + (custom ? ' custom' : '') + '"' + (custom ? ' draggable="' + editable + '" title="Drag to reorder this workspace group"' : '') + '><span class="workspace-category-grip">' + (custom ? '⠿' : '⌄') + '</span><strong>' + escapeHTML(name) + '</strong><small>' + items.length + '</small>' + categoryActions + '<button data-add-workspace-to-category="' + escapeHTML(id) + '" title="Add workspace to ' + escapeHTML(name) + '" aria-label="Add workspace to ' + escapeHTML(name) + '"' + (editable ? '' : ' disabled') + '>＋</button></div>' + items.map(workspaceRow).join('') + '</section>';
 }
 function render() {
   $('#project-title').textContent = project?.name || '';
@@ -504,9 +558,10 @@ function render() {
 }
 function renderLibrary() {
   const query = $('#search').value.toLowerCase();
-  const categories = [...new Set(['Triggers', 'Actions', 'Logic', 'Data', ...definitions.map(item => item.category)])];
+  const visibleDefinitions = definitions.filter(item => !item.hidden);
+  const categories = [...new Set(['Triggers', 'Actions', 'Logic', 'Data', ...visibleDefinitions.map(item => item.category)])];
   const html = categories.map(category => {
-    const items = definitions.filter(item => item.category === category && `${item.name} ${item.description}`.toLowerCase().includes(query));
+    const items = visibleDefinitions.filter(item => item.category === category && `${item.name} ${item.description}`.toLowerCase().includes(query));
     return items.length ? `<section><h3>${escapeHTML(category)}</h3>${items.map(item => `<button data-type="${escapeHTML(item.type)}"><strong>${escapeHTML(item.name)}</strong><span>${escapeHTML(item.description)}</span></button>`).join('')}</section>` : '';
   }).join('');
   $('#library').innerHTML = html || '<p class="no-results">No blocks found.</p>';
@@ -569,11 +624,45 @@ function renderWires() {
   let preview = '';
   if (portDrag?.portElement?.isConnected) {
     const anchor = point(portDrag.portElement);
-    const cursor = { x: (portDrag.pointerX - worldRect.x) / view.zoom, y: (portDrag.pointerY - worldRect.y) / view.zoom };
+    const cursor = portDrag.snapTarget?.isConnected
+      ? point(portDrag.snapTarget)
+      : { x: (portDrag.pointerX - worldRect.x) / view.zoom, y: (portDrag.pointerY - worldRect.y) / view.zoom };
     const color = portDrag.portElement.style.getPropertyValue('--port-color');
     preview = `<path class="dragging-wire" style="--wire-color:${color}" d="${wirePath(anchor, cursor)}"/>`;
   }
   $('#wires').innerHTML = paths + preview;
+}
+function compatiblePortTypes(kind, outputTypes, inputTypes) {
+  return kind === 'action' || !outputTypes.length || !inputTypes.length || outputTypes.includes('unspecified') || inputTypes.includes('unspecified') || outputTypes.some(type => inputTypes.includes(type));
+}
+function snapPortFor(drag, clientX, clientY) {
+  const candidates = document.querySelectorAll(drag.origin === 'output' ? '[data-input]' : '[data-output]');
+  const sourceTypes = drag.portData.types.split(',').filter(Boolean);
+  let nearest = null, nearestDistance = 36;
+  for (const candidate of candidates) {
+    const sameBlock = drag.origin === 'output'
+      ? drag.portData.from === candidate.dataset.input
+      : drag.portData.input === candidate.dataset.from;
+    if (sameBlock || drag.portData.kind !== candidate.dataset.kind) continue;
+    const candidateTypes = candidate.dataset.types.split(',').filter(Boolean);
+    const outputTypes = drag.origin === 'output' ? sourceTypes : candidateTypes;
+    const inputTypes = drag.origin === 'output' ? candidateTypes : sourceTypes;
+    if (!compatiblePortTypes(drag.portData.kind, outputTypes, inputTypes)) continue;
+    const bounds = candidate.getBoundingClientRect();
+    const distance = Math.hypot(clientX - (bounds.left + bounds.width / 2), clientY - (bounds.top + bounds.height / 2));
+    if (distance <= nearestDistance) { nearest = candidate; nearestDistance = distance; }
+  }
+  return nearest;
+}
+function setPortDragSnap(target) {
+  if (!portDrag || portDrag.snapTarget === target) return;
+  portDrag.snapTarget?.classList.remove('snap-target');
+  portDrag.snapTarget = target;
+  target?.classList.add('snap-target');
+}
+function clearPortDragSnap(drag = portDrag) {
+  drag?.snapTarget?.classList.remove('snap-target');
+  if (drag) drag.snapTarget = null;
 }
 function finishPortDrag(drag, target) {
   if (!target || !target.matches('[data-output], [data-input]')) { toast('Drop on a compatible port to connect.'); return; }
@@ -605,6 +694,7 @@ function startPortDrag(event, port) {
     portData: { ...port.dataset },
     pointerX: event.clientX,
     pointerY: event.clientY,
+    snapTarget: null,
     moved: false
   };
   const viewport = $('#viewport');
@@ -613,20 +703,21 @@ function startPortDrag(event, port) {
     if (!portDrag) return;
     const dx = current.clientX - event.clientX, dy = current.clientY - event.clientY;
     if (!portDrag.moved && Math.hypot(dx, dy) < 8) return;
-    portDrag.moved = true; pending = null; portDrag.pointerX = current.clientX; portDrag.pointerY = current.clientY; renderWires();
+    portDrag.moved = true; pending = null; portDrag.pointerX = current.clientX; portDrag.pointerY = current.clientY;
+    setPortDragSnap(snapPortFor(portDrag, current.clientX, current.clientY)); renderWires();
   };
   const stop = current => {
     viewport.removeEventListener('pointermove', move); viewport.removeEventListener('pointerup', stop); viewport.removeEventListener('pointercancel', cancel);
-    const drag = portDrag; portDrag = null; renderWires();
+    const drag = portDrag, snappedTarget = drag?.snapTarget || null; clearPortDragSnap(drag); portDrag = null; renderWires();
     if (!drag || !current) return;
     if (!drag.moved) { suppressPortClick = true; clickPort(drag.portElement); return; }
     suppressPortClick = true;
-    const target = document.elementFromPoint(current.clientX, current.clientY)?.closest('[data-output], [data-input]');
+    const target = snappedTarget || document.elementFromPoint(current.clientX, current.clientY)?.closest('[data-output], [data-input]');
     finishPortDrag(drag, target);
   };
   const cancel = () => {
     viewport.removeEventListener('pointermove', move); viewport.removeEventListener('pointerup', stop); viewport.removeEventListener('pointercancel', cancel);
-    portDrag = null; renderWires();
+    clearPortDragSnap(); portDrag = null; renderWires();
   };
   viewport.addEventListener('pointermove', move); viewport.addEventListener('pointerup', stop); viewport.addEventListener('pointercancel', cancel);
 }
@@ -659,7 +750,7 @@ function connect(to, input, kind, types) {
   if (!pending) { toast('Click an output port first, then this input.'); return; }
   if (pending.from === to) { toast('A block cannot connect to itself.', true); return; }
   if (pending.kind !== kind) { toast('Action ports connect to actions; value ports connect to values.', true); return; }
-  const compatible = kind === 'action' || !pending.types.length || !types.length || pending.types.includes('unspecified') || types.includes('unspecified') || pending.types.some(type => types.includes(type));
+  const compatible = compatiblePortTypes(kind, pending.types, types);
   if (!compatible) { toast('These value port types are incompatible.', true); return; }
   let connections = ws().connections.filter(edge => edge.to !== to || (edge.input || 'action') !== input);
   if (kind === 'action') connections = connections.filter(edge => edge.from !== pending.from || edge.output !== pending.output);
@@ -817,7 +908,20 @@ $('#viewport').addEventListener('pointerdown', event => {
 $('#viewport').addEventListener('wheel', event => { event.preventDefault(); const rect = $('#viewport').getBoundingClientRect(); zoom(event.deltaY < 0 ? 1.08 : 1 / 1.08, event.clientX - rect.x, event.clientY - rect.y); }, { passive: false });
 function clearWorkspaceDropIndicators() {
   document.querySelectorAll('.workspace-row.drop-before,.workspace-row.drop-after').forEach(row => row.classList.remove('drop-before', 'drop-after'));
-  document.querySelectorAll('.workspace-category.drop-category').forEach(category => category.classList.remove('drop-category'));
+  document.querySelectorAll('.workspace-category.drop-category,.workspace-category.drop-before,.workspace-category.drop-after').forEach(category => category.classList.remove('drop-category', 'drop-before', 'drop-after'));
+}
+function moveWorkspaceCategory(draggedID, targetID, after = false) {
+  const categories = project?.workspaceCategories;
+  if (!Array.isArray(categories) || draggedID === targetID) return;
+  const from = categories.findIndex(category => category.id === draggedID);
+  if (from < 0) return;
+  const [category] = categories.splice(from, 1);
+  if (!targetID) categories.push(category);
+  else {
+    const target = categories.findIndex(item => item.id === targetID);
+    categories.splice(target < 0 ? categories.length : target + (after ? 1 : 0), 0, category);
+  }
+  markDirty(); render();
 }
 function moveWorkspace(draggedID, categoryID, targetID = null, after = false) {
   const workspace = project?.workspaces.find(item => item.id === draggedID);
@@ -839,14 +943,31 @@ function moveWorkspace(draggedID, categoryID, targetID = null, after = false) {
 }
 $('#workspace-list').addEventListener('dragstart', event => {
   const row = event.target.closest('[data-workspace]');
-  if (!row) return;
-  draggedWorkspaceID = row.dataset.workspace; row.classList.add('dragging');
-  event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', draggedWorkspaceID);
+  if (row) {
+    if (!canEditProject()) { event.preventDefault(); return; }
+    draggedWorkspaceID = row.dataset.workspace; row.classList.add('dragging');
+    event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', draggedWorkspaceID);
+    return;
+  }
+  const title = event.target.closest('.workspace-category-title.custom');
+  if (!title || event.target.closest('button') || !canEditProject()) { event.preventDefault(); return; }
+  const category = title.closest('[data-workspace-category]');
+  draggedWorkspaceCategoryID = category.dataset.workspaceCategory; category.classList.add('dragging');
+  event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', draggedWorkspaceCategoryID);
 });
 $('#workspace-list').addEventListener('dragover', event => {
-  if (!draggedWorkspaceID) return;
   const category = event.target.closest('[data-workspace-category]');
   if (!category) return;
+  if (draggedWorkspaceCategoryID) {
+    clearWorkspaceDropIndicators();
+    if (category.dataset.workspaceCategory === draggedWorkspaceCategoryID) return;
+    event.preventDefault(); event.dataTransfer.dropEffect = 'move';
+    const title = category.querySelector('.workspace-category-title'), bounds = title.getBoundingClientRect();
+    const after = Boolean(category.dataset.workspaceCategory) && event.clientY > bounds.top + bounds.height / 2;
+    category.classList.add(after ? 'drop-after' : 'drop-before');
+    return;
+  }
+  if (!draggedWorkspaceID) return;
   event.preventDefault(); event.dataTransfer.dropEffect = 'move'; clearWorkspaceDropIndicators();
   const row = event.target.closest('[data-workspace]');
   if (row && row.dataset.workspace !== draggedWorkspaceID) {
@@ -854,10 +975,17 @@ $('#workspace-list').addEventListener('dragover', event => {
   } else category.classList.add('drop-category');
 });
 $('#workspace-list').addEventListener('drop', event => {
-  if (!draggedWorkspaceID) return;
   const category = event.target.closest('[data-workspace-category]');
   if (!category) return;
   event.preventDefault();
+  if (draggedWorkspaceCategoryID) {
+    const targetID = category.dataset.workspaceCategory || null;
+    const after = Boolean(targetID && category.classList.contains('drop-after'));
+    const draggedID = draggedWorkspaceCategoryID; draggedWorkspaceCategoryID = null; clearWorkspaceDropIndicators();
+    moveWorkspaceCategory(draggedID, targetID, after);
+    return;
+  }
+  if (!draggedWorkspaceID) return;
   const row = event.target.closest('[data-workspace]');
   const after = Boolean(row && row.classList.contains('drop-after'));
   const targetID = row?.dataset.workspace || null, categoryID = category.dataset.workspaceCategory || null;
@@ -866,11 +994,16 @@ $('#workspace-list').addEventListener('drop', event => {
 });
 $('#workspace-list').addEventListener('dragend', event => {
   event.target.closest('[data-workspace]')?.classList.remove('dragging');
-  draggedWorkspaceID = null; clearWorkspaceDropIndicators();
+  event.target.closest('[data-workspace-category]')?.classList.remove('dragging');
+  draggedWorkspaceID = null; draggedWorkspaceCategoryID = null; clearWorkspaceDropIndicators();
 });
 $('#workspace-list').addEventListener('click', event => {
   const add = event.target.closest('[data-add-workspace-to-category]');
-  if (add) handle(() => addWorkspace(add.dataset.addWorkspaceToCategory || ''))();
+  if (add) { handle(() => addWorkspace(add.dataset.addWorkspaceToCategory || ''))(); return; }
+  const edit = event.target.closest('[data-edit-workspace-category]');
+  if (edit) { handle(() => editWorkspaceCategory(edit.dataset.editWorkspaceCategory))(); return; }
+  const remove = event.target.closest('[data-delete-workspace-category]');
+  if (remove) handle(() => deleteWorkspaceCategory(remove.dataset.deleteWorkspaceCategory))();
 });
 $('#tabs').addEventListener('click', event => {
   const close = event.target.closest('[data-close-workspace]');
@@ -925,27 +1058,63 @@ async function addWorkspace(categoryId = '') {
   ], 'Add workspace');
   if (!values) return;
   const validCategory = project.workspaceCategories?.some(category => category.id === categoryId) ? categoryId : null;
-  const workspace = { id: uid(), numberId: nextNumberId(project.workspaces), name: values.name, categoryId: validCategory, active: true, blocks: [], connections: [] };
+  const workspace = {
+    id: uid(),
+    numberId: nextNumberId(project.workspaces),
+    name: values.name,
+    categoryId: validCategory,
+    active: true,
+    forceLog: false,
+    logAllRunsToBlock: false,
+    blocks: [],
+    connections: []
+  };
   project.workspaces.push(workspace); openWorkspaceIDs.add(workspace.id); workspaceID = workspace.id; clearSelection(true); markDirty(); render(); fit();
 }
 $('#add-workspace').onclick = handle(() => addWorkspace());
 $('#add-workspace-category').onclick = handle(async () => {
-  const values = await modal('Add workspace category', [{ name: 'name', label: 'Category name', value: 'New category', selectOnOpen: true }], 'Add category');
+  const values = await modal('Add workspace group', [{ name: 'name', label: 'Group name', value: 'New group', selectOnOpen: true }], 'Add group');
   if (!values) return;
   project.workspaceCategories ||= [];
   project.workspaceCategories.push({ id: uid(), name: values.name });
   markDirty(); render();
 });
+async function editWorkspaceCategory(id) {
+  if (!canEditProject()) return;
+  const category = project.workspaceCategories?.find(item => item.id === id);
+  if (!category) return;
+  const values = await modal('Rename workspace group', [{ name: 'name', label: 'Group name', value: category.name, selectOnOpen: true }], 'Rename group');
+  if (!values || values.name === category.name) return;
+  category.name = values.name; markDirty(); render();
+}
+function deleteWorkspaceCategory(id) {
+  if (!canEditProject()) return;
+  const categories = project.workspaceCategories || [], index = categories.findIndex(item => item.id === id);
+  if (index < 0) return;
+  const category = categories[index], count = project.workspaces.filter(workspace => workspace.categoryId === id).length;
+  const detail = count ? ` Its ${count} workspace${count === 1 ? '' : 's'} will move to Uncategorized.` : '';
+  if (!confirm(`Delete workspace group "${category.name}"?${detail}`)) return;
+  for (const workspace of project.workspaces) if (workspace.categoryId === id) workspace.categoryId = null;
+  categories.splice(index, 1); markDirty(); render(); toast('Deleted workspace group ' + category.name + '.');
+}
 $('#workspace-settings').onclick = handle(async () => {
   const workspace = ws();
   const values = await modal('Project and workspace', [
     { name: 'project', label: 'Project name', value: project.name },
     { name: 'name', label: 'Workspace name', value: workspace.name },
-    { name: 'categoryId', label: 'Workspace category', type: 'select', value: workspace.categoryId || '', choices: workspaceCategoryChoices() },
-    { name: 'active', label: 'Run this workspace in the exported application', type: 'checkbox', value: workspace.active }
+    { name: 'categoryId', label: 'Workspace group', type: 'select', value: workspace.categoryId || '', choices: workspaceCategoryChoices() },
+    { name: 'active', label: 'Run this workspace in the exported application', type: 'checkbox', value: workspace.active },
+    { name: 'forceLog', label: 'Force log INFO inputs and outputs regardless of application log settings', type: 'checkbox', value: Boolean(workspace.forceLog) },
+    { name: 'logAllRunsToBlock', label: 'Log all block runs to On Workspace Log', type: 'checkbox', value: Boolean(workspace.logAllRunsToBlock) }
   ], 'Apply');
   if (!values) return;
-  project.name = values.project; workspace.name = values.name; workspace.categoryId = values.categoryId || null; workspace.active = values.active; markDirty(); render();
+  project.name = values.project;
+  workspace.name = values.name;
+  workspace.categoryId = values.categoryId || null;
+  workspace.active = values.active;
+  workspace.forceLog = values.forceLog;
+  workspace.logAllRunsToBlock = values.logAllRunsToBlock;
+  markDirty(); render();
 });
 for (const form of document.querySelectorAll('[data-deployment-channel]')) form.onsubmit = handle(async event => { event.preventDefault(); await saveDeploymentConfig(form); });
 for (const selector of ['#new-project', '#rail-new-project', '#home-new-project']) $(selector).onclick = handle(createProject);
@@ -954,6 +1123,9 @@ for (const selector of ['#add-block', '#empty-add-block']) $(selector).onclick =
 $('#save').onclick = handle(async () => { await save(); toast('Project saved to the server.'); });
 $('#clear-block-cache').onclick = handle(clearBlockCache);
 $('#versions').onclick = handle(openVersionManager);
+$('#database-credential-new').onclick = handle(createDatabaseCredential);
+$('#database-credential-edit').onclick = handle(editDatabaseCredential);
+$('#database-credential-delete').onclick = handle(deleteDatabaseCredential);
 $('#templates').onclick = handle(openTemplateEditor);
 $('#version-close').onclick = () => $('#version-dialog').close();
 $('#version-list').onclick = event => { const button = event.target.closest('[data-version-action]'); if (button) handle(() => versionAction(button))(); };
@@ -1030,6 +1202,7 @@ window.addEventListener('resize', renderWires);
 async function refreshSession() {
   const session = await api('/api/session'); csrfToken = session.csrfToken; sessionPermissions = session.permissions || {};
   $('#account-name').textContent = session.username; $('#sign-in-again').hidden = true; $('#access-management').hidden = !sessionPermissions.manageUsers;
+  for (const selector of ['#database-credential-new', '#database-credential-edit', '#database-credential-delete']) $(selector).hidden = !sessionPermissions.manageUsers;
   $('#console-management').hidden = !sessionPermissions.console;
   if (!sessionPermissions.console && $('#console-dialog').open) closeWebConsole();
   for (const selector of ['#new-project', '#rail-new-project', '#home-new-project']) $(selector).disabled = !sessionPermissions.createProjects;

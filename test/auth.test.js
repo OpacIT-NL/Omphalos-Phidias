@@ -33,6 +33,23 @@ test('ACL migration preserves existing users and grants them administrator acces
   assert.equal((await auth.login('existing', password, '127.0.0.1')).username, 'existing');
 });
 
+test('database credential migration and management preserve users and never list passwords', async t => {
+  const { auth, filename } = await fixture(t); let current = auth;
+  t.after(() => current.close());
+  await auth.createUser('alice', password);
+  const created = auth.createDatabaseCredential({ name: 'Primary DB', host: 'db.internal', port: 3306, username: 'app', password: 'database-secret', database: 'operations' });
+  assert.equal(auth.listDatabaseCredentials().some(item => Object.hasOwn(item, 'password')), false);
+  assert.equal(auth.databaseCredential(created.id).password, 'database-secret');
+  auth.updateDatabaseCredential(created.id, { ...created, password: '', host: 'db2.internal' });
+  assert.equal(auth.databaseCredential(created.id).password, 'database-secret');
+  assert.equal(auth.databaseCredential(created.id).host, 'db2.internal');
+  auth.close(); current = new Auth(filename);
+  assert.equal(current.user('alice').username, 'alice');
+  assert.equal(current.databaseCredential(created.id).database, 'operations');
+  current.deleteDatabaseCredential(created.id);
+  assert.equal(current.databaseCredential(created.id), null);
+});
+
 test('SQLite persists salted Argon2id hashes and hashed sessions across restart', async t => {
   const { auth, filename } = await fixture(t);
   let current = auth; t.after(() => current.close());

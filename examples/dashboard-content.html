@@ -1,0 +1,104 @@
+<!-- Content fragment only. Place this below the existing gui.html header.
+     Load dashboard-sidebar.html with Get Template, then use Apply Variable with name "sidebar". -->
+<main class="iris-dashboard" aria-label="Operations dashboard">
+  %sidebar%
+
+  <div class="iris-dashboard__content">
+    <section class="iris-dashboard__heading" aria-labelledby="dashboard-heading">
+    <div>
+      <p class="iris-dashboard__eyebrow">Environment overview</p>
+      <h2 id="dashboard-heading">%environment_name%</h2>
+      <p class="iris-dashboard__description">Current service health, capacity, and operational activity.</p>
+    </div>
+    <div class="iris-dashboard__meta">
+      <span class="iris-status iris-status--healthy"><span aria-hidden="true"></span>%overall_status%</span>
+      <span class="iris-dashboard__updated">Updated %last_updated%</span>
+    </div>
+  </section>
+
+  <section class="iris-metrics" aria-label="Key metrics">
+    <article class="iris-metric">
+      <div class="iris-metric__topline"><span>Availability</span><span class="iris-trend iris-trend--up">↑ %availability_change%</span></div>
+      <strong>%availability%</strong>
+      <small>Last 30 days</small>
+    </article>
+    <article class="iris-metric">
+      <div class="iris-metric__topline"><span>Active systems</span><span class="iris-metric__mark iris-metric__mark--blue" aria-hidden="true"></span></div>
+      <strong>%active_systems%</strong>
+      <small>Across all sites</small>
+    </article>
+    <article class="iris-metric">
+      <div class="iris-metric__topline"><span>Open incidents</span><span class="iris-metric__mark iris-metric__mark--amber" aria-hidden="true"></span></div>
+      <strong>%open_incidents%</strong>
+      <small>%critical_incidents% require attention</small>
+    </article>
+    <article class="iris-metric">
+      <div class="iris-metric__topline"><span>Storage used</span><span>%storage_used_percent%</span></div>
+      <strong>%storage_used%</strong>
+      <small>of %storage_total%</small>
+      <div class="iris-progress" role="progressbar" aria-label="Storage used" aria-valuemin="0" aria-valuemax="100" aria-valuenow="%storage_used_number%">
+        <span style="width: %storage_used_percent%"></span>
+      </div>
+    </article>
+  </section>
+
+  <section class="iris-dashboard__grid">
+    <article class="iris-panel iris-panel--wide">
+      <header class="iris-panel__header">
+        <div><h3>Request volume</h3><p>Successful and failed requests over the last 24 hours</p></div>
+        <div class="iris-legend" aria-label="Chart legend"><span><i class="iris-legend__success"></i>Successful</span><span><i class="iris-legend__failed"></i>Failed</span></div>
+      </header>
+      <div class="iris-chart">
+        <svg viewBox="0 0 760 230" role="img" aria-labelledby="request-chart-title request-chart-description" preserveAspectRatio="none">
+          <title id="request-chart-title">Request volume</title>
+          <desc id="request-chart-description">Successful requests remain steady while failed requests stay low.</desc>
+          <g class="iris-chart__grid" aria-hidden="true">
+            <line x1="44" y1="28" x2="744" y2="28"/><line x1="44" y1="78" x2="744" y2="78"/>
+            <line x1="44" y1="128" x2="744" y2="128"/><line x1="44" y1="178" x2="744" y2="178"/>
+          </g>
+          <g class="iris-chart__axis" aria-hidden="true">
+            <text x="6" y="32">1,500</text><text x="13" y="82">1,000</text><text x="20" y="132">500</text><text x="31" y="182">0</text>
+            <text x="44" y="214">00:00</text><text x="210" y="214">06:00</text><text x="382" y="214">12:00</text><text x="554" y="214">18:00</text><text x="710" y="214">Now</text>
+          </g>
+          <polyline class="iris-chart__line iris-chart__line--success" points="44,142 92,135 140,149 188,115 236,124 284,91 332,104 380,72 428,86 476,61 524,79 572,54 620,69 668,46 716,58 744,43"/>
+          <polyline class="iris-chart__line iris-chart__line--failed" points="44,174 92,172 140,176 188,168 236,173 284,165 332,171 380,162 428,170 476,166 524,172 572,160 620,169 668,164 716,171 744,167"/>
+        </svg>
+      </div>
+      <footer class="iris-panel__footer"><span><b>%requests_total%</b> total requests</span><span><b>%requests_failed%</b> failed</span><span><b>%response_time%</b> median response</span></footer>
+    </article>
+
+    <article class="iris-panel">
+      <header class="iris-panel__header"><div><h3>Capacity</h3><p>Allocated infrastructure</p></div></header>
+      <div class="iris-capacity">
+        <svg class="iris-capacity__ring" viewBox="0 0 120 120" role="img" aria-label="%capacity_percent% capacity allocated">
+          <circle class="iris-capacity__track" cx="60" cy="60" r="46"/>
+          <circle class="iris-capacity__value" cx="60" cy="60" r="46" pathLength="100" stroke-dasharray="%capacity_number% 100"/>
+        </svg>
+        <div class="iris-capacity__label"><strong>%capacity_percent%</strong><span>allocated</span></div>
+      </div>
+      <dl class="iris-breakdown">
+        <div><dt><i class="iris-dot iris-dot--green"></i>Used</dt><dd>%capacity_used%</dd></div>
+        <div><dt><i class="iris-dot iris-dot--muted"></i>Available</dt><dd>%capacity_available%</dd></div>
+        <div><dt>Total capacity</dt><dd>%capacity_total%</dd></div>
+      </dl>
+    </article>
+
+    <article class="iris-panel">
+      <header class="iris-panel__header"><div><h3>Service health</h3><p>Current component status</p></div><a href="%services_url%">View all</a></header>
+      <ul class="iris-services">
+        <li><span class="iris-service-icon" aria-hidden="true">AP</span><span><strong>API services</strong><small>%api_service_detail%</small></span><span class="iris-status iris-status--healthy"><span></span>%api_service_status%</span></li>
+        <li><span class="iris-service-icon" aria-hidden="true">DB</span><span><strong>Databases</strong><small>%database_detail%</small></span><span class="iris-status iris-status--healthy"><span></span>%database_status%</span></li>
+        <li><span class="iris-service-icon" aria-hidden="true">WK</span><span><strong>Workers</strong><small>%worker_detail%</small></span><span class="iris-status iris-status--warning"><span></span>%worker_status%</span></li>
+        <li><span class="iris-service-icon" aria-hidden="true">ST</span><span><strong>Storage</strong><small>%storage_detail%</small></span><span class="iris-status iris-status--healthy"><span></span>%storage_status%</span></li>
+      </ul>
+    </article>
+
+    <article class="iris-panel iris-panel--activity">
+      <header class="iris-panel__header"><div><h3>Recent activity</h3><p>Latest changes and system events</p></div><a href="%activity_url%">View history</a></header>
+      <div class="iris-table-wrap">
+        %activity_table%
+      </div>
+    </article>
+    </section>
+  </div>
+</main>

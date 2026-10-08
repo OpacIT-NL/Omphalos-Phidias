@@ -1,0 +1,75 @@
+<!-- Reusable value for the %sidebar% placeholder in dashboard-content.html. -->
+<aside class="iris-sidebar" aria-label="Primary navigation">
+  <div class="iris-sidebar__identity">
+    <span class="iris-sidebar__logo" aria-hidden="true">IR</span>
+    <span>
+      <strong>IRIS GUI</strong>
+      <small>%environment_name%</small>
+    </span>
+  </div>
+
+  <nav class="iris-sidebar__nav">
+    <!-- Add a page by copying a link <li>. Add a collapsible section by copying a <details> <li>. -->
+    <p class="iris-sidebar__section-label">Overview</p>
+    <ul class="iris-sidebar__menu">
+      <li>
+        <a class="iris-sidebar__link iris-sidebar__link--active" href="%dashboard_url%" aria-current="page">
+          <span class="iris-sidebar__icon" aria-hidden="true">DB</span>
+          <span>Dashboard</span>
+        </a>
+      </li>
+      <li>
+        <details class="iris-sidebar__group" open>
+          <summary>
+            <span class="iris-sidebar__icon" aria-hidden="true">SY</span>
+            <span>Systems</span>
+            <span class="iris-sidebar__chevron" aria-hidden="true"></span>
+          </summary>
+          <ul class="iris-sidebar__submenu">
+            <li><a href="%systems_url%">All systems</a></li>
+            <li><a href="%system_health_url%">Health</a></li>
+            <li><a href="%capacity_url%">Capacity</a></li>
+          </ul>
+        </details>
+      </li>
+      <li>
+        <details class="iris-sidebar__group">
+          <summary>
+            <span class="iris-sidebar__icon" aria-hidden="true">OP</span>
+            <span>Operations</span>
+            <span class="iris-sidebar__chevron" aria-hidden="true"></span>
+          </summary>
+          <ul class="iris-sidebar__submenu">
+            <li><a href="%incidents_url%">Incidents</a></li>
+            <li><a href="%activity_url%">Activity</a></li>
+            <li><a href="%jobs_url%">Jobs</a></li>
+          </ul>
+        </details>
+      </li>
+      <li>
+        <a class="iris-sidebar__link" href="%reports_url%">
+          <span class="iris-sidebar__icon" aria-hidden="true">RP</span>
+          <span>Reports</span>
+        </a>
+      </li>
+    </ul>
+
+    <p class="iris-sidebar__section-label">Administration</p>
+    <ul class="iris-sidebar__menu">
+      <li>
+        <details class="iris-sidebar__group">
+          <summary>
+            <span class="iris-sidebar__icon" aria-hidden="true">AD</span>
+            <span>Administration</span>
+            <span class="iris-sidebar__chevron" aria-hidden="true"></span>
+          </summary>
+          <ul class="iris-sidebar__submenu">
+            <li><a href="%users_url%">Users</a></li>
+            <li><a href="%access_url%">Access control</a></li>
+            <li><a href="%settings_url%">Settings</a></li>
+          </ul>
+        </details>
+      </li>
+    </ul>
+  </nav>
+</aside>

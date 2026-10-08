@@ -25,11 +25,17 @@ function createLogFile(directory, date) {
 function createLogger({ level = 3, fileLevel = level, directory = path.join(process.cwd(), 'log'), stdout = process.stdout, stderr = process.stderr, now = () => new Date() } = {}) {
   validateLogLevel(level);
   validateLogLevel(fileLevel, 'file-log-level');
-  const filename = createLogFile(directory, now().toISOString().slice(0, 10));
+  let filename = createLogFile(directory, now().toISOString().slice(0, 10));
   const makeLine = (name, values) => {
     const timestamp = now().toISOString();
-    const message = format(...values).replace(/[\x00-\x1f\x7f]/g, character => character === '\n' ? '\\n' : character === '\r' ? '\\r' : `\\u${character.charCodeAt(0).toString(16).padStart(4, '0')}`);
-    return { timestamp, line: `${timestamp} [${name.toUpperCase()}] ${message}\n` };
+    const message = format(...values)
+      .replace(/\r\n?|\n/g, '\n')
+      .replace(/[\x00-\x09\x0b-\x1f\x7f]/g, character => `\\u${character.charCodeAt(0).toString(16).padStart(4, '0')}`);
+    const lines = message.split('\n');
+    if (message.endsWith('\n')) lines.pop();
+    if (!lines.length) lines.push('');
+    const prefix = `${timestamp} [${name.toUpperCase()}] `;
+    return { timestamp, line: lines.map(line => prefix + line).join('\n') + '\n' };
   };
   const append = ({ timestamp, line }) => {
     try { fs.appendFileSync(filename, line, { encoding: 'utf8', mode: 0o600 }); }
@@ -42,16 +48,26 @@ function createLogger({ level = 3, fileLevel = level, directory = path.join(proc
     if (severity <= level) (severity <= LEVELS.warning ? stderr : stdout).write(rendered.line);
     if (severity <= fileLevel) append(rendered);
   }
+  function forceWrite(name, values) {
+    const rendered = makeLine(name, values);
+    (LEVELS[name] <= LEVELS.warning ? stderr : stdout).write(rendered.line);
+    append(rendered);
+  }
   return Object.freeze({
-    filename,
+    get filename() { return filename; },
     notice(...values) {
       const rendered = makeLine('info', values);
       stdout.write(rendered.line);
       if (LEVELS.info <= fileLevel) append(rendered);
     },
+    forceInfo(...values) { forceWrite('info', values); },
     ...Object.fromEntries(Object.keys(LEVELS).map(name => [name, (...values) => write(name, values)])),
     setLevel(value) { level = validateLogLevel(value); },
-    setFileLevel(value) { fileLevel = validateLogLevel(value, 'file-log-level'); }
+    setFileLevel(value) { fileLevel = validateLogLevel(value, 'file-log-level'); },
+    startNewCycle() {
+      filename = createLogFile(directory, now().toISOString().slice(0, 10));
+      return filename;
+    }
   });
 }
 function installConsoleLogger(logger, target = console) {

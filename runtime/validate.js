@@ -38,6 +38,9 @@ function validate(document, definitions) {
     if (!Number.isInteger(ws.numberId) || ws.numberId < 1 || workspaceNumberIds.has(ws.numberId)) fail('Invalid or duplicate workspace number ID');
     workspaceNumberIds.add(ws.numberId);
     if (typeof ws.name !== 'string' || !ws.name.trim() || ws.name.length > 100 || typeof ws.active !== 'boolean') fail('Invalid workspace name or active state');
+    ws.forceLog ??= false;
+    ws.logAllRunsToBlock ??= false;
+    if (typeof ws.forceLog !== 'boolean' || typeof ws.logAllRunsToBlock !== 'boolean') fail('Invalid workspace logging settings');
     if (ws.categoryId !== undefined && ws.categoryId !== null && (typeof ws.categoryId !== 'string' || !categoryIDs.has(ws.categoryId))) fail('Invalid workspace category');
     if (!Array.isArray(ws.blocks) || ws.blocks.length > 1000 || !Array.isArray(ws.connections) || ws.connections.length > 4000) fail('Invalid workspace graph');
     const nodes = new Map(), edgeIDs = new Set(), blockNumberIds = new Set();

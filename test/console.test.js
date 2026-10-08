@@ -15,14 +15,21 @@ async function fixture(t, apply) {
   const file = path.join(folder, 'config.json');
   await fs.writeFile(file, JSON.stringify(defaultConfig()));
   const database = path.join(folder, 'auth.sqlite'), auth = new Auth(database);
-  const config = new ConfigState(file, apply), messages = [], answers = [], questions = [];
+  const config = new ConfigState(file, apply), messages = [], answers = [], questions = [], logOutput = [];
+  const logger = createLogger({
+    level: 0,
+    fileLevel: 0,
+    directory: path.join(folder, 'logs'),
+    stdout: { write: line => logOutput.push(line) },
+    stderr: { write: line => logOutput.push(line) }
+  });
   let shutdowns = 0;
-  const engine = new CommandConsole({ config, auth, logger: createLogger({ level: 0, directory: path.join(folder, 'logs') }),
+  const engine = new CommandConsole({ config, auth, logger,
     write: text => messages.push(text), ask: async (prompt, secret) => { questions.push({ prompt, secret }); if (!answers.length) throw new Error('No test answer'); return answers.shift(); },
     shutdown: async () => { shutdowns++; }, status: () => 'Test listener'
   });
   t.after(async () => { auth.close(); await fs.rm(folder, { recursive: true, force: true }); });
-  return { engine, config, auth, messages, answers, questions, file, database, shutdowns: () => shutdowns };
+  return { engine, config, auth, logger, logOutput, messages, answers, questions, file, database, shutdowns: () => shutdowns };
 }
 test('console modes, privilege boundaries, aliases, do, and redacted configuration', async t => {
   const { engine, config, messages, answers, file, questions } = await fixture(t);
@@ -64,6 +71,22 @@ test('running settings are validated, applied, explicitly saved, and loaded with
   await engine.execute('exit'); await engine.execute('copy running-config startup-config');
   assert.equal(loadConfig(file).port, 8081); assert.equal(loadConfig(file).logLevel, 4); assert.equal(loadConfig(file).fileLogLevel, 2); assert.equal(config.dirty(), false);
   assert.equal(new ConfigState(file).running.auth.database, 'private data/users.sqlite');
+});
+test('forced console input logging bypasses levels and redacts hidden answers', async t => {
+  const { engine, config, answers, logOutput, logger, file } = await fixture(t);
+  await engine.execute('enable');
+  await engine.execute('conf t');
+  await engine.execute('console force-input-log true');
+  assert.equal(config.running.console.forceInputLog, true);
+  await engine.execute('port 8082');
+  answers.push('audit-password', 'audit-password');
+  await engine.execute('enable password');
+  const logs = logOutput.join('') + await fs.readFile(logger.filename, 'utf8');
+  assert.match(logs, /Console input \(config\): port 8082/);
+  assert.match(logs, /Console input \(hidden\): \[hidden\]/);
+  assert.doesNotMatch(logs, /audit-password/);
+  await engine.execute('do copy run start');
+  assert.equal(JSON.parse(await fs.readFile(file)).console.forceInputLog, true);
 });
 test('accounts run before save, remain outside config.json, and persist with their sessions on copy run start', async t => {
   const { engine, auth, answers, file, database } = await fixture(t);

@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const readline = require('node:readline');
 const net = require('node:net');
+const { randomUUID } = require('node:crypto');
 const { validate } = require('./validate');
 const { normalizeDefinition, executeLegacy } = require('./legacy');
 const { parseCron, matchesCron } = require('./cron');
@@ -52,18 +53,39 @@ function findRoute(routes, method, pathname, predicate = () => true) {
   }
   return match;
 }
-const DEFAULT_APP_CONFIG = Object.freeze({ port: 3001, host: '0.0.0.0', 'log-level': 3 });
+const DEFAULT_APP_CONFIG = Object.freeze({ port: 3001, host: '0.0.0.0', 'log-level': 3, 'force-console-input-log': false, auth: Object.freeze({ database: 'data/auth.sqlite' }) });
 function validateAppConfig(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('config.json must contain an object');
   value = { ...DEFAULT_APP_CONFIG, ...value };
   if (!Number.isInteger(value.port) || value.port < 1 || value.port > 65535) throw new Error('config.json: port must be an integer between 1 and 65535');
   if (typeof value.host !== 'string' || !net.isIP(value.host)) throw new Error('config.json: host must be an IPv4 or IPv6 address');
   if (!Number.isInteger(value['log-level']) || value['log-level'] < 0 || value['log-level'] > 4) throw new Error('config.json: log-level must be an integer between 0 and 4');
+  if (typeof value['force-console-input-log'] !== 'boolean') throw new Error('config.json: force-console-input-log must be true or false');
   const projectId = value['project-id'] ?? null, releaseChannel = value['release-channel'] ?? null;
   if ((projectId === null) !== (releaseChannel === null)) throw new Error('config.json: project-id and release-channel must be set together');
   if (projectId !== null && (typeof projectId !== 'string' || !/^[a-f0-9-]{36}$/.test(projectId))) throw new Error('config.json: project-id must be a project UUID');
   if (releaseChannel !== null && !['RC', 'Prod'].includes(releaseChannel)) throw new Error('config.json: release-channel must be RC or Prod');
-  return { port: value.port, host: value.host, 'log-level': value['log-level'], ...(projectId === null ? {} : { 'project-id': projectId, 'release-channel': releaseChannel }) };
+  const updateUrl = value['update-url'] ?? null;
+  if (updateUrl !== null) {
+    if (typeof updateUrl !== 'string' || updateUrl.length > 2048) throw new Error('config.json: update-url must be an HTTP or HTTPS URL');
+    let parsed;
+    try { parsed = new URL(updateUrl); } catch { throw new Error('config.json: update-url must be an HTTP or HTTPS URL'); }
+    if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) throw new Error('config.json: update-url must be an HTTP or HTTPS URL without embedded credentials');
+  }
+  const auth = value.auth;
+  if (!auth || typeof auth !== 'object' || Array.isArray(auth) || typeof auth.database !== 'string' || !auth.database.trim()) throw new Error('config.json: auth.database must be a SQLite file path');
+  const database = value.database ?? null;
+  if (database !== null && (!database || typeof database !== 'object' || Array.isArray(database) || typeof database['credential-set'] !== 'string' || !/^[a-f0-9-]{36}$/.test(database['credential-set']))) throw new Error('config.json: database must identify a credential set');
+  return {
+    port: value.port,
+    host: value.host,
+    'log-level': value['log-level'],
+    'force-console-input-log': value['force-console-input-log'],
+    auth: { database: auth.database },
+    ...(projectId === null ? {} : { 'project-id': projectId, 'release-channel': releaseChannel }),
+    ...(updateUrl ? { 'update-url': updateUrl } : {}),
+    ...(database === null ? {} : { database: { 'credential-set': database['credential-set'] } })
+  };
 }
 function loadAppConfig(directory = __dirname) {
   const filename = path.join(directory, 'config.json');
@@ -90,7 +112,27 @@ function attachWorkflowContext(error, workspace, block, definition) {
   };
   return failure;
 }
-function createApp({ directory = __dirname, document, definitions, onError, onControl = null, logger = null, clock = () => new Date() } = {}) {
+function snapshotLogValue(value, seen = new WeakMap(), location = '$', depth = 0) {
+  if (value === undefined) return '[undefined]';
+  if (value === null || ['string', 'number', 'boolean'].includes(typeof value)) return value;
+  if (typeof value === 'bigint') return `${value}n`;
+  if (typeof value === 'symbol') return String(value);
+  if (typeof value === 'function') return `[Function ${value.name || 'anonymous'}]`;
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? 'Invalid Date' : value.toISOString();
+  if (value instanceof Error) return { name: value.name, message: value.message, stack: value.stack };
+  if (Buffer.isBuffer(value)) return { type: 'Buffer', length: value.length, data: value.toString('base64') };
+  if (depth >= 25) return '[Maximum log depth reached]';
+  if (seen.has(value)) return `[Circular ${seen.get(value)}]`;
+  seen.set(value, location);
+  if (Array.isArray(value)) return value.map((item, index) => snapshotLogValue(item, seen, `${location}[${index}]`, depth + 1));
+  const result = Object.create(null);
+  for (const key of Object.keys(value)) {
+    try { result[key] = snapshotLogValue(value[key], seen, `${location}.${key}`, depth + 1); }
+    catch (error) { result[key] = `[Unreadable: ${error.message}]`; }
+  }
+  return result;
+}
+function createApp({ directory = __dirname, document, definitions, onError, onControl = null, logger = null, clock = () => new Date(), stdin = process.stdin } = {}) {
   const reportError = onError || (error => {
     const context = error?.workflowContext;
     if (context && logger) {
@@ -106,25 +148,48 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
   definitions ||= loadDefinitions(path.join(directory, 'blocks'));
   for (const [type, definition] of definitions) definitions.set(type, normalizeDefinition(definition, `${type}.js`));
   document ||= JSON.parse(fs.readFileSync(path.join(directory, 'workspaces.json'), 'utf8'));
+  let favicon = null;
+  try { favicon = fs.readFileSync(path.join(directory, 'favicon.ico')); } catch (error) { if (error.code !== 'ENOENT') throw error; }
   const configFile = path.join(directory, 'config.json');
   const applicationConfig = fs.existsSync(configFile) ? validateAppConfig(JSON.parse(fs.readFileSync(configFile, 'utf8'))) : DEFAULT_APP_CONFIG;
-  const deployment = { projectId: applicationConfig['project-id'] || null, channel: applicationConfig['release-channel'] || null };
+  const deployment = Object.freeze({ projectId: applicationConfig['project-id'] || null, channel: applicationConfig['release-channel'] || null, updateUrl: applicationConfig['update-url'] || null });
   validate(document, definitions);
   const controller = new AbortController(), timers = [], stdinListeners = [], activeRuns = new Set(), routes = [], authenticationStores = new Map();
   const shared = Object.create(null);
-  let started = false, stdinInterface = null, controlRequested = null;
+  let started = false, stdinInterface = null, controlRequested = null, databasePool = null;
+  const getDatabase = async () => {
+    if (databasePool) return databasePool;
+    const selected = applicationConfig.database;
+    if (!selected) throw new Error('No database credential set is selected in application settings');
+    const { DatabaseSync } = require('node:sqlite');
+    const filename = path.resolve(directory, applicationConfig.auth.database);
+    let credentials, database;
+    try {
+      database = new DatabaseSync(filename, { readOnly: true });
+      credentials = database.prepare('SELECT host, port, username, password, database_name FROM database_credentials WHERE id = ?').get(selected['credential-set']);
+    } finally { database?.close(); }
+    if (!credentials) throw new Error('The selected database credential set was not found');
+    const mysql = require('mysql2/promise');
+    databasePool = mysql.createPool({ host: credentials.host, port: credentials.port, user: credentials.username, password: credentials.password, database: credentials.database_name, waitForConnections: true, connectionLimit: 10, queueLimit: 0 });
+    return databasePool;
+  };
   for (const definition of definitions.values()) {
     if (definition.legacy && typeof definition.source.init === 'function') definition.source.init(shared);
   }
   async function run(ws, trigger, request = null, response = null, seed = {}) {
     const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(60000)]);
     const execution = seed.execution || { vars: Object.create(null), values: new Map(), evaluated: new Set() };
+    const runId = seed.runId || randomUUID();
     const context = {
       vars: execution.vars, values: execution.values, evaluated: execution.evaluated,
-      request, response, env: process.env, signal, shared, appName: document.name, directory, logger, deployment,
-      legacyValues: seed.legacyValues || []
+      request, response, env: process.env, signal, shared, appName: document.name, directory, logger, deployment, database: getDatabase,
+      legacyValues: seed.legacyValues || [], runId, loggedInUser: seed.loggedInUser || 'svc_automation'
     };
     context.render = value => render(value, context);
+    context.setLoggedInUser = session => {
+      if (session?.username) context.loggedInUser = String(session.username);
+      return session;
+    };
     context.controlApplication = mode => {
       if (!['stop', 'restart'].includes(mode)) throw new Error('Unknown application control request');
       if (typeof onControl !== 'function') throw new Error('Application control is unavailable in this runtime');
@@ -132,9 +197,8 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
       controlRequested = mode;
       setImmediate(() => Promise.resolve(onControl(mode)).catch(reportError));
     };
-    context.authentication = filename => {
-      const resolved = path.resolve(directory, String(filename || '').trim());
-      if (!String(filename || '').trim()) throw new Error('Select an authentication SQLite database');
+    context.authentication = () => {
+      const resolved = path.resolve(directory, applicationConfig.auth.database);
       if (!authenticationStores.has(resolved)) {
         const { WorkflowAuth } = require('./auth');
         authenticationStores.set(resolved, new WorkflowAuth(resolved));
@@ -144,6 +208,42 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
     const nodes = new Map(ws.blocks.map(block => [block.id, block]));
     const incoming = (block, port) => ws.connections.find(edge => edge.to === block.id && (edge.input || 'action') === port);
     let steps = 0;
+    async function publishWorkspaceEvent(block, definition, startedAt, inputs, status, error = null) {
+      if (seed.suppressWorkspaceLog || (!ws.forceLog && !ws.logAllRunsToBlock)) return;
+      const outputs = Object.create(null);
+      for (const port of definition.outputPorts.filter(port => port.kind === 'value')) {
+        const key = `${block.id}:${port.id}`;
+        if (context.values.has(key)) outputs[port.id] = snapshotLogValue(context.values.get(key));
+      }
+      const completedAt = new Date();
+      const content = {
+        timestamp: completedAt.toISOString(),
+        startedAt: startedAt.toISOString(),
+        durationMs: Math.max(0, completedAt.getTime() - startedAt.getTime()),
+        status,
+        successful: status === 'completed',
+        workspace: { id: ws.id, numberId: ws.numberId, name: ws.name },
+        block: { id: block.id, numberId: block.numberId, type: block.type, name: definition.name },
+        actionInput: inputs.actionInput,
+        inputs: snapshotLogValue(inputs.values),
+        options: snapshotLogValue(block.options),
+        outputs,
+        ...(error ? { error: snapshotLogValue(error) } : {})
+      };
+      if (ws.forceLog) {
+        const write = logger?.forceInfo || logger?.info;
+        write?.call(logger, 'Workspace run %s: user=%s content=%s', runId, context.loggedInUser, JSON.stringify(content));
+      }
+      if (!ws.logAllRunsToBlock) return;
+      const listeners = ws.blocks.filter(candidate => candidate.type === 'workspace_log' && candidate.id !== block.id);
+      const results = await Promise.allSettled(listeners.map(listener => run(ws, listener, request, response, {
+        runId,
+        loggedInUser: context.loggedInUser,
+        logEvent: content,
+        suppressWorkspaceLog: true
+      })));
+      for (const result of results) if (result.status === 'rejected') reportError(result.reason);
+    }
     async function outputValue(edge, stack) {
       const key = `${edge.from}:${edge.output}`;
       if (context.values.has(key)) return context.values.get(key);
@@ -168,11 +268,10 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
       if (stack.has(block.id)) throw new Error('Circular value dependency');
       const nextStack = new Set(stack).add(block.id);
       const inputs = Object.create(null);
-      for (const input of def.inputPorts.filter(port => port.kind === 'value')) {
-        const edge = incoming(block, input.id);
-        if (edge) inputs[input.id] = await outputValue(edge, nextStack);
-      }
-      if (def.trigger === 'receiver' && seed.receiverID !== undefined && String(inputs.id ?? block.options.id ?? '') !== String(seed.receiverID)) return;
+      const eventInputs = { actionInput, values: inputs };
+      const startedAt = new Date();
+      const followedOutputs = [];
+      const queueFollow = async output => { followedOutputs.push(output); };
       const follow = async output => {
         const edge = ws.connections.find(item => item.from === block.id && item.output === output && (item.kind || 'action') === 'action');
         if (edge) await executeBlock(nodes.get(edge.to), edge.input || 'action');
@@ -183,25 +282,48 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
         context.vars[block.id][id] = value;
         context.vars[id] = value;
       };
-      if (def.legacy) {
-        if (actionInput === null && context.evaluated.has(block.id)) return;
-        await executeLegacy(def, context, block, inputs, follow);
-        context.evaluated.add(block.id);
-      } else {
-        if (def.trigger === 'http') {
-          setOutput('body', request?.body ?? '');
-          setOutput('headers', request?.headers ?? {});
+      try {
+        for (const input of def.inputPorts.filter(port => port.kind === 'value')) {
+          const edge = incoming(block, input.id);
+          if (edge) inputs[input.id] = await outputValue(edge, nextStack);
         }
-        const output = def.trigger ? 'next' : await def.execute(context, block.options, inputs, setOutput);
-        if (output) await follow(output);
+        if (def.trigger === 'receiver' && seed.receiverID !== undefined && String(inputs.id ?? block.options.id ?? '') !== String(seed.receiverID)) return;
+        if (def.legacy) {
+          if (actionInput === null && context.evaluated.has(block.id)) return;
+          await executeLegacy(def, context, block, inputs, queueFollow);
+          context.evaluated.add(block.id);
+        } else {
+          if (def.trigger === 'http') {
+            setOutput('body', request?.body ?? '');
+            setOutput('headers', request?.headers ?? {});
+          }
+          if (def.trigger === 'workspace_log') {
+            setOutput('logged_in_user', seed.loggedInUser || 'svc_automation');
+            setOutput('content', seed.logEvent || {});
+            setOutput('run_id', runId);
+          }
+          const output = def.trigger ? 'next' : await def.execute(context, block.options, inputs, setOutput);
+          if (output) followedOutputs.push(output);
+        }
+      } catch (error) {
+        await publishWorkspaceEvent(block, def, startedAt, eventInputs, 'failed', error);
+        throw error;
       }
+      await publishWorkspaceEvent(block, def, startedAt, eventInputs, 'completed');
+      for (const output of followedOutputs) await follow(output);
     }
     context.emit = async (id, details = {}) => {
       const workspaces = details.restriction_type === 'all' ? document.workspaces.filter(item => item.active) : [ws];
       const tasks = [];
       for (const targetWorkspace of workspaces) {
         for (const receiver of targetWorkspace.blocks.filter(block => ['receiver', 'receiver_8x'].includes(block.type))) {
-          tasks.push(run(targetWorkspace, receiver, request, response, { receiverID: id, legacyValues: details.values || [], execution }));
+          tasks.push(run(targetWorkspace, receiver, request, response, {
+            receiverID: id,
+            legacyValues: details.values || [],
+            execution,
+            runId,
+            loggedInUser: context.loggedInUser
+          }));
         }
       }
       await Promise.all(tasks);
@@ -264,6 +386,10 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
       const url = new URL(req.url, 'http://localhost');
       requestPath = url.pathname;
       logger?.debug('Request received: %s %s', req.method, requestPath);
+      if (url.pathname === '/favicon.ico' && ['GET', 'HEAD'].includes(req.method) && favicon) {
+        res.writeHead(200, { 'content-type': 'image/x-icon', 'content-length': favicon.length, 'cache-control': 'public, max-age=86400' });
+        res.end(req.method === 'HEAD' ? undefined : favicon); return;
+      }
       let route = findRoute(routes, req.method, url.pathname), loginSubmission = false;
       if (!route && req.method === 'POST') {
         route = findRoute(routes, 'GET', url.pathname, candidate => candidate.method === 'GET' && candidate.loginBlock);
@@ -296,8 +422,14 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
         const trigger = definitions.get(block.type).trigger;
         if (trigger === 'startup') track(run(ws, block)).catch(reportError);
         if (trigger === 'stdin') {
-          const listener = line => track(run(ws, block, null, null, { legacyValues: [line] })).catch(reportError);
-          stdinInterface ||= readline.createInterface({ input: process.stdin, terminal: false, crlfDelay: Infinity });
+          const listener = line => {
+            if (applicationConfig['force-console-input-log']) {
+              const write = logger?.forceInfo || logger?.info;
+              write?.call(logger, 'Console input: %s', line);
+            }
+            track(run(ws, block, null, null, { legacyValues: [line] })).catch(reportError);
+          };
+          stdinInterface ||= readline.createInterface({ input: stdin, terminal: false, crlfDelay: Infinity });
           stdinListeners.push(listener);
           stdinInterface.on('line', listener);
         }
@@ -331,6 +463,7 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
       stdinInterface?.close();
       for (const authentication of authenticationStores.values()) authentication.close();
       authenticationStores.clear();
+      if (databasePool) { await databasePool.end(); databasePool = null; }
     }
   };
 }
@@ -354,7 +487,12 @@ if (require.main === module) {
     lifecycle('Stopping %s (%s)', app.name, reason);
     try {
       await app.stop(); lifecycle('%s stopped', app.name);
-      if (restart) { lifecycle('Restarting %s', app.name); stopping = false; await launch(); }
+      if (restart) {
+        logger.startNewCycle?.();
+        lifecycle('Restarting %s', app.name);
+        stopping = false;
+        await launch();
+      }
     }
     catch (error) { logger.critical('Shutdown failed: %s', error?.stack || error); process.exitCode = 1; }
   };

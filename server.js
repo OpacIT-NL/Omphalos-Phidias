@@ -27,12 +27,12 @@ const repositoryPage = (folder, entries) => {
     return `<a class="repo-row" href="${href}"><strong>${entry.directory ? '▸ ' : ''}${escapeHTML(entry.name)}</strong><span>${escapeHTML(size)}</span><time>${escapeHTML(modified)}</time></a>`;
   }).join('') || '<p class="repo-empty">This repository folder is empty.</p>';
   const parent = folder ? '<a class="repo-parent" href="/repo/">← Repository</a>' : '';
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHTML(title)} · OpacIT Omphalos Phidias</title><style>:root{color-scheme:light dark;font-family:system-ui,sans-serif;background:#1e1f22;color:#f2f3f5}*{box-sizing:border-box}body{margin:0;padding:32px;background:#1e1f22}.repo{width:min(900px,100%);margin:auto}.repo-head{padding-bottom:18px;border-bottom:1px solid #47494f}.repo-head h1{margin:6px 0 0;font-size:22px}.repo-head small,.repo-parent,.repo-row span,.repo-row time,.repo-empty{color:#b5bac1}.repo-parent{display:inline-block;text-decoration:none}.repo-list{margin-top:12px;border:1px solid #47494f;border-radius:7px;overflow:hidden;background:#2b2d31}.repo-row{display:grid;grid-template-columns:minmax(180px,1fr) 90px 180px;gap:16px;padding:12px 14px;border-bottom:1px solid #47494f;color:#f2f3f5;text-decoration:none}.repo-row:last-child{border-bottom:0}.repo-row:hover{background:#35373c}.repo-row span,.repo-row time{text-align:right;font-size:12px}.repo-empty{padding:28px;text-align:center}@media(max-width:620px){body{padding:16px}.repo-row{grid-template-columns:1fr auto}.repo-row time{display:none}}</style></head><body><main class="repo"><header class="repo-head">${parent}<small>OpacIT Omphalos Phidias</small><h1>${escapeHTML(title)}</h1></header><section class="repo-list">${rows}</section></main></body></html>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHTML(title)} · OpacIT Omphalos Phidias</title><link rel="icon" href="/favicon.ico" sizes="any"><style>:root{color-scheme:light dark;font-family:system-ui,sans-serif;background:#1e1f22;color:#f2f3f5}*{box-sizing:border-box}body{margin:0;padding:32px;background:#1e1f22}.repo{width:min(900px,100%);margin:auto}.repo-head{padding-bottom:18px;border-bottom:1px solid #47494f}.repo-head h1{margin:6px 0 0;font-size:22px}.repo-head small,.repo-parent,.repo-row span,.repo-row time,.repo-empty{color:#b5bac1}.repo-parent{display:inline-block;text-decoration:none}.repo-list{margin-top:12px;border:1px solid #47494f;border-radius:7px;overflow:hidden;background:#2b2d31}.repo-row{display:grid;grid-template-columns:minmax(180px,1fr) 90px 180px;gap:16px;padding:12px 14px;border-bottom:1px solid #47494f;color:#f2f3f5;text-decoration:none}.repo-row:last-child{border-bottom:0}.repo-row:hover{background:#35373c}.repo-row span,.repo-row time{text-align:right;font-size:12px}.repo-empty{padding:28px;text-align:center}@media(max-width:620px){body{padding:16px}.repo-row{grid-template-columns:1fr auto}.repo-row time{display:none}}</style></head><body><main class="repo"><header class="repo-head">${parent}<small>OpacIT Omphalos Phidias</small><h1>${escapeHTML(title)}</h1></header><section class="repo-list">${rows}</section></main></body></html>`;
 };
-const assets = new Map([['/', ['index.html', 'text/html']], ['/login', ['login.html', 'text/html']], ['/login.js', ['login.js', 'text/javascript']], ['/editor.js', ['editor.js', 'text/javascript']], ['/style.css', ['style.css', 'text/css']]]);
+const assets = new Map([['/', ['index.html', 'text/html']], ['/login', ['login.html', 'text/html']], ['/login.js', ['login.js', 'text/javascript']], ['/editor.js', ['editor.js', 'text/javascript']], ['/style.css', ['style.css', 'text/css']], ['/favicon.ico', ['favicon.ico', 'image/x-icon']]]);
 async function createServer({ directory = loadConfig().directory, repositoryDirectory, authDatabase = loadConfig().authDatabase, secureCookies = loadConfig().secureCookies, logger = createLogger({ level: loadConfig().logLevel, fileLevel: loadConfig().fileLogLevel, directory: path.join(__dirname, 'log') }), closeResourcesOnClose = true } = {}) {
-  const store = new Store(directory, repositoryDirectory); await store.init();
   const auth = new Auth(authDatabase, { secureCookies });
+  const store = new Store(directory, repositoryDirectory, { authDatabase, databaseCredential: id => auth.databaseCredential(id) }); await store.init();
   const webConsoles = new Map();
   let commandConsoleFactory = null;
   const consoleKey = session => `${session.username}:${session.csrfToken}`;
@@ -121,6 +121,30 @@ async function createServer({ directory = loadConfig().directory, repositoryDire
           if (url.pathname === '/api/console/input' && req.method === 'POST') return send(200, await webConsole(session).submit((await readBody(req))?.input));
           if (url.pathname === '/api/console' && req.method === 'GET') return send(200, webConsole(session).snapshot());
           if (url.pathname === '/api/console' && req.method === 'DELETE') { closeWebConsole(session); return send(200, { ok: true }); }
+          return send(405, { error: 'Method not allowed' });
+        }
+        const databaseCredentialMatch = url.pathname.match(/^\/api\/database-credentials(?:\/([a-f0-9-]{36}))?$/);
+        if (databaseCredentialMatch) {
+          const id = databaseCredentialMatch[1];
+          if (!id && req.method === 'GET') return send(200, auth.listDatabaseCredentials());
+          auth.requireCore(session.username, 'manage_users');
+          if (!id && req.method === 'POST') {
+            const credential = auth.createDatabaseCredential(await readBody(req));
+            logger.info('Database credential set created by %s: %s', session.username, credential.id);
+            return send(201, credential);
+          }
+          if (id && req.method === 'PUT') {
+            const credential = auth.updateDatabaseCredential(id, await readBody(req));
+            logger.info('Database credential set updated by %s: %s', session.username, id);
+            return send(200, credential);
+          }
+          if (id && req.method === 'DELETE') {
+            const usage = await store.databaseCredentialUsage(id);
+            if (usage.length) throw Object.assign(new Error(`This credential set is selected by ${usage.map(item => `${item.projectName} ${item.channel}`).join(', ')}.`), { status: 409 });
+            auth.deleteDatabaseCredential(id);
+            logger.info('Database credential set deleted by %s: %s', session.username, id);
+            return send(200, { ok: true });
+          }
           return send(405, { error: 'Method not allowed' });
         }
         const accessUserMatch = url.pathname.match(/^\/api\/access\/users(?:\/([^/]+)(?:\/(password))?)?$/);
@@ -280,7 +304,7 @@ async function createServer({ directory = loadConfig().directory, repositoryDire
       if (req.method !== 'GET' || !assets.has(url.pathname)) return send(404, { error: 'Not found' });
       const [file, type] = assets.get(url.pathname);
       const contents = await fs.readFile(path.join(__dirname, 'public', file));
-      res.writeHead(200, { 'content-type': `${type}; charset=utf-8` });
+      res.writeHead(200, { 'content-type': type.startsWith('text/') ? `${type}; charset=utf-8` : type });
       res.end(type === 'text/html' ? contents.toString().replaceAll('{{APP_VERSION}}', htmlVersion) : contents);
     } catch (error) {
       if (!error.status || error.status >= 500) logger.error('Request failed: %s %s: %s', req.method, requestPath, error.stack || error.message);
