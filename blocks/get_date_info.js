@@ -1,3 +1,28 @@
+function getDateInfo(value, dateInfo, timeType) {
+    const date = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(date.getTime())) throw new Error("Get Date Info requires a valid date");
+    const utc = timeType === "utc";
+    const prefix = utc ? "UTC" : "";
+
+    switch(Number(dateInfo)) {
+        case 1: return Math.trunc(date.getTime() / 1000);
+        case 2: return ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][date["get" + prefix + "Day"]()];
+        case 3: return date["get" + prefix + "Date"]();
+        case 4: return ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"][date["get" + prefix + "Month"]()];
+        case 5: return date["get" + prefix + "Month"]() + 1;
+        case 6: return date["get" + prefix + "FullYear"]();
+        case 7: return date.toLocaleDateString(undefined, { timeZone: utc ? "UTC" : undefined });
+        case 8: return date.toLocaleTimeString(undefined, { timeZone: utc ? "UTC" : undefined });
+        case 9: return date.toLocaleString(undefined, { timeZone: utc ? "UTC" : undefined });
+        case 10: return date["get" + prefix + "Hours"]();
+        case 11: return date["get" + prefix + "Minutes"]();
+        case 12: return date["get" + prefix + "Seconds"]();
+        case 13: return date["get" + prefix + "Milliseconds"]();
+        case 14: return utc ? "UTC" : Intl.DateTimeFormat().resolvedOptions().timeZone || "Local";
+        default: throw new Error("Unknown date information selection");
+    }
+}
+
 module.exports = {
     name: "Get Date Info",
 
@@ -73,79 +98,11 @@ module.exports = {
 
     code(cache) {
         const date = this.GetInputValue("date", cache);
-        const date_info = parseInt(this.GetOptionValue("date_info", cache));
-        const time_type = this.GetOptionValue("time_type", cache) == "utc" ? "UTC" : "";
-
-        let result; 
-        switch(date_info) {
-            case 1:
-                result = date["get" + time_type + "Time"]();
-                result = date / 1000
-                result = Math.trunc(result)
-                break;
-            case 2:
-                result = ({
-                    0: "Sunday",
-                    1: "Monday",
-                    2: "Tuesday",
-                    3: "Wednesday",
-                    4: "Thursday",
-                    5: "Friday",
-                    6: "Saturday"
-                })[date["get" + time_type + "Day"]()];
-                break;
-            case 3:
-                result = date["get" + time_type + "Date"]();
-                break;
-            case 4:
-                result = ({
-                    0: "January",
-                    1: "February",
-                    2: "March",
-                    3: "April",
-                    4: "May",
-                    5: "June",
-                    6: "July",
-                    7: "August",
-                    8: "September",
-                    9: "October",
-                    10: "November",
-                    11: "December"
-                })[date["get" + time_type + "Month"]()];
-                break;
-            case 5:
-                result = date["get" + time_type + "Month"]() + 1;
-                break;
-            case 6:
-                result = date["get" + time_type + "FullYear"]();
-                break;
-            case 7:
-                result = date.toLocaleDateString(undefined, {timeZone: time_type || undefined});
-                break;
-            case 8:
-                result = date.toLocaleTimeString(undefined, {timeZone: time_type || undefined});
-                break;
-            case 9:
-                result = date.toLocaleString(undefined, {timeZone: time_type || undefined});
-                break;
-            case 9:
-                result = date["get" + time_type + "Hours"]();
-                break;
-            case 10:
-                result = date["get" + time_type + "Minutes"]();
-                break;
-            case 11:
-                result = date["get" + time_type + "Seconds"]();
-                break;
-            case 12:
-                result = date["get" + time_type + "Milliseconds"]();
-                break;
-            case 13:
-                result = "GMT" + date.slice(28, 29) + parseInt(date.slice(29, 33)) / 100;
-                break;
-        }
+        const result = getDateInfo(date, this.GetOptionValue("date_info", cache), this.GetOptionValue("time_type", cache));
 
         this.StoreOutputValue(result, "result", cache);
         this.RunNextBlock("action", cache);
-    }
+    },
+
+    getDateInfo
 }

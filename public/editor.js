@@ -63,7 +63,8 @@ function modalField(field) {
   const checked = field.type === 'checkbox' && field.value ? 'checked' : '';
   const value = field.type === 'checkbox' ? '' : 'value="' + escapeHTML(field.value || '') + '"';
   const maxlength = field.type === 'password' ? 1000 : 100;
-  return '<label class="field"><span>' + label + '</span><input name="' + name + '" type="' + (field.type || 'text') + '" ' + checked + ' ' + value + ' maxlength="' + maxlength + '" ' + (field.optional ? '' : 'required') + ' autocomplete="off"></label>';
+  const required = field.type === 'checkbox' || field.optional ? '' : 'required';
+  return '<label class="field"><span>' + label + '</span><input name="' + name + '" type="' + (field.type || 'text') + '" ' + checked + ' ' + value + ' maxlength="' + maxlength + '" ' + required + ' autocomplete="off"></label>';
 }
 function modal(title, fields, submit = 'Continue') {
   return new Promise(resolve => {

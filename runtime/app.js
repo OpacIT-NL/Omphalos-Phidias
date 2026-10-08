@@ -355,7 +355,10 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
             legacyValues: details.values || [],
             execution,
             runId,
-            loggedInUser: context.loggedInUser
+            runStartedAt,
+            loggedInUser: context.loggedInUser,
+            suppressWorkspaceLog: Boolean(seed.suppressWorkspaceLog),
+            suppressRunIdTrigger: Boolean(seed.suppressRunIdTrigger)
           }));
         }
       }

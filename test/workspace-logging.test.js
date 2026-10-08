@@ -254,3 +254,64 @@ test('Console Log uses its selected Info, Warning, or Error severity', async t =
   assert.match(output, /\[WARNING\] warning message/);
   assert.match(output, /\[ERROR\] error message/);
 });
+
+test('workspace log handler emissions do not force-log the trace receiver workspace', async t => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'phidias-trace-workspace-'));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const lines = [], received = [];
+  const logger = createLogger({
+    level: 0,
+    fileLevel: 0,
+    directory: path.join(directory, 'log'),
+    stdout: { write: line => lines.push(line) },
+    stderr: { write: line => lines.push(line) }
+  });
+  const definitions = loadDefinitions(path.resolve(__dirname, '../blocks'));
+  definitions.set('emit_trace_event', {
+    type: 'emit_trace_event', name: 'Emit Trace Event', category: 'Tests', description: 'Forwards a trace event.', fields: [],
+    inputPorts: [{ id: 'action', name: 'Action', kind: 'action', types: [] }], outputPorts: [], outputs: [],
+    async execute(ctx) { await ctx.emit('trace-event', { restriction_type: 'all', values: ['trace'] }); }
+  });
+  definitions.set('capture_trace_event', {
+    type: 'capture_trace_event', name: 'Capture Trace Event', category: 'Tests', description: 'Captures a trace event.', fields: [],
+    inputPorts: [
+      { id: 'action', name: 'Action', kind: 'action', types: [] },
+      { id: 'value', name: 'Value', kind: 'value', types: ['text', 'unspecified'] }
+    ],
+    outputPorts: [], outputs: [],
+    async execute(_ctx, _options, inputs) { received.push(inputs.value); }
+  });
+  const source = {
+    id: 'source', numberId: 1, name: 'Source', active: true, forceLog: false, logAllRunsToBlock: true,
+    blocks: [
+      { id: 'http', numberId: 1, type: 'http', x: 0, y: 0, options: { method: 'GET', path: '/trace' } },
+      { id: 'reply', numberId: 2, type: 'respond', x: 200, y: 0, options: { status: 200, format: 'Text', body: 'ok', headers: '{}' } },
+      { id: 'workspace-log', numberId: 3, type: 'workspace_log', x: 0, y: 200, options: {} },
+      { id: 'emit', numberId: 4, type: 'emit_trace_event', x: 200, y: 200, options: {} }
+    ],
+    connections: [
+      { id: 'source-next', from: 'http', output: 'next', to: 'reply', input: 'action', kind: 'action' },
+      { id: 'log-next', from: 'workspace-log', output: 'next', to: 'emit', input: 'action', kind: 'action' }
+    ]
+  };
+  const trace = {
+    id: 'trace', numberId: 14, name: '/sibyl/amptrace', active: true, forceLog: true, logAllRunsToBlock: false,
+    blocks: [
+      { id: 'receiver-id', numberId: 1, type: 'text', x: 0, y: 0, options: { text: 'trace-event' } },
+      { id: 'receiver', numberId: 2, type: 'receiver', x: 200, y: 0, options: {} },
+      { id: 'capture', numberId: 3, type: 'capture_trace_event', x: 400, y: 0, options: {} }
+    ],
+    connections: [
+      { id: 'receiver-id-wire', from: 'receiver-id', output: 'text', to: 'receiver', input: 'id', kind: 'value' },
+      { id: 'receiver-next', from: 'receiver', output: 'action', to: 'capture', input: 'action', kind: 'action' },
+      { id: 'receiver-value', from: 'receiver', output: 'value1', to: 'capture', input: 'value', kind: 'value' }
+    ]
+  };
+  const app = createApp({ directory, document: { version: 1, name: 'Trace suppression', workspaces: [source, trace] }, definitions, logger });
+  await app.start(0, '127.0.0.1');
+  t.after(() => app.stop());
+  assert.equal((await fetch(`http://127.0.0.1:${app.server.address().port}/trace`)).status, 200);
+  assert.deepEqual(received, ['trace', 'trace']);
+  assert.doesNotMatch(lines.join(''), /Workspace run/);
+  assert.doesNotMatch(await fs.readFile(logger.filename, 'utf8'), /Workspace run/);
+});
