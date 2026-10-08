@@ -205,3 +205,52 @@ test('application force-console setting forces Console Log blocks without auditi
   assert.match(lines.join(''), /\[INFO\] forced console block message/);
   assert.match(await fs.readFile(logger.filename, 'utf8'), /\[INFO\] forced console block message/);
 });
+
+test('Console Log uses its selected Info, Warning, or Error severity', async t => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'phidias-console-log-level-'));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  await fs.writeFile(path.join(directory, 'config.json'), JSON.stringify({
+    port: 3001,
+    host: '127.0.0.1',
+    'log-level': 2,
+    'force-console-input-log': false
+  }));
+  const lines = [];
+  const logger = createLogger({
+    level: 2,
+    fileLevel: 2,
+    directory: path.join(directory, 'log'),
+    stdout: { write: line => lines.push(line) },
+    stderr: { write: line => lines.push(line) }
+  });
+  const document = {
+    version: 1,
+    name: 'Console log levels',
+    workspaces: [{
+      id: 'main', numberId: 1, name: 'Main', active: true,
+      blocks: [
+        { id: 'http', numberId: 1, type: 'http', x: 0, y: 0, options: { method: 'GET', path: '/levels' } },
+        { id: 'info', numberId: 2, type: 'console_log', x: 200, y: 0, options: { level: 'info', value: 'info message' } },
+        { id: 'warning', numberId: 3, type: 'console_log', x: 400, y: 0, options: { level: 'warning', value: 'warning message' } },
+        { id: 'error', numberId: 4, type: 'console_log', x: 600, y: 0, options: { level: 'error', value: 'error message' } },
+        { id: 'reply', numberId: 5, type: 'respond', x: 800, y: 0, options: { status: 200, format: 'Text', body: 'ok', headers: '{}' } }
+      ],
+      connections: [
+        { id: 'a1', from: 'http', output: 'next', to: 'info', input: 'action', kind: 'action' },
+        { id: 'a2', from: 'info', output: 'action', to: 'warning', input: 'action', kind: 'action' },
+        { id: 'a3', from: 'warning', output: 'action', to: 'error', input: 'action', kind: 'action' },
+        { id: 'a4', from: 'error', output: 'action', to: 'reply', input: 'action', kind: 'action' }
+      ]
+    }]
+  };
+  const definitions = loadDefinitions(path.resolve(__dirname, '../blocks'));
+  assert.deepEqual(definitions.get('console_log').fields.find(field => field.key === 'level').choices, ['info', 'warning', 'error']);
+  const app = createApp({ directory, document, definitions, logger });
+  await app.start(0, '127.0.0.1');
+  t.after(() => app.stop());
+  assert.equal((await fetch(`http://127.0.0.1:${app.server.address().port}/levels`)).status, 200);
+  const output = lines.join('');
+  assert.doesNotMatch(output, /info message/);
+  assert.match(output, /\[WARNING\] warning message/);
+  assert.match(output, /\[ERROR\] error message/);
+});

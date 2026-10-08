@@ -194,9 +194,12 @@ async function executeLegacy(definition, ctx, block, connectedInputs, follow) {
   if (definition.type === 'console_log') {
     let content = getInput('value');
     if (content === undefined) content = api.GetOptionValue('value', null, '');
-    const write = ctx.forceConsoleLog ? (ctx.logger?.forceInfo || ctx.logger?.info) : ctx.logger?.info;
+    const requestedLevel = String(api.GetOptionValue('level', null, 'info')).toLowerCase();
+    const level = ['info', 'warning', 'error'].includes(requestedLevel) ? requestedLevel : 'info';
+    const forcedMethod = { info: 'forceInfo', warning: 'forceWarning', error: 'forceError' }[level];
+    const write = ctx.forceConsoleLog ? (ctx.logger?.[forcedMethod] || ctx.logger?.[level]) : ctx.logger?.[level];
     if (write) write.call(ctx.logger, content);
-    else console.log(content);
+    else (level === 'error' ? console.error : level === 'warning' ? console.warn : console.info)(content);
     api.RunNextBlock('action');
     await Promise.all(branches);
     return stored;

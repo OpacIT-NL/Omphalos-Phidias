@@ -161,7 +161,7 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
     if (databasePool) return databasePool;
     const selected = applicationConfig.database;
     if (!selected) throw new Error('No database credential set is selected in application settings');
-    const { DatabaseSync } = require('node:sqlite');
+    const { DatabaseSync } = require('./sqlite').loadSQLite();
     const filename = path.resolve(directory, applicationConfig.auth.database);
     let credentials, database;
     try {

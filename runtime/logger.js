@@ -61,6 +61,8 @@ function createLogger({ level = 3, fileLevel = level, directory = path.join(proc
       if (LEVELS.info <= fileLevel) append(rendered);
     },
     forceInfo(...values) { forceWrite('info', values); },
+    forceWarning(...values) { forceWrite('warning', values); },
+    forceError(...values) { forceWrite('error', values); },
     ...Object.fromEntries(Object.keys(LEVELS).map(name => [name, (...values) => write(name, values)])),
     setLevel(value) { level = validateLogLevel(value); },
     setFileLevel(value) { fileLevel = validateLogLevel(value, 'file-log-level'); },

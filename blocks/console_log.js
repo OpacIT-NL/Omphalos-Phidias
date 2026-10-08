@@ -22,6 +22,17 @@ module.exports = {
 
     options: [
         {
+            id: "level",
+            name: "Log Level",
+            description: "Description: The severity used for this console and file log entry.",
+            type: "SELECT",
+            options: {
+                info: "Info",
+                warning: "Warning",
+                error: "Error"
+            }
+        },
+        {
             id: "value",
             name: "Value",
             description: "Description: The value of the Console Log",
@@ -45,7 +56,10 @@ module.exports = {
             content = this.GetOptionValue("value", cache);
         }
 
-        console.log(content);
+        const level = String(this.GetOptionValue("level", cache) || "info").toLowerCase();
+        if (level === "error") console.error(content);
+        else if (level === "warning") console.warn(content);
+        else console.info(content);
 
         this.RunNextBlock("action", cache);
     }
