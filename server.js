@@ -241,6 +241,15 @@ async function createServer({ directory = loadConfig().directory, repositoryDire
           }
           return send(405, { error: 'Method not allowed' });
         }
+        const versionCleanupMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/versions\/cleanup-rc$/);
+        if (versionCleanupMatch) {
+          const id = versionCleanupMatch[1];
+          if (req.method !== 'POST') return send(405, { error: 'Method not allowed' });
+          auth.requireProject(session.username, id, 'edit');
+          const result = await store.deleteRCVersionsBefore(id, (await readBody(req))?.beforeRevision);
+          logger.info('Old RC revisions deleted: %s (deleted %s; preserved Prod %s)', id, result.deleted.join(',') || 'none', result.skippedProd.join(',') || 'none');
+          return send(200, result);
+        }
         const versionMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/versions(?:\/(\d+)(?:\/(promote|restore))?)?$/);
         if (versionMatch) {
           const [, id, revisionText, action] = versionMatch;

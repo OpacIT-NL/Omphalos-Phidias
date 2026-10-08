@@ -10,6 +10,7 @@ let blockClipboard = null, workspaceClipboard = null, clipboardKind = null, past
 let templateNames = [], templateOriginalName = null, templateDirty = false;
 let sessionPermissions = {}, accessData = null, accessSelection = null;
 let databaseCredentials = [];
+let displayedVersions = [];
 let webConsoleState = null, webConsolePolling = false;
 let pickerWorldPosition = null;
 let geometryFrame = 0;
@@ -236,6 +237,7 @@ function latestURL(version, channel) {
   return url ? url.replace(/[^/]+$/, 'latest.zip') : null;
 }
 function renderVersions(versions) {
+  displayedVersions = versions;
   const rcLatest = versions.find(version => version.channels.includes('RC'));
   const prodLatest = versions.find(version => version.channels.includes('Prod'));
   $('#version-latest').innerHTML = [
@@ -249,10 +251,23 @@ function renderVersions(versions) {
     const editActions = project.access?.includes('edit') ? `<button type="button" data-version-action="restore" ${current ? 'disabled' : ''}>Restore</button><button type="button" class="danger" data-version-action="delete" ${current ? 'disabled' : ''}>Delete</button>` : '';
     return `<article class="version-row" data-revision="${version.revision}"><div class="version-main"><strong>Revision ${version.revision}</strong><span>${escapeHTML(new Date(version.createdAt).toLocaleString())}</span><small>${escapeHTML(version.name)}</small></div><div class="version-channels"><b class="channel rc">RC</b>${version.channels.includes('Prod') ? '<b class="channel prod">PROD</b>' : ''}${current ? '<b class="channel current">CURRENT</b>' : ''}</div><div class="version-links">${links}</div><div class="version-actions">${promote}${editActions}</div></article>`;
   }).join('') : '<div class="version-empty"><strong>No saved revisions yet</strong><span>Save the project to create its first RC build.</span></div>';
+  for (const control of $('#version-cleanup').elements) control.disabled = !project.access?.includes('edit');
 }
 async function refreshVersions() {
   const versions = await api(`/api/projects/${project.id}/versions`);
   renderVersions(versions);
+}
+async function cleanupOldRCVersions(event) {
+  event.preventDefault();
+  const beforeRevision = Number($('#version-cleanup-before').value);
+  if (!Number.isInteger(beforeRevision) || beforeRevision < 1) throw new Error('Enter a positive revision number.');
+  const candidates = displayedVersions.filter(version => version.revision < beforeRevision && !version.channels.includes('Prod') && version.revision !== project.revision).map(version => version.revision).sort((a, b) => a - b);
+  if (!candidates.length) { toast(`No RC-only revisions older than revision ${beforeRevision} can be deleted.`); return; }
+  if (!confirm(`Delete RC-only revision${candidates.length === 1 ? '' : 's'} ${candidates.join(', ')}? Revisions promoted to Prod will be preserved.`)) return;
+  const result = await api(`/api/projects/${project.id}/versions/cleanup-rc`, { method: 'POST', body: JSON.stringify({ beforeRevision }) });
+  await refreshVersions();
+  const preserved = result.skippedProd.length ? ` Preserved Prod revision${result.skippedProd.length === 1 ? '' : 's'} ${result.skippedProd.join(', ')}.` : '';
+  toast(`Deleted ${result.deleted.length} old RC revision${result.deleted.length === 1 ? '' : 's'}.${preserved}`);
 }
 function renderDeploymentConfigs(configurations) {
   const choices = '<option value="">No database</option>' + databaseCredentials.map(item => `<option value="${escapeHTML(item.id)}">${escapeHTML(item.name)} · ${escapeHTML(item.username)}@${escapeHTML(item.host)}:${item.port}/${escapeHTML(item.database)}</option>`).join('');
@@ -479,10 +494,18 @@ function clearTemplateEditor() {
   $('#template-name').disabled = true; $('#template-contents').disabled = true;
   setTemplateState(); renderTemplateList();
 }
+const templateSelectionKey = () => `phidias-template:${project?.id || ''}`;
+function rememberTemplateSelection(name) {
+  try {
+    if (name) sessionStorage.setItem(templateSelectionKey(), name);
+    else sessionStorage.removeItem(templateSelectionKey());
+  } catch {}
+}
 async function selectTemplate(name, force = false) {
   if (!force && templateDirty && !confirm('Discard unsaved template changes?')) return;
   const template = await api(`/api/projects/${project.id}/templates/${encodeURIComponent(name)}`);
   templateOriginalName = template.name; templateDirty = false;
+  rememberTemplateSelection(template.name);
   $('#template-name').disabled = false; $('#template-contents').disabled = false;
   $('#template-name').value = template.name; $('#template-contents').value = template.contents;
   setTemplateState(); renderTemplateList();
@@ -499,20 +522,31 @@ async function openTemplateEditor() {
   if (!project) return;
   if (dirty) await save();
   templateNames = await api(`/api/projects/${project.id}/templates`);
+  let preferred = null;
+  try { preferred = sessionStorage.getItem(templateSelectionKey()); } catch {}
   clearTemplateEditor(); $('#template-dialog').showModal();
-  if (templateNames.length) await selectTemplate(templateNames[0], true);
+  if (templateNames.length) await selectTemplate(templateNames.includes(preferred) ? preferred : templateNames[0], true);
 }
 async function saveTemplate() {
   const name = $('#template-name').value.trim();
   if (!name) throw new Error('Enter a template filename.');
+  const contents = $('#template-contents').value;
+  const previousName = templateOriginalName;
   setTemplateState('Saving…');
   try {
-    const result = await api(`/api/projects/${project.id}/templates/${encodeURIComponent(name)}`, { method: 'PUT', body: JSON.stringify({ contents: $('#template-contents').value, previousName: templateOriginalName, revision: project.revision }) });
+    const result = await api(`/api/projects/${project.id}/templates/${encodeURIComponent(name)}`, { method: 'PUT', body: JSON.stringify({ contents, previousName, revision: project.revision }) });
     project.revision = result.project.revision; project.updatedAt = result.project.updatedAt;
-    templateOriginalName = result.template.name; templateDirty = false;
+    templateOriginalName = result.template.name;
+    rememberTemplateSelection(result.template.name);
+    const verified = await api(`/api/projects/${project.id}/templates/${encodeURIComponent(result.template.name)}`);
+    if (verified.contents !== contents) {
+      templateDirty = true;
+      throw new Error('The template was saved, but its contents could not be verified. Reopen the template before editing further.');
+    }
+    templateDirty = $('#template-name').value.trim() !== name || $('#template-contents').value !== contents;
     templateNames = await api(`/api/projects/${project.id}/templates`);
     setTemplateState(); renderTemplateList(); await refreshProjects(); setProjectControls(true);
-    toast(`Template ${result.template.name} saved as project revision ${project.revision}.`);
+    toast(templateDirty ? `Template ${result.template.name} saved as project revision ${project.revision}; newer editor changes are still unsaved.` : `Template ${result.template.name} saved as project revision ${project.revision}.`);
   } catch (error) { setTemplateState(); throw error; }
 }
 async function deleteTemplate() {
@@ -520,6 +554,7 @@ async function deleteTemplate() {
   const name = templateOriginalName;
   const saved = await api(`/api/projects/${project.id}/templates/${encodeURIComponent(name)}`, { method: 'DELETE', body: JSON.stringify({ revision: project.revision }) });
   project.revision = saved.revision; project.updatedAt = saved.updatedAt;
+  rememberTemplateSelection(null);
   templateNames = await api(`/api/projects/${project.id}/templates`); clearTemplateEditor();
   if (templateNames.length) await selectTemplate(templateNames[0], true);
   await refreshProjects(); setProjectControls(true); toast(`Template ${name} deleted.`);
@@ -1128,6 +1163,7 @@ $('#database-credential-edit').onclick = handle(editDatabaseCredential);
 $('#database-credential-delete').onclick = handle(deleteDatabaseCredential);
 $('#templates').onclick = handle(openTemplateEditor);
 $('#version-close').onclick = () => $('#version-dialog').close();
+$('#version-cleanup').onsubmit = event => handle(() => cleanupOldRCVersions(event))();
 $('#version-list').onclick = event => { const button = event.target.closest('[data-version-action]'); if (button) handle(() => versionAction(button))(); };
 $('#template-new-html').onclick = () => newTemplate('html');
 $('#template-new-css').onclick = () => newTemplate('css');

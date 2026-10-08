@@ -190,6 +190,37 @@ test('saved revisions publish to a browsable RC repository and can be promoted, 
   assert.equal((await call('/repo/DelphiRC/delphi.rev3.zip')).status, 404);
 });
 
+test('version cleanup deletes only old RC-only revisions and preserves production builds', async t => {
+  const { call } = await fixture(t);
+  let project = await (await call('/api/projects', 'POST', { name: 'Cleanup' })).json();
+  const endpoint = `/api/projects/${project.id}`;
+  const saveRevision = async label => {
+    project.workspaces[0].blocks[1].options.body = label;
+    const response = await call(endpoint, 'PUT', project);
+    assert.equal(response.status, 200);
+    project = await response.json();
+  };
+  await saveRevision('revision two');
+  await saveRevision('revision three');
+  assert.equal((await call(endpoint + '/versions/3/promote', 'POST', {})).status, 200);
+  await saveRevision('revision four');
+  await saveRevision('revision five');
+
+  const cleanupResponse = await call(endpoint + '/versions/cleanup-rc', 'POST', { beforeRevision: 5 });
+  assert.equal(cleanupResponse.status, 200);
+  assert.deepEqual(await cleanupResponse.json(), { deleted: [2, 4], skippedProd: [3], skippedCurrent: [] });
+  const versions = await (await call(endpoint + '/versions')).json();
+  assert.deepEqual(versions.map(version => version.revision), [5, 3]);
+  assert.deepEqual(versions.find(version => version.revision === 3).channels, ['RC', 'Prod']);
+  assert.equal((await call('/repo/CleanupRC/cleanup.rev2.zip')).status, 404);
+  assert.equal((await call('/repo/CleanupRC/cleanup.rev4.zip')).status, 404);
+  assert.equal((await call('/repo/CleanupRC/cleanup.rev3.zip')).status, 200);
+  assert.equal((await call('/repo/CleanupProd/cleanup.rev3.zip')).status, 200);
+  assert.equal(JSON.parse(zipEntries(Buffer.from(await (await call('/repo/CleanupRC/latest.zip')).arrayBuffer())).get('workspaces.json')).revision, 5);
+  assert.equal(JSON.parse(zipEntries(Buffer.from(await (await call('/repo/CleanupProd/latest.zip')).arrayBuffer())).get('workspaces.json')).revision, 3);
+  assert.equal((await call(endpoint + '/versions/cleanup-rc', 'POST', { beforeRevision: '5' })).status, 400);
+});
+
 test('database credential sets stay in auth.sqlite and selected application settings resolve at runtime', async t => {
   const { call, auth, directory } = await fixture(t);
   const project = await (await call('/api/projects', 'POST', { name: 'Database app' })).json();
@@ -267,6 +298,12 @@ test('HTML templates are edited through the API, included in builds, and restore
   assert.deepEqual(await (await call(endpoint + '/templates')).json(), ['styles.css']);
   archive = zipEntries(Buffer.from(await (await call('/repo/TemplatesRC/latest.zip')).arrayBuffer()));
   assert.equal(archive.get('html/styles.css').toString(), 'body { color: purple; }');
+  const updatedCSS = 'body { color: purple; }\n\n.dashboard { display: grid; }';
+  response = await call(endpoint + '/templates/styles.css', 'PUT', { contents: updatedCSS, previousName: 'styles.css', revision: 7 });
+  assert.equal(response.status, 200); assert.equal((await response.json()).project.revision, 8);
+  assert.equal((await (await call(endpoint + '/templates/styles.css')).json()).contents, updatedCSS);
+  archive = zipEntries(Buffer.from(await (await call('/repo/TemplatesRC/latest.zip')).arrayBuffer()));
+  assert.equal(archive.get('html/styles.css').toString(), updatedCSS);
 });
 
 test('password login, protected routes, CSRF, logout, malformed requests and traversal', async t => {

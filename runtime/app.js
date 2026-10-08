@@ -179,7 +179,8 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
   async function run(ws, trigger, request = null, response = null, seed = {}) {
     const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(60000)]);
     const execution = seed.execution || { vars: Object.create(null), values: new Map(), evaluated: new Set() };
-    const runId = seed.runId || randomUUID();
+    const newRunId = !seed.runId, runId = seed.runId || randomUUID();
+    const runStartedAt = seed.runStartedAt || new Date().toISOString();
     const context = {
       vars: execution.vars, values: execution.values, evaluated: execution.evaluated,
       request, response, env: process.env, signal, shared, appName: document.name, directory, logger, deployment, database: getDatabase,
@@ -205,6 +206,27 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
       }
       return authenticationStores.get(resolved);
     };
+    const runIdListeners = ws.blocks.filter(block => definitions.get(block.type)?.trigger === 'run_id_triggered');
+    if (newRunId && ws.logAllRunsToBlock && runIdListeners.length && !seed.suppressRunIdTrigger) {
+      try {
+        const authorization = String(request?.headers?.authorization || '');
+        const cookies = String(request?.headers?.cookie || '');
+        let session = null;
+        if (/^Bearer\s+[a-f0-9]{64}$/i.test(authorization)) session = context.authentication().apiSession(request, deployment);
+        else if (/(?:^|;\s*)phidias_session=/.test(cookies)) session = context.authentication().browserSession(request, deployment);
+        context.setLoggedInUser(session);
+      } catch (error) {
+        logger?.debug('Run identity lookup failed: %s', error.message);
+      }
+      const results = await Promise.allSettled(runIdListeners.map(listener => run(ws, listener, request, response, {
+        runId,
+        runStartedAt,
+        loggedInUser: context.loggedInUser,
+        suppressWorkspaceLog: true,
+        suppressRunIdTrigger: true
+      })));
+      for (const result of results) if (result.status === 'rejected') reportError(result.reason);
+    }
     const nodes = new Map(ws.blocks.map(block => [block.id, block]));
     const incoming = (block, port) => ws.connections.find(edge => edge.to === block.id && (edge.input || 'action') === port);
     let steps = 0;
@@ -301,6 +323,16 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
             setOutput('logged_in_user', seed.loggedInUser || 'svc_automation');
             setOutput('content', seed.logEvent || {});
             setOutput('run_id', runId);
+          }
+          if (def.trigger === 'run_id_triggered') {
+            const workspace = { id: ws.id, numberId: ws.numberId, name: ws.name };
+            setOutput('run_id', runId);
+            setOutput('started_at', runStartedAt);
+            setOutput('logged_in_user', seed.loggedInUser || 'svc_automation');
+            setOutput('workspace_name', ws.name);
+            setOutput('workspace_number_id', ws.numberId);
+            setOutput('workspace_id', ws.id);
+            setOutput('workspace', workspace);
           }
           const output = def.trigger ? 'next' : await def.execute(context, block.options, inputs, setOutput);
           if (output) followedOutputs.push(output);
