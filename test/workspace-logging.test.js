@@ -267,11 +267,6 @@ test('workspace log handler emissions do not force-log the trace receiver worksp
     stderr: { write: line => lines.push(line) }
   });
   const definitions = loadDefinitions(path.resolve(__dirname, '../blocks'));
-  definitions.set('emit_trace_event', {
-    type: 'emit_trace_event', name: 'Emit Trace Event', category: 'Tests', description: 'Forwards a trace event.', fields: [],
-    inputPorts: [{ id: 'action', name: 'Action', kind: 'action', types: [] }], outputPorts: [], outputs: [],
-    async execute(ctx) { await ctx.emit('trace-event', { restriction_type: 'all', values: ['trace'] }); }
-  });
   definitions.set('capture_trace_event', {
     type: 'capture_trace_event', name: 'Capture Trace Event', category: 'Tests', description: 'Captures a trace event.', fields: [],
     inputPorts: [
@@ -287,22 +282,25 @@ test('workspace log handler emissions do not force-log the trace receiver worksp
       { id: 'http', numberId: 1, type: 'http', x: 0, y: 0, options: { method: 'GET', path: '/trace' } },
       { id: 'reply', numberId: 2, type: 'respond', x: 200, y: 0, options: { status: 200, format: 'Text', body: 'ok', headers: '{}' } },
       { id: 'workspace-log', numberId: 3, type: 'workspace_log', x: 0, y: 200, options: {} },
-      { id: 'emit', numberId: 4, type: 'emit_trace_event', x: 200, y: 200, options: {} }
+      { id: 'emitter-id', numberId: 4, type: 'text', x: 200, y: 300, options: { text: 'auth' } },
+      { id: 'emit', numberId: 5, type: 'emitter', x: 400, y: 200, options: { restriction_type: 'all', search_type: 'title' } }
     ],
     connections: [
       { id: 'source-next', from: 'http', output: 'next', to: 'reply', input: 'action', kind: 'action' },
-      { id: 'log-next', from: 'workspace-log', output: 'next', to: 'emit', input: 'action', kind: 'action' }
+      { id: 'log-next', from: 'workspace-log', output: 'next', to: 'emit', input: 'action', kind: 'action' },
+      { id: 'emit-id', from: 'emitter-id', output: 'text', to: 'emit', input: 'id', kind: 'value' },
+      { id: 'emit-content', from: 'workspace-log', output: 'content', to: 'emit', input: 'value1', kind: 'value' }
     ]
   };
   const trace = {
     id: 'trace', numberId: 14, name: '/sibyl/amptrace', active: true, forceLog: true, logAllRunsToBlock: false,
     blocks: [
-      { id: 'receiver-id', numberId: 1, type: 'text', x: 0, y: 0, options: { text: 'trace-event' } },
+      { id: 'receiver-id', numberId: 4, type: 'text_2x', x: 0, y: 0, options: { text1: 'auth', text2: '/sibyl/amptrace' } },
       { id: 'receiver', numberId: 2, type: 'receiver', x: 200, y: 0, options: {} },
       { id: 'capture', numberId: 3, type: 'capture_trace_event', x: 400, y: 0, options: {} }
     ],
     connections: [
-      { id: 'receiver-id-wire', from: 'receiver-id', output: 'text', to: 'receiver', input: 'id', kind: 'value' },
+      { id: 'receiver-id-wire', from: 'receiver-id', output: 'text1', to: 'receiver', input: 'id', kind: 'value' },
       { id: 'receiver-next', from: 'receiver', output: 'action', to: 'capture', input: 'action', kind: 'action' },
       { id: 'receiver-value', from: 'receiver', output: 'value1', to: 'capture', input: 'value', kind: 'value' }
     ]
@@ -311,7 +309,8 @@ test('workspace log handler emissions do not force-log the trace receiver worksp
   await app.start(0, '127.0.0.1');
   t.after(() => app.stop());
   assert.equal((await fetch(`http://127.0.0.1:${app.server.address().port}/trace`)).status, 200);
-  assert.deepEqual(received, ['trace', 'trace']);
+  assert.equal(received.length, 2);
+  assert.ok(received.every(value => value?.workspace?.name === 'Source'));
   assert.doesNotMatch(lines.join(''), /Workspace run/);
   assert.doesNotMatch(await fs.readFile(logger.filename, 'utf8'), /Workspace run/);
 });
