@@ -4,7 +4,7 @@ module.exports = {
   type: 'run_id_tiggered',
   name: 'On Run ID Created',
   category: 'Triggers',
-  description: 'Runs once when a new workflow Run ID is created, while Log all runs to log block is enabled for this workspace.',
+  description: 'Application-wide listener that runs once when an active workspace with Log all runs to log block enabled creates a Run ID. It may be placed once in a dedicated logging workspace.',
   trigger: 'run_id_triggered',
   fields: [],
   outputs: ['next'],

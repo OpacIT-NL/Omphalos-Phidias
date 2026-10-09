@@ -157,6 +157,12 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
   const controller = new AbortController(), timers = [], stdinListeners = [], activeRuns = new Set(), routes = [], authenticationStores = new Map();
   const shared = Object.create(null);
   let started = false, stdinInterface = null, controlRequested = null, databasePool = null;
+  const workspaceIdentity = workspace => ({ id: workspace.id, numberId: workspace.numberId, name: workspace.name });
+  const applicationListeners = trigger => document.workspaces
+    .filter(workspace => workspace.active)
+    .flatMap(workspace => workspace.blocks
+      .filter(block => definitions.get(block.type)?.trigger === trigger)
+      .map(block => ({ workspace, block })));
   const getDatabase = async () => {
     if (databasePool) return databasePool;
     const selected = applicationConfig.database;
@@ -207,7 +213,7 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
       }
       return authenticationStores.get(resolved);
     };
-    const runIdListeners = ws.blocks.filter(block => definitions.get(block.type)?.trigger === 'run_id_triggered');
+    const runIdListeners = applicationListeners('run_id_triggered');
     if (newRunId && ws.logAllRunsToBlock && runIdListeners.length && !seed.suppressRunIdTrigger) {
       try {
         const authorization = String(request?.headers?.authorization || '');
@@ -219,10 +225,11 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
       } catch (error) {
         logger?.debug('Run identity lookup failed: %s', error.message);
       }
-      const results = await Promise.allSettled(runIdListeners.map(listener => run(ws, listener, request, response, {
+      const results = await Promise.allSettled(runIdListeners.map(listener => run(listener.workspace, listener.block, request, response, {
         runId,
         runStartedAt,
         loggedInUser: context.loggedInUser,
+        sourceWorkspace: workspaceIdentity(ws),
         suppressWorkspaceLog: true,
         suppressRunIdTrigger: true
       })));
@@ -258,12 +265,15 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
         write?.call(logger, 'Workspace run %s: user=%s content=%s', runId, context.loggedInUser, JSON.stringify(content));
       }
       if (!ws.logAllRunsToBlock) return;
-      const listeners = ws.blocks.filter(candidate => candidate.type === 'workspace_log' && candidate.id !== block.id);
-      const results = await Promise.allSettled(listeners.map(listener => run(ws, listener, request, response, {
+      const listeners = applicationListeners('workspace_log');
+      const results = await Promise.allSettled(listeners.map(listener => run(listener.workspace, listener.block, request, response, {
         runId,
+        runStartedAt,
         loggedInUser: context.loggedInUser,
+        sourceWorkspace: workspaceIdentity(ws),
         logEvent: content,
-        suppressWorkspaceLog: true
+        suppressWorkspaceLog: true,
+        suppressRunIdTrigger: true
       })));
       for (const result of results) if (result.status === 'rejected') reportError(result.reason);
     }
@@ -326,13 +336,13 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
             setOutput('run_id', runId);
           }
           if (def.trigger === 'run_id_triggered') {
-            const workspace = { id: ws.id, numberId: ws.numberId, name: ws.name };
+            const workspace = seed.sourceWorkspace || workspaceIdentity(ws);
             setOutput('run_id', runId);
             setOutput('started_at', runStartedAt);
             setOutput('logged_in_user', seed.loggedInUser || 'svc_automation');
-            setOutput('workspace_name', ws.name);
-            setOutput('workspace_number_id', ws.numberId);
-            setOutput('workspace_id', ws.id);
+            setOutput('workspace_name', workspace.name);
+            setOutput('workspace_number_id', workspace.numberId);
+            setOutput('workspace_id', workspace.id);
             setOutput('workspace', workspace);
           }
           const output = def.trigger ? 'next' : await def.execute(context, block.options, inputs, setOutput);

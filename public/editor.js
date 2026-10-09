@@ -1141,7 +1141,7 @@ $('#workspace-settings').onclick = handle(async () => {
     { name: 'categoryId', label: 'Workspace group', type: 'select', value: workspace.categoryId || '', choices: workspaceCategoryChoices() },
     { name: 'active', label: 'Run this workspace in the exported application', type: 'checkbox', value: workspace.active },
     { name: 'forceLog', label: 'Force log INFO inputs and outputs regardless of application log settings', type: 'checkbox', value: Boolean(workspace.forceLog) },
-    { name: 'logAllRunsToBlock', label: 'Log all block runs to On Workspace Log', type: 'checkbox', value: Boolean(workspace.logAllRunsToBlock) }
+    { name: 'logAllRunsToBlock', label: 'Send all block runs to application-wide log triggers', type: 'checkbox', value: Boolean(workspace.logAllRunsToBlock) }
   ], 'Apply');
   if (!values) return;
   project.name = values.project;

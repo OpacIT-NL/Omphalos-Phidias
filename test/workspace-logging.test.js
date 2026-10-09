@@ -147,6 +147,72 @@ test('Run ID trigger stays disabled unless Log all runs to log block is enabled'
   assert.equal(starts, 0);
 });
 
+test('application-wide logging triggers receive events from another enabled workspace', async t => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'phidias-central-workspace-log-'));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const events = [], starts = [];
+  const definitions = loadDefinitions(path.resolve(__dirname, '../blocks'));
+  definitions.set('capture_central_log', {
+    type: 'capture_central_log', name: 'Capture Central Log', category: 'Tests', description: 'Captures central logs.', fields: [],
+    inputPorts: [
+      { id: 'action', name: 'Action', kind: 'action', types: [] },
+      { id: 'content', name: 'Content', kind: 'value', types: ['object'] },
+      { id: 'run_id', name: 'Run ID', kind: 'value', types: ['text'] }
+    ],
+    outputPorts: [], outputs: [],
+    async execute(_ctx, _options, inputs) { events.push(inputs); }
+  });
+  definitions.set('capture_central_start', {
+    type: 'capture_central_start', name: 'Capture Central Start', category: 'Tests', description: 'Captures central run starts.', fields: [],
+    inputPorts: [
+      { id: 'action', name: 'Action', kind: 'action', types: [] },
+      { id: 'run_id', name: 'Run ID', kind: 'value', types: ['text'] },
+      { id: 'workspace_name', name: 'Workspace Name', kind: 'value', types: ['text'] },
+      { id: 'workspace_number_id', name: 'Workspace Number ID', kind: 'value', types: ['number'] },
+      { id: 'workspace_id', name: 'Workspace ID', kind: 'value', types: ['text'] }
+    ],
+    outputPorts: [], outputs: [],
+    async execute(_ctx, _options, inputs) { starts.push(inputs); }
+  });
+  const source = {
+    id: 'source-id', numberId: 7, name: 'Business workflow', active: true, forceLog: false, logAllRunsToBlock: true,
+    blocks: [
+      { id: 'http', numberId: 1, type: 'http', x: 0, y: 0, options: { method: 'GET', path: '/central-log' } },
+      { id: 'reply', numberId: 2, type: 'respond', x: 200, y: 0, options: { status: 200, format: 'Text', body: 'ok', headers: '{}' } }
+    ],
+    connections: [{ id: 'next', from: 'http', output: 'next', to: 'reply', input: 'action', kind: 'action' }]
+  };
+  const logging = {
+    id: 'logging-id', numberId: 14, name: '/sibyl/amptrace', active: true, forceLog: false, logAllRunsToBlock: false,
+    blocks: [
+      { id: 'run-start', numberId: 1, type: 'run_id_tiggered', x: 0, y: 0, options: {} },
+      { id: 'capture-start', numberId: 2, type: 'capture_central_start', x: 200, y: 0, options: {} },
+      { id: 'workspace-log', numberId: 3, type: 'workspace_log', x: 0, y: 200, options: {} },
+      { id: 'capture-log', numberId: 4, type: 'capture_central_log', x: 200, y: 200, options: {} }
+    ],
+    connections: [
+      { id: 'start-action', from: 'run-start', output: 'next', to: 'capture-start', input: 'action', kind: 'action' },
+      { id: 'start-run', from: 'run-start', output: 'run_id', to: 'capture-start', input: 'run_id', kind: 'value' },
+      { id: 'start-name', from: 'run-start', output: 'workspace_name', to: 'capture-start', input: 'workspace_name', kind: 'value' },
+      { id: 'start-number', from: 'run-start', output: 'workspace_number_id', to: 'capture-start', input: 'workspace_number_id', kind: 'value' },
+      { id: 'start-id', from: 'run-start', output: 'workspace_id', to: 'capture-start', input: 'workspace_id', kind: 'value' },
+      { id: 'log-action', from: 'workspace-log', output: 'next', to: 'capture-log', input: 'action', kind: 'action' },
+      { id: 'log-content', from: 'workspace-log', output: 'content', to: 'capture-log', input: 'content', kind: 'value' },
+      { id: 'log-run', from: 'workspace-log', output: 'run_id', to: 'capture-log', input: 'run_id', kind: 'value' }
+    ]
+  };
+  const app = createApp({ directory, document: { version: 1, name: 'Central logging', workspaces: [source, logging] }, definitions });
+  await app.start(0, '127.0.0.1');
+  t.after(() => app.stop());
+  assert.equal((await fetch(`http://127.0.0.1:${app.server.address().port}/central-log`)).status, 200);
+  assert.equal(starts.length, 1);
+  assert.deepEqual({ name: starts[0].workspace_name, numberId: starts[0].workspace_number_id, id: starts[0].workspace_id }, { name: 'Business workflow', numberId: 7, id: 'source-id' });
+  assert.equal(events.length, 2);
+  assert.deepEqual(events.map(event => event.content.workspace.name), ['Business workflow', 'Business workflow']);
+  assert.deepEqual(events.map(event => event.content.block.numberId), [1, 2]);
+  assert.ok(events.every(event => event.run_id === starts[0].run_id));
+});
+
 test('workspace logging settings are optional for older workspaces and validated when present', () => {
   const definitions = loadDefinitions(path.resolve(__dirname, '../blocks'));
   const document = {
