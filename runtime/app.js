@@ -4,7 +4,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const readline = require('node:readline');
 const net = require('node:net');
-const { randomUUID } = require('node:crypto');
+const crypto = require('node:crypto');
+const { randomUUID } = crypto;
 const { validate } = require('./validate');
 const { normalizeDefinition, executeLegacy } = require('./legacy');
 const { parseCron, matchesCron } = require('./cron');
@@ -73,18 +74,30 @@ function validateAppConfig(value) {
     if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) throw new Error('config.json: update-url must be an HTTP or HTTPS URL without embedded credentials');
   }
   const auth = value.auth;
-  if (!auth || typeof auth !== 'object' || Array.isArray(auth) || typeof auth.database !== 'string' || !auth.database.trim()) throw new Error('config.json: auth.database must be a SQLite file path');
+  if (!auth || typeof auth !== 'object' || Array.isArray(auth)) throw new Error('config.json: auth must be an object');
+  const authProvider = auth.provider || 'sqlite';
+  if (!['sqlite', 'mysql'].includes(authProvider)) throw new Error('config.json: auth.provider must be sqlite or mysql');
+  if (authProvider === 'sqlite' && (typeof auth.database !== 'string' || !auth.database.trim())) throw new Error('config.json: auth.database must be a SQLite file path');
+  if (authProvider === 'mysql') {
+    if (!auth.broker || typeof auth.broker !== 'object' || Array.isArray(auth.broker) || typeof auth.broker.url !== 'string') throw new Error('config.json: auth.broker.url is required for MySQL authentication');
+    let broker;
+    try { broker = new URL(auth.broker.url); } catch { throw new Error('config.json: auth.broker.url must be an HTTP or HTTPS URL'); }
+    if (!['http:', 'https:'].includes(broker.protocol) || broker.username || broker.password) throw new Error('config.json: auth.broker.url must be an HTTP or HTTPS URL without embedded credentials');
+  }
   const database = value.database ?? null;
   if (database !== null && (!database || typeof database !== 'object' || Array.isArray(database) || typeof database['credential-set'] !== 'string' || !/^[a-f0-9-]{36}$/.test(database['credential-set']))) throw new Error('config.json: database must identify a credential set');
+  const loggingDatabase = value['logging-database'] ?? null;
+  if (loggingDatabase !== null && (!loggingDatabase || typeof loggingDatabase !== 'object' || Array.isArray(loggingDatabase) || typeof loggingDatabase['credential-set'] !== 'string' || !/^[a-f0-9-]{36}$/.test(loggingDatabase['credential-set']))) throw new Error('config.json: logging-database must identify a credential set');
   return {
     port: value.port,
     host: value.host,
     'log-level': value['log-level'],
     'force-console-input-log': value['force-console-input-log'],
-    auth: { database: auth.database },
+    auth: authProvider === 'mysql' ? { provider: 'mysql', broker: { url: auth.broker.url.replace(/\/$/, '') } } : { database: auth.database },
     ...(projectId === null ? {} : { 'project-id': projectId, 'release-channel': releaseChannel }),
     ...(updateUrl ? { 'update-url': updateUrl } : {}),
-    ...(database === null ? {} : { database: { 'credential-set': database['credential-set'] } })
+    ...(database === null ? {} : { database: { 'credential-set': database['credential-set'] } }),
+    ...(loggingDatabase === null ? {} : { 'logging-database': { 'credential-set': loggingDatabase['credential-set'] } })
   };
 }
 function loadAppConfig(directory = __dirname) {
@@ -102,6 +115,27 @@ function loadAppConfig(directory = __dirname) {
   }
   return validateAppConfig(value);
 }
+async function bootstrapAuthentication(config, directory = __dirname) {
+  if (config.auth.provider !== 'mysql') return config.auth;
+  const keyFile = path.join(directory, 'application.key');
+  let applicationKey;
+  try { applicationKey = fs.readFileSync(keyFile); } catch (error) { if (error.code === 'ENOENT') throw new Error('application.key is missing; deploy this application from an authenticated Phidias export before using MySQL authentication'); throw error; }
+  if (applicationKey.length !== 32) throw new Error('application.key must contain exactly 32 bytes');
+  const request = { projectId: config['project-id'], channel: config['release-channel'], timestamp: Date.now(), nonce: crypto.randomBytes(16).toString('hex') };
+  if (!request.projectId || !request.channel) throw new Error('MySQL authentication requires project-id and release-channel in config.json');
+  request.signature = crypto.createHmac('sha512', applicationKey).update(`${request.projectId}\n${request.channel}\n${request.timestamp}\n${request.nonce}`).digest('hex');
+  const response = await fetch(`${config.auth.broker.url}/v1/bootstrap`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(request), signal: AbortSignal.timeout(15_000) });
+  const envelope = await response.json().catch(() => null);
+  if (!response.ok) throw new Error(`Authentication broker rejected startup (${response.status}): ${envelope?.error || 'Unknown error'}`);
+  if (envelope?.algorithm !== 'AES-256-GCM') throw new Error('Authentication broker returned an unsupported encrypted response');
+  const key = crypto.hkdfSync('sha512', applicationKey, Buffer.from(request.nonce, 'hex'), Buffer.from('phidias/auth-broker/v1'), 32);
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(envelope.iv, 'base64'));
+  decipher.setAAD(Buffer.from(`${request.projectId}\n${request.channel}\n${request.timestamp}\n${request.nonce}`)); decipher.setAuthTag(Buffer.from(envelope.tag, 'base64'));
+  const value = JSON.parse(Buffer.concat([decipher.update(Buffer.from(envelope.ciphertext, 'base64')), decipher.final()]).toString('utf8'));
+  if (!value.mysql || value.expiresAt <= Date.now()) throw new Error('Authentication broker response is invalid or expired');
+  config.auth.mysql = value.mysql;
+  return config.auth;
+}
 function attachWorkflowContext(error, workspace, block, definition) {
   const failure = error instanceof Error ? error : new Error(String(error));
   failure.workflowContext ||= {
@@ -112,22 +146,29 @@ function attachWorkflowContext(error, workspace, block, definition) {
   };
   return failure;
 }
-function snapshotLogValue(value, seen = new WeakMap(), location = '$', depth = 0) {
+function snapshotLogValue(value, seen = new WeakMap(), location = '$', depth = 0, secrets = null) {
   if (value === undefined) return '[undefined]';
-  if (value === null || ['string', 'number', 'boolean'].includes(typeof value)) return value;
+  if (value === null || ['number', 'boolean'].includes(typeof value)) return value;
+  if (typeof value === 'string') {
+    let result = value;
+    for (const secret of secrets || []) if (secret) result = result.split(secret).join('[REDACTED]');
+    return result;
+  }
   if (typeof value === 'bigint') return `${value}n`;
   if (typeof value === 'symbol') return String(value);
   if (typeof value === 'function') return `[Function ${value.name || 'anonymous'}]`;
   if (value instanceof Date) return Number.isNaN(value.getTime()) ? 'Invalid Date' : value.toISOString();
-  if (value instanceof Error) return { name: value.name, message: value.message, stack: value.stack };
+  if (value?.__phidiasSecret) return '[REDACTED]';
+  if (value?.__phidiasCredential) return { type: value.type, name: value.name, host: value.host, port: value.port, username: value.username, database: value.database, permissions: value.permissions, secret: '[REDACTED]' };
+  if (value instanceof Error) return { name: value.name, message: snapshotLogValue(value.message, seen, location + '.message', depth + 1, secrets), stack: snapshotLogValue(value.stack, seen, location + '.stack', depth + 1, secrets) };
   if (Buffer.isBuffer(value)) return { type: 'Buffer', length: value.length, data: value.toString('base64') };
   if (depth >= 25) return '[Maximum log depth reached]';
   if (seen.has(value)) return `[Circular ${seen.get(value)}]`;
   seen.set(value, location);
-  if (Array.isArray(value)) return value.map((item, index) => snapshotLogValue(item, seen, `${location}[${index}]`, depth + 1));
+  if (Array.isArray(value)) return value.map((item, index) => snapshotLogValue(item, seen, `${location}[${index}]`, depth + 1, secrets));
   const result = Object.create(null);
   for (const key of Object.keys(value)) {
-    try { result[key] = snapshotLogValue(value[key], seen, `${location}.${key}`, depth + 1); }
+    try { result[key] = snapshotLogValue(value[key], seen, `${location}.${key}`, depth + 1, secrets); }
     catch (error) { result[key] = `[Unreadable: ${error.message}]`; }
   }
   return result;
@@ -156,29 +197,61 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
   validate(document, definitions);
   const controller = new AbortController(), timers = [], stdinListeners = [], activeRuns = new Set(), routes = [], authenticationStores = new Map();
   const shared = Object.create(null);
-  let started = false, stdinInterface = null, controlRequested = null, databasePool = null;
+  let started = false, stdinInterface = null, controlRequested = null;
+  const databasePools = new Map();
+  const credentialCache = new Map();
   const workspaceIdentity = workspace => ({ id: workspace.id, numberId: workspace.numberId, name: workspace.name });
   const applicationListeners = trigger => document.workspaces
     .filter(workspace => workspace.active)
     .flatMap(workspace => workspace.blocks
       .filter(block => definitions.get(block.type)?.trigger === trigger)
       .map(block => ({ workspace, block })));
-  const getDatabase = async () => {
-    if (databasePool) return databasePool;
-    const selected = applicationConfig.database;
-    if (!selected) throw new Error('No database credential set is selected in application settings');
-    const { DatabaseSync } = require('./sqlite').loadSQLite();
-    const filename = path.resolve(directory, applicationConfig.auth.database);
-    let credentials, database;
-    try {
-      database = new DatabaseSync(filename, { readOnly: true });
-      credentials = database.prepare('SELECT host, port, username, password, database_name FROM database_credentials WHERE id = ?').get(selected['credential-set']);
+  const readCredential = async (nameOrId, types = null) => {
+    const allowed = types == null ? null : (Array.isArray(types) ? types : [types]);
+    const cacheKey = `${allowed?.join(',') || '*'}:${nameOrId}`;
+    if (credentialCache.has(cacheKey)) return credentialCache.get(cacheKey);
+    let row, database;
+    const byId = typeof nameOrId === 'string' && /^[a-f0-9-]{36}$/.test(nameOrId);
+    if (applicationConfig.auth.provider === 'mysql') {
+      const mysql = require('mysql2/promise'), connection = await mysql.createConnection({ host: applicationConfig.auth.mysql.host, port: applicationConfig.auth.mysql.port, user: applicationConfig.auth.mysql.username, password: applicationConfig.auth.mysql.password, database: applicationConfig.auth.mysql.database });
+      try {
+        const clauses = [byId ? 'id = ?' : 'LOWER(name) = LOWER(?)'], parameters = [nameOrId];
+        if (allowed?.length) { clauses.push(`type IN (${allowed.map(() => '?').join(',')})`); parameters.push(...allowed); }
+        [row] = (await connection.query(`SELECT id,type,name,host,port,domain,username,password,private_key AS privateKey,database_name AS \`database\`,permissions,extra_json AS extra FROM credentials WHERE ${clauses.join(' AND ')} LIMIT 1`, parameters))[0];
+      } finally { await connection.end(); }
+    } else try {
+      const { DatabaseSync } = require('./sqlite').loadSQLite();
+      database = new DatabaseSync(path.resolve(directory, applicationConfig.auth.database), { readOnly: true });
+      try {
+        const typeClause = allowed?.length ? ` AND type IN (${allowed.map(() => '?').join(',')})` : '';
+        row = database.prepare(`SELECT id,type,name,host,port,domain,username,password,private_key AS privateKey,database_name AS database,permissions,extra_json AS extra FROM credentials WHERE ${byId ? 'id' : 'name COLLATE NOCASE'} = ?${typeClause}`).get(nameOrId, ...(allowed || []));
+      } catch (error) {
+        if (!String(error.message).includes('no such table')) throw error;
+      }
+      if (!row && byId && (!allowed || allowed.includes('mysql'))) {
+        const legacy = database.prepare('SELECT id,name,host,port,username,password,database_name AS database FROM database_credentials WHERE id = ?').get(nameOrId);
+        if (legacy) row = { ...legacy, type: 'mysql', domain: '', privateKey: '', permissions: '', extra: '{}' };
+      }
     } finally { database?.close(); }
-    if (!credentials) throw new Error('The selected database credential set was not found');
-    const mysql = require('mysql2/promise');
-    databasePool = mysql.createPool({ host: credentials.host, port: credentials.port, user: credentials.username, password: credentials.password, database: credentials.database_name, waitForConnections: true, connectionLimit: 10, queueLimit: 0 });
-    return databasePool;
+    if (!row || (allowed && !allowed.includes(row.type))) return null;
+    try { row.extra = JSON.parse(row.extra || '{}'); } catch { row.extra = {}; }
+    Object.defineProperty(row, '__phidiasCredential', { value: true });
+    credentialCache.set(cacheKey, row);
+    return row;
   };
+  const getConfiguredDatabase = async (selected, label) => {
+    if (!selected) throw new Error(`No ${label} database credential set is selected in application settings`);
+    const credentialId = selected['credential-set'];
+    if (databasePools.has(credentialId)) return databasePools.get(credentialId);
+    const credentials = await readCredential(credentialId, 'mysql');
+    if (!credentials) throw new Error(`The selected ${label} database credential set was not found`);
+    const mysql = require('mysql2/promise');
+    const pool = mysql.createPool({ host: credentials.host, port: credentials.port, user: credentials.username, password: credentials.password, database: credentials.database, waitForConnections: true, connectionLimit: 10, queueLimit: 0 });
+    databasePools.set(credentialId, pool);
+    return pool;
+  };
+  const getDatabase = () => getConfiguredDatabase(applicationConfig.database, 'application');
+  const getLoggingDatabase = () => getConfiguredDatabase(applicationConfig['logging-database'], 'logging');
   for (const definition of definitions.values()) {
     if (definition.legacy && typeof definition.source.init === 'function') definition.source.init(shared);
   }
@@ -189,10 +262,21 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
     const runStartedAt = seed.runStartedAt || new Date().toISOString();
     const context = {
       vars: execution.vars, values: execution.values, evaluated: execution.evaluated,
-      request, response, env: process.env, signal, shared, appName: document.name, directory, logger, deployment, database: getDatabase,
+      request, response, env: process.env, signal, shared, appName: document.name, directory, logger, deployment, database: getDatabase, logDatabase: getLoggingDatabase,
       legacyValues: seed.legacyValues || [], runId, loggedInUser: seed.loggedInUser || 'svc_automation',
-      forceConsoleLog: applicationConfig['force-console-input-log']
+      forceConsoleLog: applicationConfig['force-console-input-log'], secretValues: new Set()
     };
+    context.getCredential = async (nameOrId, types = null) => {
+      const credential = await readCredential(String(nameOrId || ''), types);
+      if (!credential) throw new Error(`Credential ${String(nameOrId || '') || '(empty name)'} was not found${types ? ` for type ${[].concat(types).join('/')}` : ''}`);
+      for (const value of [credential.password, credential.privateKey]) if (value) context.secretValues.add(String(value));
+      return credential;
+    };
+    context.secret = value => {
+      const raw = String(value || ''); if (raw) context.secretValues.add(raw);
+      return Object.freeze({ __phidiasSecret: true, toString: () => raw, valueOf: () => raw, toJSON: () => '[REDACTED]' });
+    };
+    context.redactForLog = value => snapshotLogValue(value, new WeakMap(), '$', 0, context.secretValues);
     context.render = value => render(value, context);
     context.setLoggedInUser = session => {
       if (session?.username) context.loggedInUser = String(session.username);
@@ -206,10 +290,10 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
       setImmediate(() => Promise.resolve(onControl(mode)).catch(reportError));
     };
     context.authentication = () => {
-      const resolved = path.resolve(directory, applicationConfig.auth.database);
+      const resolved = applicationConfig.auth.provider === 'mysql' ? 'mysql' : path.resolve(directory, applicationConfig.auth.database);
       if (!authenticationStores.has(resolved)) {
-        const { WorkflowAuth } = require('./auth');
-        authenticationStores.set(resolved, new WorkflowAuth(resolved));
+        const { WorkflowAuth, MySQLWorkflowAuth } = require('./auth');
+        authenticationStores.set(resolved, applicationConfig.auth.provider === 'mysql' ? new MySQLWorkflowAuth(applicationConfig.auth.mysql) : new WorkflowAuth(resolved));
       }
       return authenticationStores.get(resolved);
     };
@@ -219,8 +303,8 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
         const authorization = String(request?.headers?.authorization || '');
         const cookies = String(request?.headers?.cookie || '');
         let session = null;
-        if (/^Bearer\s+[a-f0-9]{64}$/i.test(authorization)) session = context.authentication().apiSession(request, deployment);
-        else if (/(?:^|;\s*)phidias_session=/.test(cookies)) session = context.authentication().browserSession(request, deployment);
+        if (/^Bearer\s+[a-f0-9]{64}$/i.test(authorization)) session = await context.authentication().apiSession(request, deployment);
+        else if (/(?:^|;\s*)phidias_session=/.test(cookies)) session = await context.authentication().browserSession(request, deployment);
         context.setLoggedInUser(session);
       } catch (error) {
         logger?.debug('Run identity lookup failed: %s', error.message);
@@ -243,7 +327,7 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
       const outputs = Object.create(null);
       for (const port of definition.outputPorts.filter(port => port.kind === 'value')) {
         const key = `${block.id}:${port.id}`;
-        if (context.values.has(key)) outputs[port.id] = snapshotLogValue(context.values.get(key));
+        if (context.values.has(key)) outputs[port.id] = context.redactForLog(context.values.get(key));
       }
       const completedAt = new Date();
       const content = {
@@ -255,10 +339,10 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
         workspace: { id: ws.id, numberId: ws.numberId, name: ws.name },
         block: { id: block.id, numberId: block.numberId, type: block.type, name: definition.name },
         actionInput: inputs.actionInput,
-        inputs: snapshotLogValue(inputs.values),
-        options: snapshotLogValue(block.options),
+        inputs: context.redactForLog(inputs.values),
+        options: context.redactForLog(block.options),
         outputs,
-        ...(error ? { error: snapshotLogValue(error) } : {})
+        ...(error ? { error: context.redactForLog(error) } : {})
       };
       if (ws.forceLog) {
         const write = logger?.forceInfo || logger?.info;
@@ -290,6 +374,10 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
       try {
         return await executeBlockInner(block, actionInput, stack);
       } catch (error) {
+        if (error instanceof Error && context.secretValues.size) {
+          error.message = context.redactForLog(error.message);
+          if (error.stack) error.stack = context.redactForLog(error.stack);
+        }
         throw attachWorkflowContext(error, ws, block, definitions.get(block?.type));
       }
     }
@@ -457,6 +545,7 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
     server,
     async start(port, host) {
       if (started) throw new Error('Application already started');
+      await bootstrapAuthentication(applicationConfig, directory);
       if (port === undefined || host === undefined) {
         const config = loadAppConfig(directory);
         port ??= process.env.PORT === undefined ? config.port : Number(process.env.PORT);
@@ -503,9 +592,10 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
       await Promise.allSettled([...activeRuns]);
       stdinListeners.forEach(listener => stdinInterface?.off('line', listener));
       stdinInterface?.close();
-      for (const authentication of authenticationStores.values()) authentication.close();
+      await Promise.allSettled([...authenticationStores.values()].map(authentication => authentication.close()));
       authenticationStores.clear();
-      if (databasePool) { await databasePool.end(); databasePool = null; }
+      await Promise.allSettled([...databasePools.values()].map(pool => pool.end()));
+      databasePools.clear();
     }
   };
 }
@@ -543,4 +633,4 @@ if (require.main === module) {
   launch().catch(error => { logger.critical('Could not start application: %s', error?.stack || error); process.exitCode = 1; });
   for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => { stop(signal); });
 }
-module.exports = { createApp, loadDefinitions, render, readBody, findRoute, normalizeRoutePath, loadAppConfig, validateAppConfig };
+module.exports = { createApp, loadDefinitions, render, readBody, findRoute, normalizeRoutePath, loadAppConfig, validateAppConfig, bootstrapAuthentication };

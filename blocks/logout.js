@@ -16,7 +16,7 @@ module.exports = {
     if (!ctx.request) throw new Error('Logout requires an HTTP endpoint trigger');
     const authentication = ctx.authentication();
     const kind = options.sessionType === 'API' ? 'api' : 'browser';
-    const session = authentication.logout(ctx.request, kind);
+    const session = await authentication.logout(ctx.request, kind);
     ctx.setLoggedInUser?.(session);
     if (kind === 'browser' && ctx.response && !ctx.response.headersSent) {
       const secure = String(ctx.request.headers['x-forwarded-proto'] || '').split(',')[0].trim() === 'https';

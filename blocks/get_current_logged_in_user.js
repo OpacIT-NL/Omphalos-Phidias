@@ -15,7 +15,7 @@ module.exports = {
   async execute(ctx, options, inputs = {}, setOutput) {
     if (!ctx.request) throw new Error('Get Current Logged In User requires an HTTP endpoint trigger');
     const authentication = ctx.authentication();
-    const session = options.sessionType === 'API' ? authentication.apiSession(ctx.request, ctx.deployment) : authentication.browserSession(ctx.request, ctx.deployment);
+    const session = await (options.sessionType === 'API' ? authentication.apiSession(ctx.request, ctx.deployment) : authentication.browserSession(ctx.request, ctx.deployment));
     ctx.setLoggedInUser?.(session);
     setOutput('username', session?.username || '');
     return session ? 'found' : 'not_logged_in';

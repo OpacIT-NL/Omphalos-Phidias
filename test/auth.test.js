@@ -50,6 +50,24 @@ test('database credential migration and management preserve users and never list
   assert.equal(current.databaseCredential(created.id), null);
 });
 
+test('credential manager stores typed credentials without exposing secrets and keeps legacy MySQL IDs compatible', async t => {
+  const { auth, filename } = await fixture(t); let current = auth; t.after(() => current.close());
+  const ssh = auth.createCredential({ type: 'ssh', name: 'Linux Primary', host: 'linux.internal', port: 22, username: 'automation', password: 'ssh-secret', privateKey: '', permissions: 'read-only' });
+  const windows = auth.createCredential({ type: 'windows', name: 'Domain Service', host: 'dc.internal', port: 636, domain: 'EXAMPLE', username: 'svc_phidias', password: 'ldap-secret' });
+  const postgres = auth.createCredential({ type: 'postgresql', name: 'Events PG', host: 'pg.internal', port: 5432, username: 'events', password: 'pg-secret', database: 'events' });
+  const mysql = auth.createDatabaseCredential({ name: 'Legacy Compatible', host: 'mysql.internal', port: 3306, username: 'app', password: 'mysql-secret', database: 'app' });
+  const listed = auth.listCredentials();
+  assert.deepEqual(new Set(listed.map(item => item.type)), new Set(['ssh', 'windows', 'postgresql', 'mysql']));
+  for (const item of listed) { assert.equal(Object.hasOwn(item, 'password'), false); assert.equal(Object.hasOwn(item, 'privateKey'), false); }
+  assert.equal(auth.credential(ssh.id, 'ssh').password, 'ssh-secret');
+  assert.equal(auth.credential(windows.id, 'windows').domain, 'EXAMPLE');
+  assert.equal(auth.credential(postgres.id, 'postgresql').database, 'events');
+  assert.equal(auth.db.prepare('SELECT id FROM database_credentials WHERE id = ?').get(mysql.id).id, mysql.id);
+  auth.deleteCredential(ssh.id); auth.close(); current = new Auth(filename);
+  assert.equal(current.credential(ssh.id), null);
+  assert.equal(current.databaseCredential(mysql.id).password, 'mysql-secret');
+});
+
 test('SQLite persists salted Argon2id hashes and hashed sessions across restart', async t => {
   const { auth, filename } = await fixture(t);
   let current = auth; t.after(() => current.close());

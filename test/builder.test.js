@@ -88,6 +88,7 @@ test('project creation, atomic saves, conflicts, reload, and downloadable ZIP', 
   assert.equal(exportedProject.workspaces[0].numberId, 1); assert.deepEqual(exportedProject.workspaces[0].blocks.map(block => block.numberId), [1, 2]);
   assert.ok(extracted.has('auth.js'));
   assert.ok(extracted.has('logger.js'));
+  assert.equal(extracted.get('application.key').length, 32);
   assert.deepEqual(extracted.get('favicon.ico').subarray(0, 4), Buffer.from([0, 0, 1, 0]));
   assert.equal(JSON.parse(extracted.get('package.json')).dependencies.argon2, '^0.45.1');
   for (const name of ['api_endpoint.js', 'api_call.js', 'api_reply.js']) assert.ok(extracted.has(`blocks/${name}`));
@@ -122,6 +123,34 @@ test('project creation, atomic saves, conflicts, reload, and downloadable ZIP', 
   assert.match(runtimeLog, /\[DEBUG\] Request completed: GET \/hello \(200,/);
 });
 
+test('projects import from uploaded ZIP files and same-origin repository URLs', async t => {
+  const { call, base, headers, store } = await fixture(t);
+  const source = await (await call('/api/projects', 'POST', { name: 'Imported source' })).json();
+  source.workspaces[0].name = 'Imported workflow';
+  source.workspaces[0].blocks[1].options.body = 'Imported response';
+  const saved = await (await call(`/api/projects/${source.id}`, 'PUT', source)).json();
+  const exported = await call(`/api/projects/${source.id}/export`);
+  const uploaded = await fetch(`${base}/api/projects/import`, { method: 'POST', headers: { ...headers, 'content-type': 'application/zip' }, body: Buffer.from(await exported.arrayBuffer()) });
+  assert.equal(uploaded.status, 201);
+  const uploadedProject = await uploaded.json();
+  assert.notEqual(uploadedProject.id, source.id);
+  assert.equal(uploadedProject.name, 'Imported source');
+  assert.equal(uploadedProject.revision, 1);
+  assert.equal(uploadedProject.workspaces[0].name, 'Imported workflow');
+  assert.equal(uploadedProject.workspaces[0].blocks[1].options.body, 'Imported response');
+  assert.ok(uploadedProject.access.includes('edit'));
+
+  const fromURL = await call('/api/projects/import-url', 'POST', { url: `${base}/repo/Imported-sourceRC/latest.zip` });
+  assert.equal(fromURL.status, 201);
+  const urlProject = await fromURL.json();
+  assert.notEqual(urlProject.id, source.id); assert.notEqual(urlProject.id, uploadedProject.id);
+  assert.equal(urlProject.name, 'Imported source');
+  assert.equal(urlProject.workspaces[0].blocks[1].options.body, 'Imported response');
+
+  const { zip } = require('../lib/zip');
+  await assert.rejects(() => store.importArchive(zip([['../workspaces.json', JSON.stringify(saved)]])), /unsafe path/);
+});
+
 test('saved revisions publish to a browsable RC repository and can be promoted, restored, and deleted', async t => {
   const { call, rawCall, base, directory } = await fixture(t);
   const project = await (await call('/api/projects', 'POST', { name: 'Delphi' })).json();
@@ -154,6 +183,7 @@ test('saved revisions publish to a browsable RC repository and can be promoted, 
   const rcRevision = await call(versions[0].rcUrl);
   assert.equal(rcRevision.status, 200);
   const rcFiles = zipEntries(Buffer.from(await rcRevision.arrayBuffer()));
+  assert.equal(rcFiles.has('application.key'), false);
   assert.equal(JSON.parse(rcFiles.get('workspaces.json')).revision, 2);
   assert.deepEqual(JSON.parse(rcFiles.get('config.json')), { port: 7779, host: '127.0.0.1', 'log-level': 4, 'force-console-input-log': true, 'update-url': rcUpdateUrl, auth: { database: path.join(directory, 'auth.sqlite') }, 'project-id': project.id, 'release-channel': 'RC' });
   assert.equal((await call('/repo/DelphiRC/latest.zip')).status, 200);
@@ -188,6 +218,23 @@ test('saved revisions publish to a browsable RC repository and can be promoted, 
   versions = await (await call(endpoint + '/versions')).json();
   assert.deepEqual(versions.map(version => version.revision), [4, 2]);
   assert.equal((await call('/repo/DelphiRC/delphi.rev3.zip')).status, 404);
+});
+
+test('RC and Prod independently package their authentication broker URLs', async t => {
+  const { call } = await fixture(t);
+  const project = await (await call('/api/projects', 'POST', { name: 'Brokered' })).json();
+  const endpoint = `/api/projects/${project.id}`;
+  const rc = { port: 7101, host: '127.0.0.1', 'log-level': 3, 'auth-storage': 'mysql', 'credential-broker-url': 'https://rc-auth.example:3443/' };
+  const prod = { port: 7100, host: '127.0.0.1', 'log-level': 2, 'auth-storage': 'mysql', 'credential-broker-url': 'https://prod-auth.example:3444' };
+  assert.equal((await call(`${endpoint}/deployment-configs/RC`, 'PUT', rc)).status, 200);
+  assert.equal((await call(`${endpoint}/deployment-configs/Prod`, 'PUT', prod)).status, 200);
+  const configurations = await (await call(`${endpoint}/deployment-configs`)).json();
+  assert.equal(configurations.RC['credential-broker-url'], 'https://rc-auth.example:3443');
+  assert.equal(configurations.Prod['credential-broker-url'], 'https://prod-auth.example:3444');
+  const exported = zipEntries(Buffer.from(await (await call(`${endpoint}/export`)).arrayBuffer()));
+  assert.deepEqual(JSON.parse(exported.get('config.json')).auth, { provider: 'mysql', broker: { url: 'https://rc-auth.example:3443' } });
+  assert.equal(exported.get('application.key').length, 32);
+  assert.equal((await call(`${endpoint}/deployment-configs/RC`, 'PUT', { ...rc, 'credential-broker-url': null })).status, 400);
 });
 
 test('version cleanup deletes only old RC-only revisions and preserves production builds', async t => {
@@ -227,20 +274,27 @@ test('database credential sets stay in auth.sqlite and selected application sett
   const createdResponse = await call('/api/database-credentials', 'POST', { name: 'Reporting', host: 'mysql.internal', port: 3307, username: 'reporter', password: 'super-secret', database: 'reports' });
   assert.equal(createdResponse.status, 201);
   const credential = await createdResponse.json();
+  const loggingResponse = await call('/api/database-credentials', 'POST', { name: 'Logging', host: 'logs.internal', port: 3308, username: 'logger', password: 'logging-secret', database: 'chronos' });
+  assert.equal(loggingResponse.status, 201);
+  const loggingCredential = await loggingResponse.json();
   assert.equal(Object.hasOwn(credential, 'password'), false);
   const listed = await (await call('/api/database-credentials')).json();
-  assert.equal(listed.length, 1); assert.equal(Object.hasOwn(listed[0], 'password'), false);
+  assert.equal(listed.length, 2); assert.ok(listed.every(item => !Object.hasOwn(item, 'password')));
   const endpoint = `/api/projects/${project.id}`;
-  const saved = await call(endpoint + '/deployment-configs/RC', 'PUT', { port: 3001, host: '127.0.0.1', 'log-level': 3, 'database-credential-set': credential.id });
+  const saved = await call(endpoint + '/deployment-configs/RC', 'PUT', { port: 3001, host: '127.0.0.1', 'log-level': 3, 'database-credential-set': credential.id, 'logging-database-credential-set': loggingCredential.id });
   assert.equal(saved.status, 200);
   const archive = zipEntries(Buffer.from(await (await call(endpoint + '/export')).arrayBuffer()));
   const config = JSON.parse(archive.get('config.json'));
   assert.deepEqual(config.auth, { database: path.join(directory, 'auth.sqlite') });
   assert.deepEqual(config.database, { 'credential-set': credential.id });
+  assert.deepEqual(config['logging-database'], { 'credential-set': loggingCredential.id });
   assert.doesNotMatch(archive.get('config.json').toString(), /super-secret/);
+  assert.doesNotMatch(archive.get('config.json').toString(), /logging-secret/);
   assert.doesNotMatch(archive.get('workspaces.json').toString(), /super-secret/);
   assert.equal((await call(`/api/database-credentials/${credential.id}`, 'DELETE', {})).status, 409);
+  assert.equal((await call(`/api/database-credentials/${loggingCredential.id}`, 'DELETE', {})).status, 409);
   assert.equal(auth.databaseCredential(credential.id).password, 'super-secret');
+  assert.equal(auth.databaseCredential(loggingCredential.id).password, 'logging-secret');
 });
 
 test('startup migration removes authentication database options and their incoming wires', async t => {
@@ -813,6 +867,8 @@ test('generated app config is created once, validated, and preserved', async t =
   assert.throws(() => loadAppConfig(directory), /force-console-input-log/);
   await fs.writeFile(filename, JSON.stringify({ port: 4321, host: '127.0.0.1', database: { 'credential-set': 'bad', 'auth-database': '/tmp/auth.sqlite' } }));
   assert.throws(() => loadAppConfig(directory), /database/);
+  await fs.writeFile(filename, JSON.stringify({ port: 4321, host: '127.0.0.1', 'logging-database': { 'credential-set': 'bad' } }));
+  assert.throws(() => loadAppConfig(directory), /logging-database/);
 });
 
 test('templates preserve objects and do not traverse prototypes or evaluate code', () => {

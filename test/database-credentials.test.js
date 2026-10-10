@@ -9,7 +9,8 @@ const context = database => ({
   values: new Map(),
   vars: Object.create(null),
   shared: Object.create(null),
-  database
+  database,
+  logDatabase: database
 });
 
 test('Database SQL Query uses the application database pool and follows success and error branches', async () => {
@@ -26,6 +27,28 @@ test('Database SQL Query uses the application database pool and follows success 
   await executeLegacy(definition, failed, block, {}, async branch => { failedBranches.push(branch); });
   assert.equal(failed.values.get('query:errormsg'), 'database offline');
   assert.deepEqual(failedBranches, ['erroraction']);
+});
+
+test('Send Query to Log Database uses only the logging database pool', async () => {
+  const block = require('../blocks/send_query_to_log_database');
+  const calls = [], outputs = {};
+  const branch = await block.execute({
+    database: async () => { throw new Error('application database must not be used'); },
+    logDatabase: async () => ({ execute: async query => { calls.push(query); return [[{ inserted: 1 }], []]; } }),
+    signal: new AbortController().signal
+  }, {}, { query: 'INSERT INTO traces VALUES (1)' }, (name, value) => { outputs[name] = value; });
+  assert.equal(branch, 'action');
+  assert.deepEqual(calls, ['INSERT INTO traces VALUES (1)']);
+  assert.deepEqual(outputs.response, [{ inserted: 1 }]);
+  assert.equal(outputs.errormsg, '');
+
+  const failed = {};
+  const failedBranch = await block.execute({
+    logDatabase: async () => ({ execute: async () => { throw new Error('logging database offline'); } }),
+    signal: new AbortController().signal
+  }, {}, { query: 'SELECT 1' }, (name, value) => { failed[name] = value; });
+  assert.equal(failedBranch, 'erroraction');
+  assert.equal(failed.errormsg, 'logging database offline');
 });
 
 test('Database SQL Bulk Query accepts lists and text, preserves order, and reports partial failures', async () => {
@@ -68,4 +91,17 @@ test('legacy Database SQL File Option remains loadable but hidden and has no cre
   assert.equal(definition.hidden, true);
   assert.equal(definition.trigger, 'startup');
   assert.deepEqual(definition.fields, []);
+});
+
+test('credential lookup and info blocks preserve typed values while wrapping secret outputs', async () => {
+  const credential = Object.assign({ type: 'ssh', name: 'Linux Primary', host: 'server', port: 22, username: 'svc', password: 'secret', privateKey: '', permissions: 'ops', extra: {} }, { __phidiasCredential: true });
+  const lookup = require('../blocks/get_linux_server_credentials_by_name'), lookupOutputs = {};
+  assert.equal(await lookup.execute({ getCredential(name, type) { assert.equal(name, 'Linux Primary'); assert.equal(type, 'ssh'); return credential; } }, {}, { name: 'Linux Primary' }, (id, value) => { lookupOutputs[id] = value; }), 'action');
+  assert.equal(lookupOutputs.credential, credential);
+  const info = require('../blocks/get_credential_info'), outputs = {};
+  assert.equal(await info.execute({ secret(value) { return { __phidiasSecret: true, toString: () => value }; } }, {}, { credential }, (id, value) => { outputs[id] = value; }), 'action');
+  assert.equal(outputs.host, 'server'); assert.equal(outputs.username, 'svc'); assert.equal(String(outputs.password), 'secret'); assert.equal(outputs.password.__phidiasSecret, true);
+  const ssh = require('../blocks/send_ssh_command');
+  assert.deepEqual(ssh.inputs.map(port => port.id), ['action', 'credential', 'textcommand']);
+  assert.equal(ssh.inputPorts.find(port => port.id === 'password').hidden, true);
 });

@@ -236,6 +236,18 @@ dialog h2 { margin:0 0 16px;font-size:18px; }
 .database-credentials>div { display:grid;gap:2px; }.database-credentials small { color:var(--muted);font-size:10px;font-weight:400; }
 .database-credentials select,.database-credentials button { height:31px;border:1px solid var(--field-border);border-radius:5px;padding:0 9px;background:var(--field);color:var(--field-text); }
 .database-credentials button { background:var(--surface-3); }.database-credentials button.danger { color:var(--danger); }
+.credential-dialog { width:min(960px,94vw);height:min(700px,88vh);padding:0;overflow:hidden; }
+.credential-dialog>header { display:flex;align-items:center;justify-content:space-between;padding:16px 18px;border-bottom:1px solid var(--border);background:var(--surface-2); }
+.credential-dialog>header h2,.credential-dialog>header p { margin:0; }.credential-dialog>header p { margin-top:3px;color:var(--muted);font-size:12px; }
+.credential-dialog>header>button { border:0;background:transparent;color:var(--muted);font-size:23px; }
+.credential-layout { display:grid;grid-template-columns:220px 1fr;height:calc(100% - 72px);min-height:0; }
+.credential-layout>aside { padding:12px;border-right:1px solid var(--border);background:var(--surface-2);overflow:auto; }
+.credential-layout>aside button { width:100%;display:flex;justify-content:space-between;gap:10px;margin:2px 0;padding:10px;border:0;border-radius:5px;background:transparent;text-align:left;color:var(--field-text); }
+.credential-layout>aside button:hover,.credential-layout>aside button.active { background:var(--surface-3); }.credential-layout>aside small { color:var(--muted); }
+.credential-content { min-width:0;overflow:auto;padding:16px; }.credential-content>header { display:flex;align-items:center;justify-content:space-between;margin-bottom:12px; }
+.credential-content h3 { margin:0 0 2px; }.credential-content header small { color:var(--muted); }
+.credential-list { display:grid;gap:7px; }.credential-row { display:grid;grid-template-columns:minmax(140px,1fr) minmax(180px,1.5fr) auto;align-items:center;gap:12px;padding:12px;border:1px solid var(--border);border-radius:6px;background:var(--surface-2); }
+.credential-row span { color:var(--muted);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }.credential-row-actions { display:flex;gap:5px; }.credential-empty { padding:50px 20px;text-align:center;color:var(--muted);border:1px dashed var(--border);border-radius:6px; }
 .deployment-settings form { overflow:hidden;border:1px solid var(--border);border-radius:6px;background:var(--surface); }
 .deployment-settings form>header { display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid var(--border); }
 .deployment-settings form>header div { display:grid;gap:2px; }.deployment-settings form>header small { color:var(--muted);font-size:10px;font-weight:400; }
@@ -271,6 +283,7 @@ dialog h2 { margin:0 0 16px;font-size:18px; }
 .version-empty { min-height:160px;display:grid;place-content:center;justify-items:center;gap:5px;color:var(--muted); }
 .version-empty strong { color:var(--text); }
 @media (max-width:800px) { .database-credentials{grid-template-columns:1fr auto auto auto}.database-credentials>div{grid-column:1/-1}.deployment-settings{grid-template-columns:1fr}.deployment-settings form>div{grid-template-columns:1fr 90px 130px auto} }
+@media (max-width:700px) { .credential-layout{grid-template-columns:1fr}.credential-layout>aside{display:flex;border-right:0;border-bottom:1px solid var(--border);overflow:auto}.credential-layout>aside button{width:auto;white-space:nowrap}.credential-row{grid-template-columns:1fr auto}.credential-row>span{grid-column:1/-1} }
 @media (max-width:680px) { .version-row{grid-template-columns:1fr;grid-template-areas:"main" "channels" "links" "actions"}.version-channels,.version-links,.version-actions{justify-content:flex-start;flex-wrap:wrap}.version-latest{flex-wrap:wrap}.version-cleanup{align-items:flex-start;flex-wrap:wrap}.version-cleanup small{width:100%;margin-left:0}.deployment-settings form>div{grid-template-columns:1fr 1fr}.deployment-settings button{grid-column:1/-1} }
 .template-dialog { width:min(1000px,calc(100vw - 32px));height:min(760px,calc(100vh - 32px));padding:0;overflow:hidden; }
 .template-dialog>header { height:72px;display:flex;align-items:flex-start;gap:20px;padding:16px 20px;border-bottom:1px solid var(--border); }

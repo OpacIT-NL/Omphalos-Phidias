@@ -154,3 +154,4 @@ vite.config.ts.timestamp-*
 # Machine-local startup configuration (generated on first launch)
 /config.json
 /config.json.*.tmp
+application.key

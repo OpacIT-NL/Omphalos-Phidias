@@ -10,6 +10,7 @@ let blockClipboard = null, workspaceClipboard = null, clipboardKind = null, past
 let templateNames = [], templateOriginalName = null, templateDirty = false;
 let sessionPermissions = {}, accessData = null, accessSelection = null;
 let databaseCredentials = [];
+let credentialData = [], credentialCategory = 'ssh';
 let displayedVersions = [];
 let webConsoleState = null, webConsolePolling = false;
 let pickerWorldPosition = null;
@@ -60,9 +61,10 @@ function modalField(field) {
     const options = choices.map(choice => '<option value="' + escapeHTML(choice.value) + '" ' + (String(field.value ?? '') === String(choice.value) ? 'selected' : '') + '>' + escapeHTML(choice.label) + '</option>').join('');
     return '<label class="field"><span>' + label + '</span><select name="' + name + '" autocomplete="off">' + options + '</select></label>';
   }
+  if (field.type === 'textarea') return '<label class="field"><span>' + label + '</span><textarea name="' + name + '" maxlength="65536" ' + (field.optional ? '' : 'required') + ' autocomplete="off" spellcheck="false">' + escapeHTML(field.value || '') + '</textarea></label>';
   const checked = field.type === 'checkbox' && field.value ? 'checked' : '';
   const value = field.type === 'checkbox' ? '' : 'value="' + escapeHTML(field.value || '') + '"';
-  const maxlength = field.type === 'password' ? 1000 : 100;
+  const maxlength = field.maxlength || (field.type === 'password' ? 1000 : 100);
   const required = field.type === 'checkbox' || field.optional ? '' : 'required';
   return '<label class="field"><span>' + label + '</span><input name="' + name + '" type="' + (field.type || 'text') + '" ' + checked + ' ' + value + ' maxlength="' + maxlength + '" ' + required + ' autocomplete="off"></label>';
 }
@@ -212,6 +214,31 @@ async function createProject() {
   dirty = false; await refreshProjects(); await openProject(created.id);
   toast('Project created. Right-click the canvas to add a block.');
 }
+function chooseProjectZIP() {
+  return new Promise(resolve => {
+    const input = document.createElement('input'); input.type = 'file'; input.accept = '.zip,application/zip';
+    input.onchange = () => resolve(input.files?.[0] || null);
+    input.addEventListener('cancel', () => resolve(null), { once: true }); input.click();
+  });
+}
+async function importProject() {
+  const selection = await modal('Import project', [{ name: 'source', label: 'Import source', type: 'select', value: 'file', choices: [{ value: 'file', label: 'Upload ZIP file' }, { value: 'url', label: 'Download from URL' }] }], 'Continue');
+  if (!selection) return;
+  if (dirty && !confirm('Discard unsaved changes and import a project?')) return;
+  let response;
+  if (selection.source === 'file') {
+    const file = await chooseProjectZIP(); if (!file) return;
+    if (file.size > 25 * 1024 * 1024) throw new Error('ZIP archive exceeds 25 MB.');
+    response = await fetch('/api/projects/import', { method: 'POST', headers: { 'content-type': 'application/zip', 'x-csrf-token': csrfToken }, body: file });
+  } else {
+    const values = await modal('Import project from URL', [{ name: 'url', label: 'ZIP URL', type: 'url', value: '', maxlength: 2048, selectOnOpen: true }], 'Import project');
+    if (!values) return;
+    response = await fetch('/api/projects/import-url', { method: 'POST', headers: { 'content-type': 'application/json', 'x-csrf-token': csrfToken }, body: JSON.stringify(values) });
+  }
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) throw Object.assign(new Error(response.status === 401 ? 'Your session expired. Sign in again before importing.' : result.error || 'Project import failed.'), { status: response.status });
+  dirty = false; await refreshProjects(); await openProject(result.id); toast(`Imported ${result.name}.`);
+}
 async function save() {
   if (!project) return;
   if (saving) { await saving; if (dirty) return save(); return; }
@@ -272,17 +299,20 @@ async function cleanupOldRCVersions(event) {
 }
 function renderDeploymentConfigs(configurations) {
   const choices = '<option value="">No database</option>' + databaseCredentials.map(item => `<option value="${escapeHTML(item.id)}">${escapeHTML(item.name)} · ${escapeHTML(item.username)}@${escapeHTML(item.host)}:${item.port}/${escapeHTML(item.database)}</option>`).join('');
-  $('#database-credential-manager').innerHTML = databaseCredentials.length ? databaseCredentials.map(item => `<option value="${escapeHTML(item.id)}">${escapeHTML(item.name)}</option>`).join('') : '<option value="">No credential sets</option>';
   for (const channel of ['RC', 'Prod']) {
     const form = document.querySelector(`[data-deployment-channel="${channel}"]`);
-    const config = configurations[channel] || { host: '0.0.0.0', port: 3001, 'log-level': 3, 'force-console-input-log': false, 'update-url': '' };
+    const config = configurations[channel] || { host: '0.0.0.0', port: 3001, 'log-level': 3, 'force-console-input-log': false, 'auth-storage': 'sqlite', 'credential-broker-url': '', 'update-url': '' };
     form.elements.host.value = config.host;
     form.elements.port.value = config.port;
     form.elements['log-level'].value = config['log-level'];
     form.elements['force-console-input-log'].checked = Boolean(config['force-console-input-log']);
     form.elements['update-url'].value = config['update-url'] || '';
+    form.elements['auth-storage'].value = config['auth-storage'] || 'sqlite';
+    form.elements['credential-broker-url'].value = config['credential-broker-url'] || '';
     form.elements['database-credential-set'].innerHTML = choices;
     form.elements['database-credential-set'].value = config['database-credential-set'] || '';
+    form.elements['logging-database-credential-set'].innerHTML = choices;
+    form.elements['logging-database-credential-set'].value = config['logging-database-credential-set'] || '';
     for (const control of form.elements) control.disabled = !project.access?.includes('edit');
   }
 }
@@ -409,7 +439,10 @@ async function saveDeploymentConfig(form) {
     port: Number(form.elements.port.value),
     'log-level': Number(form.elements['log-level'].value),
     'force-console-input-log': form.elements['force-console-input-log'].checked,
+    'auth-storage': form.elements['auth-storage'].value,
+    'credential-broker-url': form.elements['credential-broker-url'].value.trim() || null,
     'database-credential-set': form.elements['database-credential-set'].value || null,
+    'logging-database-credential-set': form.elements['logging-database-credential-set'].value || null,
     'update-url': form.elements['update-url'].value.trim() || null
   };
   const configurations = await api(`/api/projects/${project.id}/deployment-configs/${channel}`, { method: 'PUT', body: JSON.stringify(config) });
@@ -427,7 +460,7 @@ async function openVersionManager() {
 async function refreshDatabaseCredentials(selectedId = null) {
   const [configurations, credentials] = await Promise.all([api(`/api/projects/${project.id}/deployment-configs`), api('/api/database-credentials')]);
   databaseCredentials = credentials; renderDeploymentConfigs(configurations);
-  if (selectedId && databaseCredentials.some(item => item.id === selectedId)) $('#database-credential-manager').value = selectedId;
+  void selectedId;
 }
 async function createDatabaseCredential() {
   const values = await modal('Create database credential set', [
@@ -457,6 +490,50 @@ async function deleteDatabaseCredential() {
   if (!confirm(`Delete database credential set "${current.name}"?`)) return;
   await api(`/api/database-credentials/${id}`, { method: 'DELETE', body: '{}' });
   await refreshDatabaseCredentials(); toast('Database credential set deleted.');
+}
+const credentialCategories = [
+  { type: 'ssh', label: 'SSH credentials' }, { type: 'windows', label: 'Windows credentials' },
+  { type: 'mysql', label: 'MySQL credentials' }, { type: 'mssql', label: 'MSSQL credentials' },
+  { type: 'postgresql', label: 'PostgreSQL credentials' }, { type: 'other', label: 'Other credentials' }
+];
+const credentialDefaults = { ssh: 22, windows: 5986, mysql: 3306, mssql: 1433, postgresql: 5432 };
+function credentialFields(type, item = {}) {
+  const fields = [{ name: 'name', label: 'Display name', value: item.name || '', selectOnOpen: !item.id }];
+  fields.push({ name: 'host', label: type === 'windows' ? 'Host / LDAP server' : 'Host', value: item.host || '', optional: type === 'other' }, { name: 'port', label: 'Port', type: 'number', value: item.port || credentialDefaults[type] || '', optional: type === 'other' });
+  if (type === 'windows') fields.push({ name: 'domain', label: 'Domain', value: item.domain || '', optional: true });
+  fields.push({ name: 'username', label: 'Username', value: item.username || '', optional: type === 'other' });
+  fields.push({ name: 'password', label: item.id ? 'New password (leave blank to keep current)' : 'Password', type: 'password', optional: Boolean(item.id) || ['ssh','other'].includes(type) });
+  if (type === 'ssh') fields.push({ name: 'privateKey', label: item.id ? 'New private key (leave blank to keep current)' : 'Private key (alternative to password)', type: 'textarea', optional: true });
+  if (['mysql','mssql','postgresql'].includes(type)) fields.push({ name: 'database', label: 'Database name', value: item.database || '' });
+  fields.push({ name: 'permissions', label: 'Permissions / usage notes', value: item.permissions || '', optional: true });
+  if (type === 'other') fields.push({ name: 'extra', label: 'Additional JSON data', type: 'textarea', value: JSON.stringify(item.extra || {}, null, 2), optional: true });
+  return fields;
+}
+function credentialSummary(item) {
+  if (['mysql','mssql','postgresql'].includes(item.type)) return `${item.username || 'no user'}@${item.host}:${item.port}/${item.database}`;
+  if (item.type === 'ssh') return `${item.username || 'no user'}@${item.host}:${item.port}`;
+  if (item.type === 'windows') return `${item.domain ? item.domain + '\\' : ''}${item.username || 'no user'} · ${item.host}:${item.port}`;
+  return [item.username, item.host, item.permissions].filter(Boolean).join(' · ') || 'Stored credential';
+}
+function renderCredentialManager() {
+  $('#credential-categories').innerHTML = credentialCategories.map(category => { const count = credentialData.filter(item => item.type === category.type).length; return `<button type="button" data-credential-category="${category.type}" class="${credentialCategory === category.type ? 'active' : ''}"><span>${escapeHTML(category.label)}</span><small>${count}</small></button>`; }).join('');
+  const category = credentialCategories.find(item => item.type === credentialCategory), items = credentialData.filter(item => item.type === credentialCategory);
+  $('#credential-heading').textContent = category.label; $('#credential-count').textContent = `${items.length} saved`;
+  $('#credential-list').innerHTML = items.length ? items.map(item => `<article class="credential-row" data-credential-id="${escapeHTML(item.id)}"><strong>${escapeHTML(item.name)}</strong><span>${escapeHTML(credentialSummary(item))}</span><div class="credential-row-actions"><button type="button" data-credential-action="edit">Edit</button><button type="button" data-credential-action="delete" class="danger">Delete</button></div></article>`).join('') : '<div class="credential-empty">No credentials in this category.</div>';
+}
+async function refreshCredentialManager() { credentialData = await api('/api/credentials'); renderCredentialManager(); }
+async function openCredentialManager() { await refreshCredentialManager(); $('#credential-dialog').showModal(); }
+async function createManagedCredential() {
+  const values = await modal(`Create ${credentialCategories.find(item => item.type === credentialCategory).label}`, credentialFields(credentialCategory), 'Create');
+  if (!values) return; if (values.port !== undefined) values.port = values.port === '' ? null : Number(values.port); values.type = credentialCategory;
+  await api('/api/credentials', { method: 'POST', body: JSON.stringify(values) }); await refreshCredentialManager(); toast('Credential created.');
+}
+async function credentialRowAction(button) {
+  const id = button.closest('[data-credential-id]')?.dataset.credentialId, item = credentialData.find(entry => entry.id === id); if (!item) return;
+  if (button.dataset.credentialAction === 'delete') { if (!confirm(`Delete credential "${item.name}"?`)) return; await api(`/api/credentials/${id}`, { method:'DELETE', body:'{}' }); await refreshCredentialManager(); toast('Credential deleted.'); return; }
+  const values = await modal(`Edit ${item.name}`, credentialFields(item.type, item), 'Save'); if (!values) return;
+  if (values.port !== undefined) values.port = values.port === '' ? null : Number(values.port); values.type = item.type;
+  await api(`/api/credentials/${id}`, { method:'PUT', body:JSON.stringify(values) }); await refreshCredentialManager(); toast('Credential updated. Restart deployed applications to clear cached credentials.');
 }
 async function versionAction(button) {
   const revision = Number(button.closest('[data-revision]').dataset.revision), action = button.dataset.versionAction;
@@ -617,8 +694,8 @@ function renderGraph() {
   $('#canvas-empty').hidden = !workspace || workspace.blocks.length > 0;
   $('#nodes').innerHTML = (workspace?.blocks || []).map(block => {
     const definition = def(block.type) || { name: block.type, category: 'Unknown', description: 'Unknown block', fields: [], outputs: [], inputPorts: [], outputPorts: [] };
-    const inputs = definition.inputPorts || [];
-    const outputs = definition.outputPorts || (definition.outputs || []).map(id => ({ id, name: id, kind: 'action', types: [] }));
+    const inputs = (definition.inputPorts || []).filter(port => !port.hidden);
+    const outputs = (definition.outputPorts || (definition.outputs || []).map(id => ({ id, name: id, kind: 'action', types: [] }))).filter(port => !port.hidden);
     const inputHTML = inputs.map(port => `<div class="port-row input-row" data-port-kind="${port.kind}" data-field-link="${escapeHTML(port.id)}"><button class="port input" style="--port-color:${portColor(port)}" data-input="${block.id}" data-port="${escapeHTML(port.id)}" data-kind="${port.kind}" data-types="${escapeHTML((port.types || []).join(','))}" aria-label="Connect ${escapeHTML(port.name)} input"></button><span>${escapeHTML(port.name)}</span></div>`).join('');
     const outputHTML = outputs.map(port => `<div class="port-row output-row" data-port-kind="${port.kind}" data-field-link="${escapeHTML(port.id)}"><span>${escapeHTML(port.name)}</span><button class="port ${pending?.from === block.id && pending.output === port.id ? 'pending' : ''}" style="--port-color:${portColor(port)}" data-output="${escapeHTML(port.id)}" data-from="${block.id}" data-kind="${port.kind}" data-types="${escapeHTML((port.types || []).join(','))}" aria-label="Connect ${escapeHTML(port.name)} output"></button></div>`).join('');
     const optionHTML = definition.fields.map(field => optionEditor(field, block.options[field.key])).join('');
@@ -1154,14 +1231,12 @@ $('#workspace-settings').onclick = handle(async () => {
 });
 for (const form of document.querySelectorAll('[data-deployment-channel]')) form.onsubmit = handle(async event => { event.preventDefault(); await saveDeploymentConfig(form); });
 for (const selector of ['#new-project', '#rail-new-project', '#home-new-project']) $(selector).onclick = handle(createProject);
+for (const selector of ['#import-project', '#home-import-project']) $(selector).onclick = handle(importProject);
 for (const selector of ['#show-home', '[data-home]']) $(selector).onclick = showHome;
 for (const selector of ['#add-block', '#empty-add-block']) $(selector).onclick = () => { const rect = $('#viewport').getBoundingClientRect(); openPicker(rect.left + rect.width / 2 - 170, rect.top + Math.min(100, rect.height / 3)); };
 $('#save').onclick = handle(async () => { await save(); toast('Project saved to the server.'); });
 $('#clear-block-cache').onclick = handle(clearBlockCache);
 $('#versions').onclick = handle(openVersionManager);
-$('#database-credential-new').onclick = handle(createDatabaseCredential);
-$('#database-credential-edit').onclick = handle(editDatabaseCredential);
-$('#database-credential-delete').onclick = handle(deleteDatabaseCredential);
 $('#templates').onclick = handle(openTemplateEditor);
 $('#version-close').onclick = () => $('#version-dialog').close();
 $('#version-cleanup').onsubmit = event => handle(() => cleanupOldRCVersions(event))();
@@ -1182,11 +1257,17 @@ $('#template-contents').addEventListener('keydown', event => {
 $('#template-dialog').addEventListener('cancel', event => { event.preventDefault(); closeTemplateEditor(); });
 $('#access-management').onclick = handle(openAccessManager);
 $('#console-management').onclick = handle(openWebConsole);
+$('#credential-management').onclick = handle(openCredentialManager);
+$('#credential-close').onclick = () => $('#credential-dialog').close();
+$('#credential-new').onclick = handle(createManagedCredential);
+$('#credential-categories').onclick = event => { const button = event.target.closest('[data-credential-category]'); if (!button) return; credentialCategory = button.dataset.credentialCategory; renderCredentialManager(); };
+$('#credential-list').onclick = event => { const button = event.target.closest('[data-credential-action]'); if (button) handle(credentialRowAction)(button); };
 $('#console-close').onclick = closeWebConsole;
 $('#console-form').onsubmit = event => { event.preventDefault(); handle(() => submitWebConsole(event))(); };
 $('#console-dialog').addEventListener('cancel', event => { event.preventDefault(); closeWebConsole(); });
 $('#access-close').onclick = () => $('#access-dialog').close();
 $('#access-dialog').addEventListener('cancel', event => { event.preventDefault(); $('#access-dialog').close(); });
+$('#credential-dialog').addEventListener('cancel', event => { event.preventDefault(); $('#credential-dialog').close(); });
 for (const selector of ['#access-users', '#access-groups']) $(selector).onclick = event => {
   const button = event.target.closest('[data-access-type]'); if (!button) return;
   accessSelection = { type: button.dataset.accessType, id: Number(button.dataset.accessId) }; renderAccessManager();
@@ -1220,7 +1301,7 @@ function setTheme(theme) { document.documentElement.dataset.theme = theme; local
 setTheme(localStorage.getItem('phidias-theme') || 'system');
 $('#theme-toggle').onclick = () => setTheme(themes[(themes.indexOf(document.documentElement.dataset.theme) + 1) % themes.length]);
 window.addEventListener('keydown', event => {
-  if ($('#form-dialog').open || $('#version-dialog').open || $('#template-dialog').open || $('#access-dialog').open || $('#console-dialog').open) return;
+  if ($('#form-dialog').open || $('#version-dialog').open || $('#template-dialog').open || $('#access-dialog').open || $('#credential-dialog').open || $('#console-dialog').open) return;
   const command = event.ctrlKey || event.metaKey;
   const editing = event.target.closest?.('input,textarea,select,[contenteditable]');
   const key = event.key.toLowerCase();
@@ -1238,11 +1319,11 @@ window.addEventListener('beforeunload', event => { if (dirty || templateDirty) {
 window.addEventListener('resize', renderWires);
 async function refreshSession() {
   const session = await api('/api/session'); csrfToken = session.csrfToken; sessionPermissions = session.permissions || {};
-  $('#account-name').textContent = session.username; $('#sign-in-again').hidden = true; $('#access-management').hidden = !sessionPermissions.manageUsers;
-  for (const selector of ['#database-credential-new', '#database-credential-edit', '#database-credential-delete']) $(selector).hidden = !sessionPermissions.manageUsers;
+  $('#account-name').textContent = session.username; $('#sign-in-again').hidden = true; $('#access-management').hidden = !sessionPermissions.manageUsers; $('#credential-management').hidden = !sessionPermissions.manageUsers;
   $('#console-management').hidden = !sessionPermissions.console;
   if (!sessionPermissions.console && $('#console-dialog').open) closeWebConsole();
   for (const selector of ['#new-project', '#rail-new-project', '#home-new-project']) $(selector).disabled = !sessionPermissions.createProjects;
+  for (const selector of ['#import-project', '#home-import-project']) $(selector).disabled = !sessionPermissions.createProjects;
 }
 $('#logout').onclick = handle(async () => {
   if (saving) await saving; if (dirty && !confirm('Sign out and discard unsaved changes?')) return;

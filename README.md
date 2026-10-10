@@ -144,7 +144,9 @@ Core permissions are **Login**, **Manage users**, **Create projects**, and **Con
 
 The ACL and database-credential schemas are added with `CREATE TABLE IF NOT EXISTS`; the updater never replaces `auth.sqlite`. On the first ACL migration, every existing user is placed in the built-in **Administrators** group, which has every core permission and wildcard access to existing and future projects. This preserves access during upgrades. The first account created in a completely empty database becomes the bootstrap administrator. Later accounts start with no permissions until an administrator assigns them.
 
-Administrators can create MySQL credential sets in the Version manager. RC and Prod settings select their credential sets independently. The password remains in the protected `auth.sqlite`; public repository ZIPs contain only the credential-set ID and the path to that SQLite database. **Database SQL Query** and **Database SQL Bulk Query** use the shared pool for the selected set. The bulk block accepts a list, a JSON list, one query per line, or multiline queries separated by a line containing `---`; it executes in order and stops at the first failure. Restart the application after changing a credential set. The old **Database SQL File Option** block is retained only as a hidden no-op so existing workspace graphs continue to load.
+Administrators open **CRED** beside CLI and ACL to manage SSH, Windows, MySQL, MSSQL, PostgreSQL, and other credentials. Passwords and private keys are never returned by the builder API. Existing MySQL credential sets migrate automatically with their original IDs. RC and Prod independently select a MySQL application database and logging database in Version manager. **Database SQL Query** and **Database SQL Bulk Query** use the selected application database, while **Send Query to Log Database** uses the selected logging database.
+
+Phidias can store authentication, ACL, session, and credential tables in SQLite or MySQL. In `conf t`, use `auth storage mysql` to enter and stage the MySQL connection, or `auth storage sqlite [path]` to switch back. `copy run start` tests the destination and migrates the complete data set without deleting the source. Configure the separate startup broker with `auth broker enabled true`, `auth broker host <IP>`, and `auth broker port <port>`, then restart Phidias after saving. The broker accepts only signed, time-limited bootstrap requests and rejects replayed nonces.
 
 Sessions use random 256-bit cookies with `HttpOnly`, `SameSite=Strict`, and `Secure` when configured. They expire after eight hours. Saved sessions survive builder restarts; sessions for unsaved accounts remain in memory until `copy run start`. Signing out revokes the current session; resetting or deleting an account revokes its sessions. State-changing authenticated API calls require the session’s `X-CSRF-Token`, and cross-origin writes are rejected.
 
@@ -157,6 +159,7 @@ Back up `config.json`, projects, the sibling `repo` directory, and the authentic
 ## Build an automation
 
 1. Create a project. It starts with `GET /hello` connected to an HTTP response.
+   Existing Phidias applications can be added with **Import project**. Upload an exported ZIP or provide its URL. Imports receive a fresh project ID and revision history while preserving workspaces and HTML/CSS templates. The current trusted runtime and bundled block implementations are used; JavaScript files inside the uploaded archive are not installed or executed.
 2. Click a block in the library or drag it onto the canvas.
 3. Click an output port, then a compatible input port, or drag a wire between them. A dragged wire snaps to a nearby compatible port before you release it. Green ports carry actions and gold ports carry values. Action outputs have one wire; value outputs can feed multiple blocks. Each value input accepts one wire.
 4. Select a block to edit its configuration. Hold Ctrl/Cmd or Shift while clicking blocks to toggle them in a multi-selection, or Shift-drag across the canvas to select every block the rectangle touches. Drag the header of any selected block to move the whole group. Drag a block's lower-right resize handle to make it as large as needed; text option fields grow with the available space and custom dimensions are saved in `workspaces.json`.
@@ -186,7 +189,9 @@ node app.js
 npm start
 ```
 
-`npm install` installs Argon2 plus the FTP, SSH, and MySQL clients used by authentication and imported network/database blocks. Visit `http://localhost:3001/hello` for the starter workflow. In **Version manager**, set separate host, port, log-level, update URL, and **Force Console Log block output** profiles for RC and Prod. Direct exports and RC repository ZIPs contain the RC `config.json`; promoted ZIPs contain the Prod `config.json`. Every generated config contains `auth.database`, the immutable `project-id`, and its `release-channel` (`RC` or `Prod`) so all authentication blocks use one SQLite file and select the correct ACL. A configured channel also receives its own `update-url`. Changing a profile updates the corresponding existing repository ZIPs and `latest.zip`. An unset profile uses port `3001`, host `0.0.0.0`, log level `3`, and normally filtered Console Log output. `PORT` and `HOST` remain optional process-level overrides. Stop it with SIGINT or SIGTERM. Run it under your normal process manager or service manager for unattended hosting.
+`npm install` installs Argon2 plus the FTP, SSH, and database clients used by authentication and imported network/database blocks. Visit `http://localhost:3001/hello` for the starter workflow. In **Version manager**, set separate host, port, log level, update URL, authentication storage, credential broker URL, and **Force Console Log block output** profiles for RC and Prod. RC and Prod can point to different broker URLs. SQLite builds receive `auth.database`; MySQL builds receive only `auth.broker.url`, the immutable `project-id`, and the release channel. They never receive the MySQL password in `config.json`.
+
+An authenticated direct export contains a unique 32-byte `application.key`. Keep this file beside `app.js`, limit it to the account running the application, and do not commit or share it. Public `/repo/...` archives deliberately exclude `application.key`; applying a public update therefore preserves the key already installed on the server. At startup, a MySQL-backed application signs a request to the configured broker. The broker returns the MySQL connection settings in an AES-256-GCM encrypted response tied to that request. Application keys are encrypted at rest using AES-256-GCM with key material derived from the database server key and the machine-local Phidias key. Changing a deployment profile updates the corresponding existing repository ZIPs and `latest.zip`. An unset profile uses port `3001`, host `0.0.0.0`, log level `3`, SQLite authentication, and normally filtered Console Log output. `PORT` and `HOST` remain optional process-level overrides. Stop it with SIGINT or SIGTERM.
 
 Each server-side project and exported ZIP contains:
 
@@ -236,6 +241,16 @@ The builder serves its Phidias favicon from `public/favicon.ico`. Every project 
 | Wait | Delays execution |
 | Database SQL Query | Executes one SQL statement using the database credential set selected for this RC or Prod application |
 | Database SQL Bulk Query | Executes up to 1,000 SQL statements sequentially and outputs ordered responses, counts, and the failed query details |
+| Send Query to Log Database | Executes one SQL statement using the separate logging database credential set selected for this RC or Prod application |
+| Get Linux Server Credentials by Name | Loads an SSH credential from `auth.sqlite` by display name |
+| Get Windows Credentials by Name | Loads a Windows/LDAP credential by display name |
+| Get Other Credentials by Name | Loads an Other credential by display name |
+| Get Database Credentials by Name | Loads a MySQL, MSSQL, or PostgreSQL credential by display name |
+| Get Credential Info | Exposes connection metadata and secret passthrough values; secrets are redacted from console and workspace logs |
+| MSSQL Query | Runs a query with a connected MSSQL credential |
+| PostgreSQL Query | Runs a query with a connected PostgreSQL credential |
+| Send SSH Command | Runs commands with a connected Linux SSH credential |
+| Get Linux Status Over SSH | Returns CPU, load, RAM, filesystem capacity, inode usage, block-device, process-table, interface, and socket data as an object |
 | HTTP request | Calls an HTTP(S) URL with JSON, HTML, or text request bodies and stores status, response headers, and body |
 | HTTP response | Sends JSON by default, with HTML and text available from the Reply format menu |
 | Linux command | Runs `/bin/sh -c` as the deployed automation's OS user and exposes stdout, stderr, and exit code |
@@ -360,6 +375,8 @@ Use unique lowercase filenames and types containing letters, numbers, `_` or `-`
 | POST | `/api/console/input` | Submit a command or answer the current hidden prompt |
 | GET | `/api/projects` | List projects |
 | POST | `/api/projects` | Create with `{ "name": "…" }` |
+| POST | `/api/projects/import` | Import an application ZIP (`application/zip`, 25 MB compressed limit) |
+| POST | `/api/projects/import-url` | Download and import `{ "url": "https://…/application.zip" }`; remote hosts must resolve to public addresses, while same-origin repository URLs are allowed |
 | GET | `/api/projects/:id` | Load `workspaces.json` |
 | PUT | `/api/projects/:id` | Save document with current `revision`; conflict returns 409 |
 | DELETE | `/api/projects/:id` | Delete a project and its repository revisions |
@@ -380,7 +397,7 @@ Use unique lowercase filenames and types containing letters, numbers, `_` or `-`
 | GET, HEAD | `/repo/` and `/repo/:channel/` | Publicly browse repository folders and ZIPs without authentication |
 | GET, HEAD | `/repo/:channel/:file.zip` | Publicly download a revision or `latest.zip` without authentication |
 
-API clients must keep the session cookie returned by login. Get the session CSRF token from login or `/api/session`, and send it in `X-CSRF-Token` on all authenticated writes. Writes require `Content-Type: application/json`. The API accepts at most 1 MB per request. Paths are derived from server-generated project IDs, not client-supplied filesystem locations.
+API clients must keep the session cookie returned by login. Get the session CSRF token from login or `/api/session`, and send it in `X-CSRF-Token` on all authenticated writes. Writes require `Content-Type: application/json`, except direct ZIP imports which use `application/zip` or `application/octet-stream`. JSON requests accept at most 1 MB; ZIP imports accept at most 25 MB compressed and 100 MB expanded. Paths are derived from server-generated project IDs, not client-supplied filesystem locations.
 
 ## Tagged releases
 

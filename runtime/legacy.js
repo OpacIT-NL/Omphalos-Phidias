@@ -198,8 +198,9 @@ async function executeLegacy(definition, ctx, block, connectedInputs, follow) {
     const level = ['info', 'warning', 'error'].includes(requestedLevel) ? requestedLevel : 'info';
     const forcedMethod = { info: 'forceInfo', warning: 'forceWarning', error: 'forceError' }[level];
     const write = ctx.forceConsoleLog ? (ctx.logger?.[forcedMethod] || ctx.logger?.[level]) : ctx.logger?.[level];
-    if (write) write.call(ctx.logger, content);
-    else (level === 'error' ? console.error : level === 'warning' ? console.warn : console.info)(content);
+    const safeContent = ctx.redactForLog ? ctx.redactForLog(content) : content;
+    if (write) write.call(ctx.logger, safeContent);
+    else (level === 'error' ? console.error : level === 'warning' ? console.warn : console.info)(safeContent);
     api.RunNextBlock('action');
     await Promise.all(branches);
     return stored;
@@ -220,14 +221,16 @@ async function executeLegacy(definition, ctx, block, connectedInputs, follow) {
   if (definition.type === 'send_ssh_command') {
     const { Client } = require('ssh2');
     const connection = new Client();
-    const host = String(getInput('host', api.GetOptionValue('host', null, '')));
-    const username = String(getInput('username', api.GetOptionValue('username', null, '')));
+    const credential = getInput('credential');
+    const host = String(credential?.host || getInput('host', api.GetOptionValue('host', null, '')));
+    const username = String(credential?.username || getInput('username', api.GetOptionValue('username', null, '')));
     const commands = String(getInput('textcommand', api.GetOptionValue('textcommand', null, ''))).split(/\\r?\\n/).filter(command => command.trim());
     const logs = [];
     try {
       await new Promise((resolve, reject) => connection.once('ready', resolve).once('error', reject).connect({
-        host, port: Number(getInput('port', api.GetOptionValue('port', null, 22))) || 22,
-        username, password: String(getInput('password', api.GetOptionValue('password', null, '')))
+        host, port: Number(credential?.port || getInput('port', api.GetOptionValue('port', null, 22))) || 22,
+        username,
+        ...(credential?.privateKey ? { privateKey: String(credential.privateKey) } : { password: String(credential?.password || getInput('password', api.GetOptionValue('password', null, ''))) })
       }));
       for (const command of commands) {
         logs.push(`${username}@${host}:~$ ${command.trim()}`);

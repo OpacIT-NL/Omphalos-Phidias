@@ -1,0 +1,32 @@
+'use strict';
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs/promises');
+const os = require('node:os');
+const path = require('node:path');
+const crypto = require('node:crypto');
+const { Auth } = require('../lib/auth');
+const { createAuthBroker, signRequest, decryptResponse } = require('../lib/auth-broker');
+
+test('authentication broker verifies app keys, encrypts MySQL settings, and rejects replay', async t => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'phidias-broker-'));
+  const auth = new Auth(path.join(directory, 'auth.sqlite'), { keyFile: path.join(directory, 'phidias.key') });
+  const projectId = crypto.randomUUID(), applicationKey = auth.ensureApplicationKey(projectId);
+  const stored = auth.db.prepare('SELECT key_hash,encrypted_key FROM application_keys WHERE project_id=?').get(projectId);
+  assert.equal(stored.key_hash, crypto.createHash('sha256').update(applicationKey).digest('hex'));
+  assert.equal(stored.encrypted_key.includes(applicationKey.toString('base64')), false);
+  const mysql = { host: 'mysql.internal', port: 3306, username: 'apps', password: 'top-secret', database: 'phidias' };
+  const broker = createAuthBroker({ auth, mysqlConfig: mysql, logger: { info() {}, error() {} } });
+  await new Promise(resolve => broker.listen(0, '127.0.0.1', resolve));
+  t.after(async () => { await new Promise(resolve => broker.close(resolve)); auth.close(); await fs.rm(directory, { recursive: true, force: true }); });
+  const request = { projectId, channel: 'RC', timestamp: Date.now(), nonce: crypto.randomBytes(16).toString('hex') };
+  request.signature = signRequest(applicationKey, request);
+  const send = () => fetch(`http://127.0.0.1:${broker.address().port}/v1/bootstrap`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(request) });
+  const response = await send(); assert.equal(response.status, 200);
+  const envelope = await response.json();
+  assert.equal(JSON.stringify(envelope).includes(mysql.password), false);
+  assert.deepEqual(decryptResponse(applicationKey, request, envelope).mysql, mysql);
+  assert.equal((await send()).status, 401);
+  const forged = { ...request, nonce: crypto.randomBytes(16).toString('hex'), timestamp: Date.now(), signature: '0'.repeat(128) };
+  assert.equal((await fetch(`http://127.0.0.1:${broker.address().port}/v1/bootstrap`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(forged) })).status, 401);
+});

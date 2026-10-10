@@ -29,6 +29,31 @@ test('Apply Variable replaces every matching placeholder with text or HTML', () 
   assert.throws(() => applyVariable('', '%name%', 'x'), /without percent signs/);
 });
 
+test('multi-template, multi-variable, and requested multi-text blocks expose every numbered value', async t => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'phidias-multi-template-'));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  await fs.mkdir(path.join(directory, 'html'));
+  for (let index = 1; index <= 5; index++) await fs.writeFile(path.join(directory, 'html', `page${index}.html`), `<p>%value${index}%</p>`);
+  for (const count of [2, 3, 4, 5]) {
+    const block = require(`../blocks/get_template_${count}x`), outputs = {};
+    const inputs = Object.fromEntries(Array.from({ length: count }, (_, index) => [`name${index + 1}`, `page${index + 1}.html`]));
+    assert.equal(await block.execute({ directory }, {}, inputs, (id, value) => { outputs[id] = value; }), 'success');
+    for (let index = 1; index <= count; index++) assert.equal(outputs[`html${index}`], `<p>%value${index}%</p>`);
+
+    const apply = require(`../blocks/apply_variable_${count}x`), applied = {};
+    const replacements = { html: Array.from({ length: count }, (_, index) => `%value${index + 1}%`).join('|') };
+    for (let index = 1; index <= count; index++) { replacements[`name${index}`] = `value${index}`; replacements[`value${index}`] = `result${index}`; }
+    assert.equal(await apply.execute({}, {}, replacements, (id, value) => { applied[id] = value; }), 'next');
+    assert.equal(applied.html, Array.from({ length: count }, (_, index) => `result${index + 1}`).join('|'));
+  }
+  for (const count of [5, 7, 8]) {
+    const block = require(`../blocks/text_${count}x`), outputs = {};
+    const options = Object.fromEntries(Array.from({ length: count }, (_, index) => [`text${index + 1}`, `Text ${index + 1}`]));
+    await block.execute({}, options, {}, (id, value) => { outputs[id] = value; });
+    assert.deepEqual(outputs, options);
+  }
+});
+
 test('Markdown to HTML supports common Markdown and escapes embedded HTML', () => {
   const html = markdownToHTML('# Title\n\nHello **world** and `code`.\n\n- One\n- Two\n\n[Safe](https://example.test?a=1&b=2)\n\n<script>alert(1)</script>');
   assert.match(html, /<h1>Title<\/h1>/);

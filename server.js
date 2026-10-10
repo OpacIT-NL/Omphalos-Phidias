@@ -1,8 +1,13 @@
 'use strict';
 const http = require('node:http');
+const https = require('node:https');
+const dns = require('node:dns/promises');
+const net = require('node:net');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { Auth } = require('./lib/auth');
+const { openAuth } = require('./lib/auth-backend');
+const { createAuthBroker } = require('./lib/auth-broker');
 const { loadConfig, ConfigState } = require('./lib/config');
 const { createLogger } = require('./lib/logger');
 const { Store } = require('./lib/store');
@@ -30,9 +35,59 @@ const repositoryPage = (folder, entries) => {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHTML(title)} · OpacIT Omphalos Phidias</title><link rel="icon" href="/favicon.ico" sizes="any"><style>:root{color-scheme:light dark;font-family:system-ui,sans-serif;background:#1e1f22;color:#f2f3f5}*{box-sizing:border-box}body{margin:0;padding:32px;background:#1e1f22}.repo{width:min(900px,100%);margin:auto}.repo-head{padding-bottom:18px;border-bottom:1px solid #47494f}.repo-head h1{margin:6px 0 0;font-size:22px}.repo-head small,.repo-parent,.repo-row span,.repo-row time,.repo-empty{color:#b5bac1}.repo-parent{display:inline-block;text-decoration:none}.repo-list{margin-top:12px;border:1px solid #47494f;border-radius:7px;overflow:hidden;background:#2b2d31}.repo-row{display:grid;grid-template-columns:minmax(180px,1fr) 90px 180px;gap:16px;padding:12px 14px;border-bottom:1px solid #47494f;color:#f2f3f5;text-decoration:none}.repo-row:last-child{border-bottom:0}.repo-row:hover{background:#35373c}.repo-row span,.repo-row time{text-align:right;font-size:12px}.repo-empty{padding:28px;text-align:center}@media(max-width:620px){body{padding:16px}.repo-row{grid-template-columns:1fr auto}.repo-row time{display:none}}</style></head><body><main class="repo"><header class="repo-head">${parent}<small>OpacIT Omphalos Phidias</small><h1>${escapeHTML(title)}</h1></header><section class="repo-list">${rows}</section></main></body></html>`;
 };
 const assets = new Map([['/', ['index.html', 'text/html']], ['/login', ['login.html', 'text/html']], ['/login.js', ['login.js', 'text/javascript']], ['/editor.js', ['editor.js', 'text/javascript']], ['/style.css', ['style.css', 'text/css']], ['/favicon.ico', ['favicon.ico', 'image/x-icon']]]);
-async function createServer({ directory = loadConfig().directory, repositoryDirectory, authDatabase = loadConfig().authDatabase, secureCookies = loadConfig().secureCookies, logger = createLogger({ level: loadConfig().logLevel, fileLevel: loadConfig().fileLogLevel, directory: path.join(__dirname, 'log') }), closeResourcesOnClose = true } = {}) {
-  const auth = new Auth(authDatabase, { secureCookies });
-  const store = new Store(directory, repositoryDirectory, { authDatabase, databaseCredential: id => auth.databaseCredential(id) }); await store.init();
+async function readArchive(request, limit = 25 * 1024 * 1024) {
+  if (Number(request.headers['content-length'] || 0) > limit) throw Object.assign(new Error('ZIP archive exceeds 25 MB'), { status: 413 });
+  const chunks = []; let size = 0;
+  for await (const chunk of request) { size += chunk.length; if (size > limit) throw Object.assign(new Error('ZIP archive exceeds 25 MB'), { status: 413 }); chunks.push(chunk); }
+  return Buffer.concat(chunks);
+}
+function publicAddress(address) {
+  if (net.isIPv4(address)) {
+    const [a, b, c] = address.split('.').map(Number);
+    return !(a === 0 || a === 10 || a === 127 || a >= 224 || (a === 100 && b >= 64 && b <= 127) || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && [0, 168].includes(b)) || (a === 198 && [18, 19].includes(b)) || (a === 198 && b === 51 && c === 100) || (a === 203 && b === 0 && c === 113));
+  }
+  if (net.isIPv6(address)) {
+    const normalized = address.toLowerCase();
+    if (normalized.startsWith('::ffff:')) return publicAddress(normalized.slice(7));
+    return normalized !== '::' && normalized !== '::1' && !normalized.startsWith('fc') && !normalized.startsWith('fd') && !normalized.startsWith('ff') && !/^fe[89ab]/.test(normalized) && !normalized.startsWith('2001:db8:');
+  }
+  return false;
+}
+async function downloadArchive(value, ownAuthority, limit = 25 * 1024 * 1024) {
+  let current;
+  try { current = new URL(value); } catch { throw Object.assign(new Error('Enter a valid HTTP or HTTPS ZIP URL'), { status: 400 }); }
+  for (let redirects = 0; redirects <= 3; redirects++) {
+    if (!['http:', 'https:'].includes(current.protocol) || current.username || current.password) throw Object.assign(new Error('Enter an HTTP or HTTPS URL without embedded credentials'), { status: 400 });
+    const sameOrigin = current.host === ownAuthority;
+    const addresses = await dns.lookup(current.hostname, { all: true, verbatim: true }).catch(() => []);
+    if (!addresses.length || (!sameOrigin && addresses.some(item => !publicAddress(item.address)))) throw Object.assign(new Error('ZIP URL must resolve to a public address or this Phidias server'), { status: 400 });
+    const selected = addresses[0];
+    const result = await new Promise((resolve, reject) => {
+      const request = (current.protocol === 'https:' ? https : http).request(current, {
+        method: 'GET', headers: { accept: 'application/zip, application/octet-stream;q=0.9' },
+        lookup: (_hostname, _options, callback) => callback(null, selected.address, selected.family), timeout: 30_000
+      }, response => {
+        const status = response.statusCode || 0;
+        if ([301, 302, 303, 307, 308].includes(status) && response.headers.location) { response.resume(); return resolve({ redirect: new URL(response.headers.location, current) }); }
+        if (status < 200 || status >= 300) { response.resume(); return reject(Object.assign(new Error(`ZIP URL returned HTTP ${status}`), { status: 400 })); }
+        if (Number(response.headers['content-length'] || 0) > limit) { response.destroy(); return reject(Object.assign(new Error('Downloaded ZIP archive exceeds 25 MB'), { status: 413 })); }
+        const chunks = []; let size = 0;
+        response.on('data', chunk => { size += chunk.length; if (size > limit) response.destroy(Object.assign(new Error('Downloaded ZIP archive exceeds 25 MB'), { status: 413 })); else chunks.push(chunk); });
+        response.on('end', () => resolve({ archive: Buffer.concat(chunks) })); response.on('error', reject);
+      });
+      request.on('timeout', () => request.destroy(new Error('ZIP download timed out'))); request.on('error', reject); request.end();
+    }).catch(failure => { throw Object.assign(new Error(`Could not download ZIP archive: ${failure.message}`), { status: failure.status || 400 }); });
+    if (result.archive) return result.archive;
+    current = result.redirect;
+  }
+  throw Object.assign(new Error('ZIP URL redirected too many times'), { status: 400 });
+}
+async function createServer({ directory = loadConfig().directory, repositoryDirectory, authDatabase = loadConfig().authDatabase, authConfig = null, authConfigFile = null, secureCookies = loadConfig().secureCookies, logger = createLogger({ level: loadConfig().logLevel, fileLevel: loadConfig().fileLogLevel, directory: path.join(__dirname, 'log') }), closeResourcesOnClose = true } = {}) {
+  authConfig ||= { provider: 'sqlite', database: authDatabase, secureCookies };
+  const keyFile = authConfigFile ? path.join(path.dirname(authConfigFile), 'data', 'phidias.key') : path.join(path.dirname(authDatabase), 'phidias.key');
+  const auth = await openAuth(authConfig, { secureCookies, keyFile });
+  const store = new Store(directory, repositoryDirectory, { authDatabase, authConfigFile, authProvider: authConfig.provider, databaseCredential: id => auth.databaseCredential(id), applicationKey: async id => { const key = auth.ensureApplicationKey(id); await auth.flush?.(); return key; } }); await store.init();
+  const brokerServer = authConfig.broker?.enabled ? createAuthBroker({ auth, mysqlConfig: authConfig.provider === 'mysql' ? authConfig.mysql : null, logger }) : null;
   const webConsoles = new Map();
   let commandConsoleFactory = null;
   const consoleKey = session => `${session.username}:${session.csrfToken}`;
@@ -63,14 +118,15 @@ async function createServer({ directory = loadConfig().directory, repositoryDire
     res.setHeader('Referrer-Policy', 'same-origin');
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
-    const send = (status, data) => { res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(data)); };
+    const send = async (status, data) => { await auth.flush?.(); res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(data)); };
     try {
       const url = new URL(req.url, 'http://localhost');
       requestPath = url.pathname;
       logger.debug('Request received: %s %s', req.method, requestPath);
       if (!['GET', 'HEAD'].includes(req.method)) {
         if (req.headers['sec-fetch-site'] === 'cross-site' || (req.headers.origin && new URL(req.headers.origin).host !== req.headers.host)) return send(403, { error: 'Cross-origin writes are not allowed' });
-        if (!(req.headers['content-type'] || '').startsWith('application/json')) return send(415, { error: 'Send application/json' });
+        const archiveUpload = req.method === 'POST' && url.pathname === '/api/projects/import' && ['application/zip', 'application/octet-stream'].some(type => (req.headers['content-type'] || '').startsWith(type));
+        if (!archiveUpload && !(req.headers['content-type'] || '').startsWith('application/json')) return send(415, { error: 'Send application/json' });
       }
       if (req.method === 'POST' && url.pathname === '/api/login') {
         const body = await readBody(req);
@@ -123,6 +179,30 @@ async function createServer({ directory = loadConfig().directory, repositoryDire
           if (url.pathname === '/api/console' && req.method === 'DELETE') { closeWebConsole(session); return send(200, { ok: true }); }
           return send(405, { error: 'Method not allowed' });
         }
+        const credentialMatch = url.pathname.match(/^\/api\/credentials(?:\/([a-f0-9-]{36}))?$/);
+        if (credentialMatch) {
+          auth.requireCore(session.username, 'manage_users');
+          const id = credentialMatch[1];
+          if (!id && req.method === 'GET') return send(200, auth.listCredentials());
+          if (!id && req.method === 'POST') {
+            const credential = auth.createCredential(await readBody(req));
+            logger.info('Credential created by %s: %s (%s)', session.username, credential.id, credential.type);
+            return send(201, credential);
+          }
+          if (id && req.method === 'PUT') {
+            const credential = auth.updateCredential(id, await readBody(req));
+            logger.info('Credential updated by %s: %s (%s)', session.username, id, credential.type);
+            return send(200, credential);
+          }
+          if (id && req.method === 'DELETE') {
+            const usage = await store.databaseCredentialUsage(id);
+            if (usage.length) throw Object.assign(new Error(`This credential is selected by ${usage.map(item => `${item.projectName} ${item.channel} (${item.role} database)`).join(', ')}.`), { status: 409 });
+            auth.deleteCredential(id);
+            logger.info('Credential deleted by %s: %s', session.username, id);
+            return send(200, { ok: true });
+          }
+          return send(405, { error: 'Method not allowed' });
+        }
         const databaseCredentialMatch = url.pathname.match(/^\/api\/database-credentials(?:\/([a-f0-9-]{36}))?$/);
         if (databaseCredentialMatch) {
           const id = databaseCredentialMatch[1];
@@ -140,7 +220,7 @@ async function createServer({ directory = loadConfig().directory, repositoryDire
           }
           if (id && req.method === 'DELETE') {
             const usage = await store.databaseCredentialUsage(id);
-            if (usage.length) throw Object.assign(new Error(`This credential set is selected by ${usage.map(item => `${item.projectName} ${item.channel}`).join(', ')}.`), { status: 409 });
+            if (usage.length) throw Object.assign(new Error(`This credential set is selected by ${usage.map(item => `${item.projectName} ${item.channel} (${item.role} database)`).join(', ')}.`), { status: 409 });
             auth.deleteDatabaseCredential(id);
             logger.info('Database credential set deleted by %s: %s', session.username, id);
             return send(200, { ok: true });
@@ -192,6 +272,15 @@ async function createServer({ directory = loadConfig().directory, repositoryDire
             logger.info('Project created: %s', project.id);
             return send(201, { ...project, access: projectAccess(session.username, project.id) });
           }
+        }
+        if (url.pathname === '/api/projects/import' || url.pathname === '/api/projects/import-url') {
+          if (req.method !== 'POST') return send(405, { error: 'Method not allowed' });
+          auth.requireCore(session.username, 'create_projects');
+          const archive = url.pathname.endsWith('import-url') ? await downloadArchive((await readBody(req))?.url, req.headers.host) : await readArchive(req);
+          const project = await store.importArchive(archive);
+          auth.grantProjectOwner(session.username, project.id);
+          logger.info('Project imported by %s: %s', session.username, project.id);
+          return send(201, { ...project, access: projectAccess(session.username, project.id) });
         }
         const blockCacheMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/blocks\/cache$/);
         if (blockCacheMatch) {
@@ -326,7 +415,7 @@ async function createServer({ directory = loadConfig().directory, repositoryDire
     webConsoles.clear();
     if (closeResourcesOnClose) { auth.close(); logger.info('Server stopped'); }
   });
-  return { server, store, auth, setCommandConsoleFactory(factory) {
+  return { server, brokerServer, store, auth, setCommandConsoleFactory(factory) {
     for (const current of webConsoles.values()) current.close();
     webConsoles.clear();
     commandConsoleFactory = factory;
@@ -363,7 +452,7 @@ if (require.main === module) {
     if (state?.dirty() || application?.auth.pendingChanges) logger?.warning('Stopping with unsaved running configuration or accounts');
     logger?.info('Stopping server (%s)', reason);
     terminal?.close();
-    if (application) { await closeListener(application.server); application.auth.close(); }
+    if (application) { await Promise.all([closeListener(application.server), application.brokerServer ? closeListener(application.brokerServer) : Promise.resolve()]); application.auth.close(); }
     logger?.info('Server stopped');
   }
   (async () => {
@@ -372,7 +461,7 @@ if (require.main === module) {
       stdout: { write: line => terminal ? terminal.log(line) : process.stdout.write(line) },
       stderr: { write: line => terminal ? terminal.log(line, process.stderr) : process.stderr.write(line) }
     });
-    application = await createServer({ directory: config.directory, authDatabase: config.authDatabase, secureCookies: config.secureCookies, logger, closeResourcesOnClose: false });
+    application = await createServer({ directory: config.directory, authDatabase: config.authDatabase, authConfig: config.authConfig, authConfigFile: config.configFile, secureCookies: config.secureCookies, logger, closeResourcesOnClose: false });
     state = new ConfigState(undefined, async (next, previous) => {
       if (next.host !== previous.host || next.port !== previous.port) {
         await closeListener(application.server);
@@ -405,6 +494,10 @@ if (require.main === module) {
     }));
     await listen(application.server, config.host, config.port);
     logger.info('OpacIT Omphalos Phidias v%s: http://%s:%d', version, config.host.includes(':') ? `[${config.host}]` : config.host, config.port);
+    if (application.brokerServer) {
+      await listen(application.brokerServer, config.document.auth.broker.host, config.document.auth.broker.port);
+      logger.info('Authentication broker listening on %s:%d', config.document.auth.broker.host, config.document.auth.broker.port);
+    }
     for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => { shutdown(signal).catch(error => { critical('Shutdown failed', error); process.exit(1); }); });
     // Process managers such as CubeCoders AMP expose their console through a
     // pipe rather than a TTY. Readline supports both, so attach whenever stdin

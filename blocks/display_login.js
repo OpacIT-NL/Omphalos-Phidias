@@ -30,7 +30,7 @@ module.exports = {
     if (ctx.response.writableEnded) return null;
     const authentication = ctx.authentication();
     if (ctx.request.method !== 'POST') {
-      const existing = authentication.browserSession(ctx.request, ctx.deployment);
+      const existing = await authentication.browserSession(ctx.request, ctx.deployment);
       if (existing) { ctx.setLoggedInUser?.(existing); return 'authenticated'; }
       sendPage(ctx, 200); return null;
     }

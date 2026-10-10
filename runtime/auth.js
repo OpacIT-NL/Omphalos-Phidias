@@ -125,4 +125,63 @@ class WorkflowAuth {
   }
   close() { this.db.close(); }
 }
-module.exports = { WorkflowAuth, cookieValue };
+class MySQLWorkflowAuth {
+  constructor(config) {
+    const mysql = require('mysql2/promise');
+    this.pool = mysql.createPool({ host: config.host, port: config.port, user: config.username, password: config.password, database: config.database, waitForConnections: true, connectionLimit: 5, queueLimit: 0 });
+    this.pending = 0;
+  }
+  async consumeAttempt(ip, username) {
+    const now = Date.now(), connection = await this.pool.getConnection();
+    try {
+      await connection.beginTransaction();
+      await connection.query('DELETE FROM automation_login_limits WHERE expires_at <= ?', [now]);
+      const keys = [[digest(`ip:${ip || 'unknown'}`), 20], [digest(`username:${username}`), 10]];
+      for (const [key, limit] of keys) {
+        const [rows] = await connection.query('SELECT attempts,expires_at FROM automation_login_limits WHERE `key` = ? FOR UPDATE', [key]);
+        if (rows[0]?.attempts >= limit) throw authError('Too many sign-in attempts. Try again later.', 429, Math.ceil((rows[0].expires_at - now) / 1000));
+        await connection.query('INSERT INTO automation_login_limits (`key`,attempts,expires_at) VALUES (?,1,?) ON DUPLICATE KEY UPDATE attempts=attempts+1,expires_at=VALUES(expires_at)', [key, now + ATTEMPT_WINDOW_MS]);
+      }
+      await connection.commit();
+    } catch (error) { try { await connection.rollback(); } catch {} throw error; } finally { connection.release(); }
+  }
+  async allowed(username, deployment) {
+    if (!deployment?.projectId || !deployment?.channel) return true;
+    const permission = deployment.channel === 'Prod' ? 'login_prod' : 'login_rc';
+    const [rows] = await this.pool.query(`SELECT 1 FROM users u WHERE u.username = ? AND (
+      EXISTS (SELECT 1 FROM acl_project_grants a WHERE a.principal_type = 'user' AND a.principal_id = u.id AND a.permission = ? AND a.project_id IN (?, '*'))
+      OR EXISTS (SELECT 1 FROM acl_group_members m JOIN acl_project_grants a ON a.principal_type = 'group' AND a.principal_id = m.group_id WHERE m.user_id = u.id AND a.permission = ? AND a.project_id IN (?, '*'))
+    ) LIMIT 1`, [username, permission, deployment.projectId, permission, deployment.projectId]);
+    return Boolean(rows.length);
+  }
+  async login(username, password, kind, ip, deployment = null) {
+    username = normalizedUsername(username); await this.consumeAttempt(ip, username);
+    if (this.pending >= 2) throw authError('Sign-in is busy. Try again shortly.', 429, 2);
+    this.pending++;
+    try {
+      const [rows] = await this.pool.query('SELECT id,username,password_hash FROM users WHERE username = ? LIMIT 1', [username]);
+      const user = rows[0], fallback = await (dummyHash ||= argon2.hash(crypto.randomBytes(32), { type: argon2.argon2id, memoryCost: 65536, timeCost: 3, parallelism: 1, hashLength: 32 }));
+      const validPassword = typeof password === 'string' && Buffer.byteLength(password) <= 1024;
+      if (!await argon2.verify(user?.password_hash || fallback, validPassword ? password : 'invalid-password') || !user || !validPassword) throw authError('Invalid username or password.');
+      if (!await this.allowed(user.username, deployment)) throw authError('This account is not allowed to sign in to this application.', 403);
+      const token = crypto.randomBytes(32).toString('hex'), expiresAt = Date.now() + (kind === 'browser' ? BROWSER_SESSION_MS : API_SESSION_MS);
+      await this.pool.query('DELETE FROM automation_sessions WHERE expires_at <= ?', [Date.now()]);
+      await this.pool.query('INSERT INTO automation_sessions (token_hash,user_id,kind,expires_at) VALUES (?,?,?,?)', [digest(token), user.id, kind, expiresAt]);
+      return { token, username: user.username, expiresAt };
+    } finally { this.pending--; }
+  }
+  async session(token, kind, deployment = null) {
+    if (!/^[a-f0-9]{64}$/.test(token || '')) return null;
+    const [rows] = await this.pool.query('SELECT u.username,s.expires_at FROM automation_sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.kind=? AND s.expires_at>? LIMIT 1', [digest(token), kind, Date.now()]);
+    return rows[0] && await this.allowed(rows[0].username, deployment) ? { username: rows[0].username, expiresAt: rows[0].expires_at } : null;
+  }
+  browserToken(request) { return cookieValue(request, 'phidias_session'); }
+  apiToken(request) { const match = String(request?.headers?.authorization || '').match(/^Bearer\s+([a-f0-9]{64})$/i); return match ? match[1].toLowerCase() : null; }
+  browserSession(request, deployment = null) { return this.session(this.browserToken(request), 'browser', deployment); }
+  apiSession(request, deployment = null) { return this.session(this.apiToken(request), 'api', deployment); }
+  async logout(request, kind) { const token = kind === 'browser' ? this.browserToken(request) : this.apiToken(request); const session = await this.session(token, kind); if (token) await this.pool.query('DELETE FROM automation_sessions WHERE token_hash=? AND kind=?', [digest(token), kind]); return session; }
+  browserCookie(token, secure = false) { return `phidias_session=${token}; Path=/; HttpOnly; SameSite=Strict${secure ? '; Secure' : ''}`; }
+  clearBrowserCookie(secure = false) { return `phidias_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0${secure ? '; Secure' : ''}`; }
+  close() { return this.pool.end(); }
+}
+module.exports = { WorkflowAuth, MySQLWorkflowAuth, cookieValue };
