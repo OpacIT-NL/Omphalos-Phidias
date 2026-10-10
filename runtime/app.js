@@ -44,6 +44,10 @@ async function readBody(request) {
 function normalizeRoutePath(value) {
   return value.replace(/\/+$/, '') || '/';
 }
+function authenticationCookieName(deployment) {
+  if (!deployment?.projectId || !deployment?.channel) return 'phidias_session';
+  return `phidias_session_${deployment.projectId.replace(/-/g, '')}_${deployment.channel.toLowerCase()}`;
+}
 function findRoute(routes, method, pathname, predicate = () => true) {
   let match = null;
   for (const route of routes) {
@@ -194,6 +198,7 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
   const configFile = path.join(directory, 'config.json');
   const applicationConfig = fs.existsSync(configFile) ? validateAppConfig(JSON.parse(fs.readFileSync(configFile, 'utf8'))) : DEFAULT_APP_CONFIG;
   const deployment = Object.freeze({ projectId: applicationConfig['project-id'] || null, channel: applicationConfig['release-channel'] || null, updateUrl: applicationConfig['update-url'] || null });
+  const cookieName = authenticationCookieName(deployment);
   validate(document, definitions);
   const controller = new AbortController(), timers = [], stdinListeners = [], activeRuns = new Set(), routes = [], authenticationStores = new Map();
   const shared = Object.create(null);
@@ -293,7 +298,7 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
       const resolved = applicationConfig.auth.provider === 'mysql' ? 'mysql' : path.resolve(directory, applicationConfig.auth.database);
       if (!authenticationStores.has(resolved)) {
         const { WorkflowAuth, MySQLWorkflowAuth } = require('./auth');
-        authenticationStores.set(resolved, applicationConfig.auth.provider === 'mysql' ? new MySQLWorkflowAuth(applicationConfig.auth.mysql) : new WorkflowAuth(resolved));
+        authenticationStores.set(resolved, applicationConfig.auth.provider === 'mysql' ? new MySQLWorkflowAuth(applicationConfig.auth.mysql, { cookieName }) : new WorkflowAuth(resolved, { cookieName }));
       }
       return authenticationStores.get(resolved);
     };
@@ -302,9 +307,10 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
       try {
         const authorization = String(request?.headers?.authorization || '');
         const cookies = String(request?.headers?.cookie || '');
+        const authentication = context.authentication();
         let session = null;
-        if (/^Bearer\s+[a-f0-9]{64}$/i.test(authorization)) session = await context.authentication().apiSession(request, deployment);
-        else if (/(?:^|;\s*)phidias_session=/.test(cookies)) session = await context.authentication().browserSession(request, deployment);
+        if (/^Bearer\s+[a-f0-9]{64}$/i.test(authorization)) session = await authentication.apiSession(request, deployment);
+        else if (authentication.browserToken(request) || cookies.includes(`${cookieName}=`)) session = await authentication.browserSession(request, deployment);
         context.setLoggedInUser(session);
       } catch (error) {
         logger?.debug('Run identity lookup failed: %s', error.message);

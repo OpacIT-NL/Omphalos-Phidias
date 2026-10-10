@@ -12,7 +12,9 @@ module.exports = {
   fields: [],
   async execute(ctx, options, inputs, setOutput) {
     if (!ctx.request) throw new Error('Check If Logged In requires an HTTP endpoint trigger');
-    const session = await ctx.authentication().browserSession(ctx.request, ctx.deployment);
+    const authentication = ctx.authentication();
+    const session = await authentication.browserSession(ctx.request, ctx.deployment);
+    if (!session) ctx.logger?.debug('Browser session rejected: reason=%s', await authentication.sessionStatus?.(ctx.request, 'browser', ctx.deployment));
     ctx.setLoggedInUser?.(session);
     setOutput('username', session?.username || '');
     return session ? 'true' : 'false';

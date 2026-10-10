@@ -6,11 +6,43 @@ const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { Auth } = require('../lib/auth');
+const { WorkflowAuth } = require('../runtime/auth');
 const { createApp, loadDefinitions } = require('../runtime/app');
 
 const node = (id, type, options) => ({ id, type, x: 0, y: 0, options });
 const edge = (id, from, output, to, input = 'action', kind = 'action') => ({ id, from, output, to, input, kind });
 const reply = (id, status, format, body) => node(id, 'respond', { status, format, body, headers: '{}' });
+
+test('workflow sessions renew while active instead of expiring during a visit', async t => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'phidias-workflow-session-'));
+  const filename = path.join(directory, 'auth.sqlite');
+  const builderAuth = new Auth(filename);
+  await builderAuth.createUser('alice', 'a-secure-test-password');
+  builderAuth.close();
+  const authentication = new WorkflowAuth(filename);
+  t.after(() => { authentication.close(); return fs.rm(directory, { recursive: true, force: true }); });
+  const session = await authentication.login('alice', 'a-secure-test-password', 'browser', '127.0.0.1');
+  authentication.db.prepare('UPDATE automation_sessions SET expires_at = ? WHERE token_hash = ?').run(Date.now() + 1000, crypto.createHash('sha256').update(session.token).digest('hex'));
+  const request = { headers: { cookie: `phidias_session=${session.token}` } };
+  const current = authentication.browserSession(request);
+  assert.equal(current.username, 'alice');
+  assert.ok(current.expiresAt > Date.now() + 23 * 60 * 60 * 1000);
+});
+
+test('workflow browser cookies are isolated between exported applications', async t => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'phidias-workflow-cookie-'));
+  const filename = path.join(directory, 'auth.sqlite');
+  const builderAuth = new Auth(filename);
+  await builderAuth.createUser('alice', 'a-secure-test-password');
+  builderAuth.close();
+  const first = new WorkflowAuth(filename, { cookieName: 'phidias_session_project_one_rc' });
+  const second = new WorkflowAuth(filename, { cookieName: 'phidias_session_project_two_rc' });
+  t.after(() => { first.close(); second.close(); return fs.rm(directory, { recursive: true, force: true }); });
+  const session = await first.login('alice', 'a-secure-test-password', 'browser', '127.0.0.1');
+  const request = { headers: { cookie: `phidias_session_project_one_rc=${session.token}` } };
+  assert.equal(first.browserSession(request).username, 'alice');
+  assert.equal(second.browserSession(request), null);
+});
 
 test('authentication blocks expose no per-block SQLite path setting or connector', () => {
   const definitions = loadDefinitions(path.resolve(__dirname, '../blocks'));

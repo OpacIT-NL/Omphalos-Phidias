@@ -9,6 +9,7 @@ const BROWSER_SESSION_MS = 24 * 60 * 60 * 1000;
 const API_SESSION_MS = 8 * 60 * 60 * 1000;
 const ATTEMPT_WINDOW_MS = 15 * 60 * 1000;
 const digest = value => crypto.createHash('sha256').update(value).digest('hex');
+const sessionLifetime = kind => kind === 'browser' ? BROWSER_SESSION_MS : API_SESSION_MS;
 let dummyHash;
 function authError(message, status = 401, retryAfter) {
   return Object.assign(new Error(message), { status, retryAfter });
@@ -23,11 +24,12 @@ function cookieValue(request, name) {
   return part ? part.slice(name.length + 1) : null;
 }
 class WorkflowAuth {
-  constructor(filename) {
+  constructor(filename, { cookieName = 'phidias_session' } = {}) {
     fs.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
     const fd = fs.openSync(filename, 'a', 0o600); fs.closeSync(fd);
     fs.chmodSync(filename, 0o600);
     this.db = new DatabaseSync(filename);
+    this.cookieName = cookieName;
     this.pending = 0;
     this.db.exec(`
       PRAGMA busy_timeout = 5000;
@@ -101,16 +103,34 @@ class WorkflowAuth {
   }
   session(token, kind, deployment = null) {
     if (!/^[a-f0-9]{64}$/.test(token || '')) return null;
-    const row = this.db.prepare(`SELECT u.username, s.expires_at FROM automation_sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ? AND s.kind = ? AND s.expires_at > ?`).get(digest(token), kind, Date.now());
-    return row && this.allowed(row.username, deployment) ? { username: row.username, expiresAt: row.expires_at } : null;
+    const now = Date.now();
+    const row = this.db.prepare(`SELECT u.username, s.expires_at FROM automation_sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ? AND s.kind = ? AND s.expires_at > ?`).get(digest(token), kind, now);
+    if (!row || !this.allowed(row.username, deployment)) return null;
+    // Browser cookies are intentionally session cookies. Keep their server-side
+    // lifetime rolling while the application is actively used, so a valid
+    // browser session cannot unexpectedly disappear during a long-running visit.
+    const expiresAt = now + sessionLifetime(kind);
+    if (row.expires_at < now + sessionLifetime(kind) / 2) {
+      this.db.prepare('UPDATE automation_sessions SET expires_at = ? WHERE token_hash = ? AND kind = ?').run(expiresAt, digest(token), kind);
+    }
+    return { username: row.username, expiresAt: Math.max(row.expires_at, expiresAt) };
   }
-  browserToken(request) { return cookieValue(request, 'phidias_session'); }
+  browserToken(request) { return cookieValue(request, this.cookieName); }
   apiToken(request) {
     const match = String(request?.headers?.authorization || '').match(/^Bearer\s+([a-f0-9]{64})$/i);
     return match ? match[1].toLowerCase() : null;
   }
   browserSession(request, deployment = null) { return this.session(this.browserToken(request), 'browser', deployment); }
   apiSession(request, deployment = null) { return this.session(this.apiToken(request), 'api', deployment); }
+  sessionStatus(request, kind, deployment = null) {
+    const token = kind === 'browser' ? this.browserToken(request) : this.apiToken(request);
+    if (!token) return 'missing-token';
+    if (!/^[a-f0-9]{64}$/.test(token)) return 'malformed-token';
+    const row = this.db.prepare('SELECT u.username, s.expires_at FROM automation_sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ? AND s.kind = ?').get(digest(token), kind);
+    if (!row) return 'unknown-token';
+    if (row.expires_at <= Date.now()) return 'expired';
+    return this.allowed(row.username, deployment) ? 'valid' : 'permission-denied';
+  }
   logout(request, kind) {
     const token = kind === 'browser' ? this.browserToken(request) : this.apiToken(request);
     const session = this.session(token, kind);
@@ -118,17 +138,18 @@ class WorkflowAuth {
     return session;
   }
   browserCookie(token, secure = false) {
-    return `phidias_session=${token}; Path=/; HttpOnly; SameSite=Strict${secure ? '; Secure' : ''}`;
+    return `${this.cookieName}=${token}; Path=/; HttpOnly; SameSite=Strict${secure ? '; Secure' : ''}`;
   }
   clearBrowserCookie(secure = false) {
-    return `phidias_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0${secure ? '; Secure' : ''}`;
+    return `${this.cookieName}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0${secure ? '; Secure' : ''}`;
   }
   close() { this.db.close(); }
 }
 class MySQLWorkflowAuth {
-  constructor(config) {
+  constructor(config, { cookieName = 'phidias_session' } = {}) {
     const mysql = require('mysql2/promise');
     this.pool = mysql.createPool({ host: config.host, port: config.port, user: config.username, password: config.password, database: config.database, waitForConnections: true, connectionLimit: 5, queueLimit: 0 });
+    this.cookieName = cookieName;
     this.pending = 0;
   }
   async consumeAttempt(ip, username) {
@@ -172,16 +193,33 @@ class MySQLWorkflowAuth {
   }
   async session(token, kind, deployment = null) {
     if (!/^[a-f0-9]{64}$/.test(token || '')) return null;
-    const [rows] = await this.pool.query('SELECT u.username,s.expires_at FROM automation_sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.kind=? AND s.expires_at>? LIMIT 1', [digest(token), kind, Date.now()]);
-    return rows[0] && await this.allowed(rows[0].username, deployment) ? { username: rows[0].username, expiresAt: rows[0].expires_at } : null;
+    const now = Date.now();
+    const [rows] = await this.pool.query('SELECT u.username,s.expires_at FROM automation_sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.kind=? AND s.expires_at>? LIMIT 1', [digest(token), kind, now]);
+    const row = rows[0];
+    if (!row || !await this.allowed(row.username, deployment)) return null;
+    const expiresAt = now + sessionLifetime(kind);
+    if (row.expires_at < now + sessionLifetime(kind) / 2) {
+      await this.pool.query('UPDATE automation_sessions SET expires_at=? WHERE token_hash=? AND kind=?', [expiresAt, digest(token), kind]);
+    }
+    return { username: row.username, expiresAt: Math.max(Number(row.expires_at), expiresAt) };
   }
-  browserToken(request) { return cookieValue(request, 'phidias_session'); }
+  browserToken(request) { return cookieValue(request, this.cookieName); }
   apiToken(request) { const match = String(request?.headers?.authorization || '').match(/^Bearer\s+([a-f0-9]{64})$/i); return match ? match[1].toLowerCase() : null; }
   browserSession(request, deployment = null) { return this.session(this.browserToken(request), 'browser', deployment); }
   apiSession(request, deployment = null) { return this.session(this.apiToken(request), 'api', deployment); }
+  async sessionStatus(request, kind, deployment = null) {
+    const token = kind === 'browser' ? this.browserToken(request) : this.apiToken(request);
+    if (!token) return 'missing-token';
+    if (!/^[a-f0-9]{64}$/.test(token)) return 'malformed-token';
+    const [rows] = await this.pool.query('SELECT u.username, s.expires_at FROM automation_sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ? AND s.kind = ? LIMIT 1', [digest(token), kind]);
+    const row = rows[0];
+    if (!row) return 'unknown-token';
+    if (Number(row.expires_at) <= Date.now()) return 'expired';
+    return await this.allowed(row.username, deployment) ? 'valid' : 'permission-denied';
+  }
   async logout(request, kind) { const token = kind === 'browser' ? this.browserToken(request) : this.apiToken(request); const session = await this.session(token, kind); if (token) await this.pool.query('DELETE FROM automation_sessions WHERE token_hash=? AND kind=?', [digest(token), kind]); return session; }
-  browserCookie(token, secure = false) { return `phidias_session=${token}; Path=/; HttpOnly; SameSite=Strict${secure ? '; Secure' : ''}`; }
-  clearBrowserCookie(secure = false) { return `phidias_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0${secure ? '; Secure' : ''}`; }
+  browserCookie(token, secure = false) { return `${this.cookieName}=${token}; Path=/; HttpOnly; SameSite=Strict${secure ? '; Secure' : ''}`; }
+  clearBrowserCookie(secure = false) { return `${this.cookieName}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0${secure ? '; Secure' : ''}`; }
   close() { return this.pool.end(); }
 }
 module.exports = { WorkflowAuth, MySQLWorkflowAuth, cookieValue };

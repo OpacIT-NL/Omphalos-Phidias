@@ -32,6 +32,7 @@ module.exports = {
     if (ctx.request.method !== 'POST') {
       const existing = await authentication.browserSession(ctx.request, ctx.deployment);
       if (existing) { ctx.setLoggedInUser?.(existing); return 'authenticated'; }
+      ctx.logger?.debug('Browser login required: reason=%s', await authentication.sessionStatus?.(ctx.request, 'browser', ctx.deployment));
       sendPage(ctx, 200); return null;
     }
     const values = credentials(ctx.request.body);

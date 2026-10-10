@@ -12,7 +12,9 @@ module.exports = {
   fields: [],
   async execute(ctx, options, inputs, setOutput) {
     if (!ctx.request) throw new Error('Check API Token requires an HTTP endpoint trigger');
-    const session = await ctx.authentication().apiSession(ctx.request, ctx.deployment);
+    const authentication = ctx.authentication();
+    const session = await authentication.apiSession(ctx.request, ctx.deployment);
+    if (!session) ctx.logger?.debug('API session rejected: reason=%s', await authentication.sessionStatus?.(ctx.request, 'api', ctx.deployment));
     ctx.setLoggedInUser?.(session);
     setOutput('username', session?.username || '');
     return session ? 'true' : 'false';
