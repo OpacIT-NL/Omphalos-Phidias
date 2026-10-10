@@ -86,7 +86,7 @@ async function createServer({ directory = loadConfig().directory, repositoryDire
   authConfig ||= { provider: 'sqlite', database: authDatabase, secureCookies };
   const keyFile = authConfigFile ? path.join(path.dirname(authConfigFile), 'data', 'phidias.key') : path.join(path.dirname(authDatabase), 'phidias.key');
   const auth = await openAuth(authConfig, { secureCookies, keyFile });
-  const store = new Store(directory, repositoryDirectory, { authDatabase, authConfigFile, authProvider: authConfig.provider, databaseCredential: id => auth.databaseCredential(id), applicationKey: async id => { const key = auth.ensureApplicationKey(id); await auth.flush?.(); return key; } }); await store.init();
+  const store = new Store(directory, repositoryDirectory, { authDatabase, authConfigFile, authProvider: authConfig.provider, databaseCredential: id => auth.databaseCredential(id), applicationKey: async id => { const key = await auth.ensureApplicationKey(id); await auth.flush?.(); return key; } }); await store.init();
   const brokerServer = authConfig.broker?.enabled ? createAuthBroker({ auth, mysqlConfig: authConfig.provider === 'mysql' ? authConfig.mysql : null, logger }) : null;
   const webConsoles = new Map();
   let commandConsoleFactory = null;
@@ -104,7 +104,7 @@ async function createServer({ directory = loadConfig().directory, repositoryDire
     if (!webConsoles.has(key)) webConsoles.set(key, new WebConsoleSession(commandConsoleFactory));
     return webConsoles.get(key);
   };
-  const projectAccess = (username, id) => ['login_rc', 'login_prod', 'view', 'edit', 'promote', 'delete'].filter(permission => auth.hasProject(username, id, permission));
+  const projectAccess = async (username, id) => (await Promise.all(['login_rc', 'login_prod', 'view', 'edit', 'promote', 'delete'].map(async permission => [permission, await auth.hasProject(username, id, permission)]))).filter(([, allowed]) => allowed).map(([permission]) => permission);
   const server = http.createServer(async (req, res) => {
     const started = Date.now();
     // Only log the path, never queries, headers, cookies, or request bodies.
@@ -118,7 +118,9 @@ async function createServer({ directory = loadConfig().directory, repositoryDire
     res.setHeader('Referrer-Policy', 'same-origin');
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
-    const send = async (status, data) => { await auth.flush?.(); res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(data)); };
+    const send = async (status, data) => {
+      res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(data));
+    };
     try {
       const url = new URL(req.url, 'http://localhost');
       requestPath = url.pathname;
@@ -131,12 +133,12 @@ async function createServer({ directory = loadConfig().directory, repositoryDire
       if (req.method === 'POST' && url.pathname === '/api/login') {
         const body = await readBody(req);
         const session = await auth.login(body?.username, body?.password, req.socket.remoteAddress);
-        auth.logout(req); // Rotate any existing session on a fresh sign-in.
+        await auth.logout(req); // Rotate any existing session on a fresh sign-in.
         res.setHeader('Set-Cookie', auth.cookie(session.token));
         logger.info('User signed in');
         return send(200, { username: session.username, csrfToken: session.csrfToken, expiresAt: session.expiresAt });
       }
-      const session = auth.session(req);
+      const session = await auth.session(req);
       if (url.pathname === '/repo') {
         res.writeHead(308, { location: '/repo/' }); return res.end();
       }
@@ -163,16 +165,16 @@ async function createServer({ directory = loadConfig().directory, repositoryDire
       if (url.pathname.startsWith('/api/')) {
         if (!session) return send(401, { error: 'Sign in to continue.' });
         if (!['GET', 'HEAD'].includes(req.method)) auth.checkCSRF(req, session);
-        if (url.pathname === '/api/session' && req.method === 'GET') return send(200, { ...session, permissions: { manageUsers: auth.hasCore(session.username, 'manage_users'), createProjects: auth.hasCore(session.username, 'create_projects'), console: auth.hasCore(session.username, 'console') } });
+        if (url.pathname === '/api/session' && req.method === 'GET') return send(200, { ...session, permissions: { manageUsers: await auth.hasCore(session.username, 'manage_users'), createProjects: await auth.hasCore(session.username, 'create_projects'), console: await auth.hasCore(session.username, 'console') } });
         if (url.pathname === '/api/logout' && req.method === 'POST') {
           closeWebConsole(session);
-          auth.logout(req);
+          await auth.logout(req);
           res.setHeader('Set-Cookie', auth.cookie());
           logger.info('User signed out');
           return send(200, { ok: true });
         }
         if (url.pathname === '/api/console' || url.pathname === '/api/console/reset' || url.pathname === '/api/console/input') {
-          auth.requireCore(session.username, 'console');
+          await auth.requireCore(session.username, 'console');
           if (url.pathname === '/api/console/reset' && req.method === 'POST') return send(200, webConsole(session, true).snapshot());
           if (url.pathname === '/api/console/input' && req.method === 'POST') return send(200, await webConsole(session).submit((await readBody(req))?.input));
           if (url.pathname === '/api/console' && req.method === 'GET') return send(200, webConsole(session).snapshot());
@@ -181,23 +183,23 @@ async function createServer({ directory = loadConfig().directory, repositoryDire
         }
         const credentialMatch = url.pathname.match(/^\/api\/credentials(?:\/([a-f0-9-]{36}))?$/);
         if (credentialMatch) {
-          auth.requireCore(session.username, 'manage_users');
+          await auth.requireCore(session.username, 'manage_users');
           const id = credentialMatch[1];
-          if (!id && req.method === 'GET') return send(200, auth.listCredentials());
+          if (!id && req.method === 'GET') return send(200, await auth.listCredentials());
           if (!id && req.method === 'POST') {
-            const credential = auth.createCredential(await readBody(req));
+            const credential = await auth.createCredential(await readBody(req));
             logger.info('Credential created by %s: %s (%s)', session.username, credential.id, credential.type);
             return send(201, credential);
           }
           if (id && req.method === 'PUT') {
-            const credential = auth.updateCredential(id, await readBody(req));
+            const credential = await auth.updateCredential(id, await readBody(req));
             logger.info('Credential updated by %s: %s (%s)', session.username, id, credential.type);
             return send(200, credential);
           }
           if (id && req.method === 'DELETE') {
             const usage = await store.databaseCredentialUsage(id);
             if (usage.length) throw Object.assign(new Error(`This credential is selected by ${usage.map(item => `${item.projectName} ${item.channel} (${item.role} database)`).join(', ')}.`), { status: 409 });
-            auth.deleteCredential(id);
+            await auth.deleteCredential(id);
             logger.info('Credential deleted by %s: %s', session.username, id);
             return send(200, { ok: true });
           }
@@ -206,22 +208,22 @@ async function createServer({ directory = loadConfig().directory, repositoryDire
         const databaseCredentialMatch = url.pathname.match(/^\/api\/database-credentials(?:\/([a-f0-9-]{36}))?$/);
         if (databaseCredentialMatch) {
           const id = databaseCredentialMatch[1];
-          if (!id && req.method === 'GET') return send(200, auth.listDatabaseCredentials());
-          auth.requireCore(session.username, 'manage_users');
+          if (!id && req.method === 'GET') return send(200, await auth.listDatabaseCredentials());
+          await auth.requireCore(session.username, 'manage_users');
           if (!id && req.method === 'POST') {
-            const credential = auth.createDatabaseCredential(await readBody(req));
+            const credential = await auth.createDatabaseCredential(await readBody(req));
             logger.info('Database credential set created by %s: %s', session.username, credential.id);
             return send(201, credential);
           }
           if (id && req.method === 'PUT') {
-            const credential = auth.updateDatabaseCredential(id, await readBody(req));
+            const credential = await auth.updateDatabaseCredential(id, await readBody(req));
             logger.info('Database credential set updated by %s: %s', session.username, id);
             return send(200, credential);
           }
           if (id && req.method === 'DELETE') {
             const usage = await store.databaseCredentialUsage(id);
             if (usage.length) throw Object.assign(new Error(`This credential set is selected by ${usage.map(item => `${item.projectName} ${item.channel} (${item.role} database)`).join(', ')}.`), { status: 409 });
-            auth.deleteDatabaseCredential(id);
+            await auth.deleteDatabaseCredential(id);
             logger.info('Database credential set deleted by %s: %s', session.username, id);
             return send(200, { ok: true });
           }
@@ -231,7 +233,7 @@ async function createServer({ directory = loadConfig().directory, repositoryDire
         const accessGroupMatch = url.pathname.match(/^\/api\/access\/groups(?:\/(\d+)(?:\/(members))?)?$/);
         const accessGrantMatch = url.pathname.match(/^\/api\/access\/grants\/(core|projects\/([^/]+))\/(user|group)\/(\d+)$/);
         if (url.pathname === '/api/access' || accessUserMatch || accessGroupMatch || accessGrantMatch) {
-          auth.requireCore(session.username, 'manage_users');
+          await auth.requireCore(session.username, 'manage_users');
           if (url.pathname === '/api/access' && req.method === 'GET') return send(200, auth.accessModel(await store.list()));
           if (accessUserMatch) {
             const [, encodedUsername, passwordAction] = accessUserMatch;
@@ -247,45 +249,45 @@ async function createServer({ directory = loadConfig().directory, repositoryDire
             }
             if (username && !passwordAction && req.method === 'DELETE') {
               if (username.toLowerCase() === session.username) throw Object.assign(new Error('You cannot delete your own signed-in account.'), { status: 409 });
-              auth.deleteManagedUser(username); logger.info('User deleted by %s: %s', session.username, username); return send(200, { ok: true });
+              await auth.deleteManagedUser(username); logger.info('User deleted by %s: %s', session.username, username); return send(200, { ok: true });
             }
           }
           if (accessGroupMatch) {
             const [, idText, membersAction] = accessGroupMatch;
-            if (!idText && req.method === 'POST') return send(201, { id: auth.createGroup((await readBody(req))?.name) });
-            if (idText && membersAction === 'members' && req.method === 'PUT') { auth.setGroupMembers(Number(idText), (await readBody(req))?.usernames); return send(200, { ok: true }); }
-            if (idText && !membersAction && req.method === 'DELETE') { auth.deleteGroup(Number(idText)); return send(200, { ok: true }); }
+            if (!idText && req.method === 'POST') return send(201, { id: await auth.createGroup((await readBody(req))?.name) });
+            if (idText && membersAction === 'members' && req.method === 'PUT') { await auth.setGroupMembers(Number(idText), (await readBody(req))?.usernames); return send(200, { ok: true }); }
+            if (idText && !membersAction && req.method === 'DELETE') { await auth.deleteGroup(Number(idText)); return send(200, { ok: true }); }
           }
           if (accessGrantMatch && req.method === 'PUT') {
             const [, scopeText, projectId, principalType, principalId] = accessGrantMatch;
-            auth.setGrants(principalType, Number(principalId), scopeText === 'core' ? 'core' : projectId, (await readBody(req))?.permissions);
+            await auth.setGrants(principalType, Number(principalId), scopeText === 'core' ? 'core' : projectId, (await readBody(req))?.permissions);
             return send(200, { ok: true });
           }
           return send(405, { error: 'Method not allowed' });
         }
         if (url.pathname === '/api/projects') {
-          if (req.method === 'GET') return send(200, (await store.list()).filter(project => auth.hasProject(session.username, project.id, 'view')).map(project => ({ ...project, access: projectAccess(session.username, project.id) })));
+          if (req.method === 'GET') { const projects = await store.list(); const visible = []; for (const project of projects) if (await auth.hasProject(session.username, project.id, 'view')) visible.push({ ...project, access: await projectAccess(session.username, project.id) }); return send(200, visible); }
           if (req.method === 'POST') {
-            auth.requireCore(session.username, 'create_projects');
+            await auth.requireCore(session.username, 'create_projects');
             const project = await store.create((await readBody(req))?.name);
-            auth.grantProjectOwner(session.username, project.id);
+            await auth.grantProjectOwner(session.username, project.id);
             logger.info('Project created: %s', project.id);
-            return send(201, { ...project, access: projectAccess(session.username, project.id) });
+            return send(201, { ...project, access: await projectAccess(session.username, project.id) });
           }
         }
         if (url.pathname === '/api/projects/import' || url.pathname === '/api/projects/import-url') {
           if (req.method !== 'POST') return send(405, { error: 'Method not allowed' });
-          auth.requireCore(session.username, 'create_projects');
+          await auth.requireCore(session.username, 'create_projects');
           const archive = url.pathname.endsWith('import-url') ? await downloadArchive((await readBody(req))?.url, req.headers.host) : await readArchive(req);
           const project = await store.importArchive(archive);
-          auth.grantProjectOwner(session.username, project.id);
+          await auth.grantProjectOwner(session.username, project.id);
           logger.info('Project imported by %s: %s', session.username, project.id);
-          return send(201, { ...project, access: projectAccess(session.username, project.id) });
+          return send(201, { ...project, access: await projectAccess(session.username, project.id) });
         }
         const blockCacheMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/blocks\/cache$/);
         if (blockCacheMatch) {
           const id = blockCacheMatch[1];
-          auth.requireProject(session.username, id, 'edit');
+          await auth.requireProject(session.username, id, 'edit');
           if (req.method !== 'DELETE') return send(405, { error: 'Method not allowed' });
           const result = await store.clearBlockCache(id);
           logger.info('Block cache cleared by %s for project %s (%d modules)', session.username, id, result.cleared);
@@ -294,9 +296,9 @@ async function createServer({ directory = loadConfig().directory, repositoryDire
         const deploymentConfigMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/deployment-configs(?:\/(RC|Prod))?$/);
         if (deploymentConfigMatch) {
           const [, id, channel] = deploymentConfigMatch;
-          if (!channel && req.method === 'GET') { auth.requireProject(session.username, id, 'view'); return send(200, await store.deploymentConfigs(id)); }
+          if (!channel && req.method === 'GET') { await auth.requireProject(session.username, id, 'view'); return send(200, await store.deploymentConfigs(id)); }
           if (channel && req.method === 'PUT') {
-            auth.requireProject(session.username, id, 'edit');
+            await auth.requireProject(session.username, id, 'edit');
             const configurations = await store.saveDeploymentConfig(id, channel, await readBody(req));
             logger.info('Project %s deployment settings saved: %s', id, channel);
             return send(200, configurations);
@@ -311,8 +313,8 @@ async function createServer({ directory = loadConfig().directory, repositoryDire
             try { name = decodeURIComponent(encodedName); }
             catch { return send(400, { error: 'Invalid template name' }); }
           }
-          if (req.method === 'GET') auth.requireProject(session.username, id, 'view');
-          else auth.requireProject(session.username, id, 'edit');
+          if (req.method === 'GET') await auth.requireProject(session.username, id, 'view');
+          else await auth.requireProject(session.username, id, 'edit');
           if (!name && req.method === 'GET') return send(200, await store.templates(id));
           if (!name) return send(405, { error: 'Method not allowed' });
           if (req.method === 'GET') return send(200, await store.template(id, name));
@@ -334,7 +336,7 @@ async function createServer({ directory = loadConfig().directory, repositoryDire
         if (versionCleanupMatch) {
           const id = versionCleanupMatch[1];
           if (req.method !== 'POST') return send(405, { error: 'Method not allowed' });
-          auth.requireProject(session.username, id, 'edit');
+          await auth.requireProject(session.username, id, 'edit');
           const result = await store.deleteRCVersionsBefore(id, (await readBody(req))?.beforeRevision);
           logger.info('Old RC revisions deleted: %s (deleted %s; preserved Prod %s)', id, result.deleted.join(',') || 'none', result.skippedProd.join(',') || 'none');
           return send(200, result);
@@ -342,24 +344,24 @@ async function createServer({ directory = loadConfig().directory, repositoryDire
         const versionMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/versions(?:\/(\d+)(?:\/(promote|restore))?)?$/);
         if (versionMatch) {
           const [, id, revisionText, action] = versionMatch;
-          if (!revisionText && req.method === 'GET') { auth.requireProject(session.username, id, 'view'); return send(200, await store.versions(id)); }
+          if (!revisionText && req.method === 'GET') { await auth.requireProject(session.username, id, 'view'); return send(200, await store.versions(id)); }
           if (!revisionText) return send(405, { error: 'Method not allowed' });
           const revision = Number(revisionText);
           if (req.method === 'POST' && action === 'promote') {
-            auth.requireProject(session.username, id, 'promote');
+            await auth.requireProject(session.username, id, 'promote');
             const promoted = await store.promote(id, revision);
             logger.info('Project revision promoted: %s (revision %d)', id, revision);
             return send(200, promoted);
           }
           if (req.method === 'POST' && action === 'restore') {
-            auth.requireProject(session.username, id, 'edit');
+            await auth.requireProject(session.username, id, 'edit');
             const body = await readBody(req);
             const restored = await store.restore(id, revision, body?.revision);
             logger.info('Project revision restored: %s (revision %d as revision %d)', id, revision, restored.revision);
             return send(200, restored);
           }
           if (req.method === 'DELETE' && !action) {
-            auth.requireProject(session.username, id, 'edit');
+            await auth.requireProject(session.username, id, 'edit');
             const removed = await store.deleteVersion(id, revision);
             logger.info('Project revision deleted: %s (revision %d)', id, revision);
             return send(200, removed);
@@ -369,7 +371,7 @@ async function createServer({ directory = loadConfig().directory, repositoryDire
         const match = url.pathname.match(/^\/api\/projects\/([^/]+)(?:\/(blocks|export))?$/);
         if (match) {
           const [, id, action] = match;
-          if (req.method === 'GET') auth.requireProject(session.username, id, 'view');
+          if (req.method === 'GET') await auth.requireProject(session.username, id, 'view');
           if (req.method === 'GET' && action === 'blocks') {
             await store.get(id);
             return send(200, [...store.definitions(id).values()].map(({ execute, ...metadata }) => metadata));
@@ -379,9 +381,9 @@ async function createServer({ directory = loadConfig().directory, repositoryDire
             logger.info('Project exported: %s', id);
             res.writeHead(200, { 'content-type': 'application/zip', 'content-disposition': `attachment; filename="phidias-${id}.zip"` }); return res.end(archive);
           }
-          if (req.method === 'GET' && !action) return send(200, { ...(await store.get(id)), access: projectAccess(session.username, id) });
+          if (req.method === 'GET' && !action) return send(200, { ...(await store.get(id)), access: await projectAccess(session.username, id) });
           if (req.method === 'PUT' && !action) {
-            auth.requireProject(session.username, id, 'edit');
+            await auth.requireProject(session.username, id, 'edit');
             const body = await readBody(req);
             if (!body || typeof body !== 'object') return send(400, { error: 'Expected a project document' });
             const project = await store.save(id, body);
@@ -389,8 +391,8 @@ async function createServer({ directory = loadConfig().directory, repositoryDire
             return send(200, project);
           }
           if (req.method === 'DELETE' && !action) {
-            auth.requireProject(session.username, id, 'delete');
-            const removed = await store.deleteProject(id); auth.deleteProjectGrants(id);
+            await auth.requireProject(session.username, id, 'delete');
+            const removed = await store.deleteProject(id); await auth.deleteProjectGrants(id);
             logger.info('Project deleted by %s: %s', session.username, id); return send(200, removed);
           }
         }
@@ -413,7 +415,7 @@ async function createServer({ directory = loadConfig().directory, repositoryDire
   server.on('close', () => {
     for (const current of webConsoles.values()) current.close();
     webConsoles.clear();
-    if (closeResourcesOnClose) { auth.close(); logger.info('Server stopped'); }
+    if (closeResourcesOnClose) { auth.close().catch(() => {}); logger.info('Server stopped'); }
   });
   return { server, brokerServer, store, auth, setCommandConsoleFactory(factory) {
     for (const current of webConsoles.values()) current.close();
@@ -452,7 +454,7 @@ if (require.main === module) {
     if (state?.dirty() || application?.auth.pendingChanges) logger?.warning('Stopping with unsaved running configuration or accounts');
     logger?.info('Stopping server (%s)', reason);
     terminal?.close();
-    if (application) { await Promise.all([closeListener(application.server), application.brokerServer ? closeListener(application.brokerServer) : Promise.resolve()]); application.auth.close(); }
+    if (application) { await Promise.all([closeListener(application.server), application.brokerServer ? closeListener(application.brokerServer) : Promise.resolve()]); await application.auth.close(); }
     logger?.info('Server stopped');
   }
   (async () => {
