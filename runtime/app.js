@@ -44,8 +44,11 @@ async function readBody(request) {
 function normalizeRoutePath(value) {
   return value.replace(/\/+$/, '') || '/';
 }
-function authenticationCookieName(deployment) {
-  if (!deployment?.projectId || !deployment?.channel) return 'phidias_session';
+function authenticationCookieName(deployment, applicationName) {
+  if (!deployment?.projectId || !deployment?.channel) {
+    const suffix = crypto.createHash('sha256').update(String(applicationName || 'application')).digest('hex').slice(0, 16);
+    return `phidias_session_${suffix}`;
+  }
   return `phidias_session_${deployment.projectId.replace(/-/g, '')}_${deployment.channel.toLowerCase()}`;
 }
 function findRoute(routes, method, pathname, predicate = () => true) {
@@ -198,7 +201,7 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
   const configFile = path.join(directory, 'config.json');
   const applicationConfig = fs.existsSync(configFile) ? validateAppConfig(JSON.parse(fs.readFileSync(configFile, 'utf8'))) : DEFAULT_APP_CONFIG;
   const deployment = Object.freeze({ projectId: applicationConfig['project-id'] || null, channel: applicationConfig['release-channel'] || null, updateUrl: applicationConfig['update-url'] || null });
-  const cookieName = authenticationCookieName(deployment);
+  const cookieName = authenticationCookieName(deployment, document.name);
   validate(document, definitions);
   const controller = new AbortController(), timers = [], stdinListeners = [], activeRuns = new Set(), routes = [], authenticationStores = new Map();
   const shared = Object.create(null);

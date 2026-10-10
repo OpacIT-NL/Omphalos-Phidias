@@ -173,7 +173,7 @@ test('workflow browser sessions and API bearer tokens use a builder-compatible a
   assert.equal(browserLogin.status, 303);
   assert.equal(browserLogin.headers.get('location'), '/protected');
   const setCookie = browserLogin.headers.get('set-cookie');
-  assert.match(setCookie, /^phidias_session=[a-f0-9]{64};/);
+  assert.match(setCookie, /^phidias_session_[a-f0-9]{16}=[a-f0-9]{64};/);
   assert.match(setCookie, /HttpOnly/);
   assert.match(setCookie, /SameSite=Strict/);
   assert.doesNotMatch(setCookie, /Expires=|Max-Age=/i);
