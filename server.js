@@ -415,7 +415,7 @@ async function createServer({ directory = loadConfig().directory, repositoryDire
   server.on('close', () => {
     for (const current of webConsoles.values()) current.close();
     webConsoles.clear();
-    if (closeResourcesOnClose) { auth.close().catch(() => {}); logger.info('Server stopped'); }
+    if (closeResourcesOnClose) { Promise.resolve(auth.close()).catch(() => {}); logger.info('Server stopped'); }
   });
   return { server, brokerServer, store, auth, setCommandConsoleFactory(factory) {
     for (const current of webConsoles.values()) current.close();
