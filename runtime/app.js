@@ -27,11 +27,11 @@ function render(template, context) {
     const value = read(key); return typeof value === 'object' ? JSON.stringify(value) : String(value);
   });
 }
-async function readBody(request) {
+async function readBody(request, limit = 1048576) {
   const chunks = []; let size = 0;
   for await (const chunk of request) {
     size += chunk.length;
-    if (size > 1048576) throw Object.assign(new Error('Request exceeds 1 MB'), { status: 413 });
+    if (size > limit) throw Object.assign(new Error(`Request exceeds ${Math.ceil(limit / 1048576)} MiB`), { status: 413 });
     chunks.push(chunk);
   }
   const text = Buffer.concat(chunks).toString();

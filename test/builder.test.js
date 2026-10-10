@@ -358,6 +358,14 @@ test('HTML templates are edited through the API, included in builds, and restore
   assert.equal((await (await call(endpoint + '/templates/styles.css')).json()).contents, updatedCSS);
   archive = zipEntries(Buffer.from(await (await call('/repo/TemplatesRC/latest.zip')).arrayBuffer()));
   assert.equal(archive.get('html/styles.css').toString(), updatedCSS);
+
+  const largerCSS = Array.from({ length: 700 }, (_, index) => `.panel-${index} { color: rgb(${index % 255} 120 180); }`).join('\n');
+  response = await call(endpoint + '/templates/styles.css', 'PUT', { contents: largerCSS, previousName: 'styles.css', revision: 8 });
+  assert.equal(response.status, 200);
+  saved = await response.json(); assert.equal(saved.project.revision, 9); assert.equal(saved.template.contents, largerCSS);
+  assert.equal((await (await call(endpoint + '/templates/styles.css')).json()).contents, largerCSS);
+  archive = zipEntries(Buffer.from(await (await call('/repo/TemplatesRC/latest.zip')).arrayBuffer()));
+  assert.equal(archive.get('html/styles.css').toString(), largerCSS);
 });
 
 test('password login, protected routes, CSRF, logout, malformed requests and traversal', async t => {

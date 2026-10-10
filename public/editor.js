@@ -45,7 +45,7 @@ function toast(message, error = false) {
   clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('#toast').hidden = true; }, error ? 9000 : 4000);
 }
 async function api(url, options = {}) {
-  const response = await fetch(url, { ...options, headers: { 'content-type': 'application/json', 'x-csrf-token': csrfToken, ...options.headers } });
+  const response = await fetch(url, { cache: 'no-store', ...options, headers: { 'content-type': 'application/json', 'x-csrf-token': csrfToken, ...options.headers } });
   if (!response.ok) {
     if (response.status === 401) $('#sign-in-again').hidden = false;
     const body = await response.json().catch(() => ({}));
@@ -616,10 +616,9 @@ async function saveTemplate() {
     project.revision = result.project.revision; project.updatedAt = result.project.updatedAt;
     templateOriginalName = result.template.name;
     rememberTemplateSelection(result.template.name);
-    const verified = await api(`/api/projects/${project.id}/templates/${encodeURIComponent(result.template.name)}`);
-    if (verified.contents !== contents) {
+    if (result.template.contents !== contents) {
       templateDirty = true;
-      throw new Error('The template was saved, but its contents could not be verified. Reopen the template before editing further.');
+      throw new Error('The server did not preserve the complete template contents. Your editor copy has been kept unsaved.');
     }
     templateDirty = $('#template-name').value.trim() !== name || $('#template-contents').value !== contents;
     templateNames = await api(`/api/projects/${project.id}/templates`);

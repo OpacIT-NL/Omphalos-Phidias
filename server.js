@@ -319,7 +319,8 @@ async function createServer({ directory = loadConfig().directory, repositoryDire
           if (!name) return send(405, { error: 'Method not allowed' });
           if (req.method === 'GET') return send(200, await store.template(id, name));
           if (req.method === 'PUT') {
-            const body = await readBody(req);
+            // Allow a complete 2 MiB template plus its small JSON envelope.
+            const body = await readBody(req, 2 * 1024 * 1024 + 64 * 1024);
             const saved = await store.saveTemplate(id, name, body?.contents, body?.previousName ?? null, body?.revision);
             logger.info('Project template saved: %s/%s (revision %d)', id, name, saved.project.revision);
             return send(200, saved);
