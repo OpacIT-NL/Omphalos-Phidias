@@ -328,7 +328,7 @@ test('HTML templates are edited through the API, included in builds, and restore
   assert.equal(response.status, 200);
   let saved = await response.json(); assert.equal(saved.project.revision, 2);
   assert.deepEqual(await (await call(endpoint + '/templates')).json(), ['page.html']);
-  assert.deepEqual(await (await call(endpoint + '/templates/page.html')).json(), { name: 'page.html', contents: '<h1>%title%</h1>' });
+  assert.deepEqual(await (await call(endpoint + '/templates/page.html')).json(), { name: 'page.html', contents: '<h1>%title%</h1>', revision: 2 });
   let archive = zipEntries(Buffer.from(await (await call('/repo/TemplatesRC/latest.zip')).arrayBuffer()));
   assert.equal(archive.get('html/page.html').toString(), '<h1>%title%</h1>');
 

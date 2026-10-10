@@ -581,7 +581,9 @@ function rememberTemplateSelection(name) {
 }
 async function selectTemplate(name, force = false) {
   if (!force && templateDirty && !confirm('Discard unsaved template changes?')) return;
-  const template = await api(`/api/projects/${project.id}/templates/${encodeURIComponent(name)}`);
+  const expectedRevision = project.revision;
+  const template = await api(`/api/projects/${project.id}/templates/${encodeURIComponent(name)}?revision=${expectedRevision}`);
+  if (template.revision !== expectedRevision) throw new Error('The template response belongs to an older project revision. Reopen the template editor.');
   templateOriginalName = template.name; templateDirty = false;
   rememberTemplateSelection(template.name);
   $('#template-name').disabled = false; $('#template-contents').disabled = false;
@@ -599,7 +601,7 @@ function newTemplate(type = 'html') {
 async function openTemplateEditor() {
   if (!project) return;
   if (dirty) await save();
-  templateNames = await api(`/api/projects/${project.id}/templates`);
+  templateNames = await api(`/api/projects/${project.id}/templates?revision=${project.revision}`);
   let preferred = null;
   try { preferred = sessionStorage.getItem(templateSelectionKey()); } catch {}
   clearTemplateEditor(); $('#template-dialog').showModal();
@@ -621,7 +623,7 @@ async function saveTemplate() {
       throw new Error('The server did not preserve the complete template contents. Your editor copy has been kept unsaved.');
     }
     templateDirty = $('#template-name').value.trim() !== name || $('#template-contents').value !== contents;
-    templateNames = await api(`/api/projects/${project.id}/templates`);
+    templateNames = await api(`/api/projects/${project.id}/templates?revision=${project.revision}`);
     setTemplateState(); renderTemplateList(); await refreshProjects(); setProjectControls(true);
     toast(templateDirty ? `Template ${result.template.name} saved as project revision ${project.revision}; newer editor changes are still unsaved.` : `Template ${result.template.name} saved as project revision ${project.revision}.`);
   } catch (error) { setTemplateState(); throw error; }
@@ -632,7 +634,7 @@ async function deleteTemplate() {
   const saved = await api(`/api/projects/${project.id}/templates/${encodeURIComponent(name)}`, { method: 'DELETE', body: JSON.stringify({ revision: project.revision }) });
   project.revision = saved.revision; project.updatedAt = saved.updatedAt;
   rememberTemplateSelection(null);
-  templateNames = await api(`/api/projects/${project.id}/templates`); clearTemplateEditor();
+  templateNames = await api(`/api/projects/${project.id}/templates?revision=${project.revision}`); clearTemplateEditor();
   if (templateNames.length) await selectTemplate(templateNames[0], true);
   await refreshProjects(); setProjectControls(true); toast(`Template ${name} deleted.`);
 }
