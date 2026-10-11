@@ -7,7 +7,7 @@ const block = require('../blocks/enable_search_and_sorting_for_table');
 const { convertJSONToHTMLTable } = require('../blocks/convert_json_to_html_table');
 
 test('Enable Search and Sorting for Table adds controls to every outer column', () => {
-  const nested = convertJSONToHTMLTable({ Status: 'Online' });
+  const nested = { Status: 'Online' };
   const source = `<main>${convertJSONToHTMLTable([{ Name: 'Server 10', Count: 10, Details: nested }, { Name: 'Server 2', Count: 2, Details: nested }])}</main>`;
   const html = block.enableSearchAndSortingForTable(source);
   assert.match(html, /^<main><div class="phidias-table-search-sort">/);
