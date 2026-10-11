@@ -66,6 +66,7 @@ function normalizeDefinition(definition, filename) {
     inputPorts,
     outputs: actionOutputs,
     outputPorts,
+    immediateActionOutputs: Boolean(definition.immediateActionOutputs),
     legacy: true
   };
   Object.defineProperty(normalized, 'source', { value: definition });

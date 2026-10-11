@@ -479,7 +479,7 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
         if (def.trigger === 'receiver' && seed.receiverID !== undefined && String(inputs.id ?? block.options.id ?? '') !== String(seed.receiverID)) return false;
         if (def.legacy) {
           if (actionInput === null && context.evaluated.has(block.id)) return false;
-          await executeLegacy(def, context, block, inputs, queueFollow);
+          await executeLegacy(def, context, block, inputs, def.immediateActionOutputs ? follow : queueFollow);
           context.evaluated.add(block.id);
         } else {
           if (def.trigger === 'http') {

@@ -1,83 +1,85 @@
+'use strict';
+
 module.exports = {
-    name: "Better Loop List",
+  name: 'Better Loop List',
+  description: 'Loops through a list sequentially. For each item, it returns the zero-based position and value, with an optional delay between iterations.',
+  category: 'List Stuff',
+  immediateActionOutputs: true,
 
-    description: "Loops the list. For each item in the list, this will return its position number and value. With the added possibility of a delay between each loop",
-
-    category: "List Stuff",
-
-    inputs: [
-        {
-            "id": "action",
-            "name": "Action",
-            "description": "Acceptable Types: Action\n\nDescription: Executes this block.",
-            "types": ["action"]
-        },
-        {
-            "id": "list",
-            "name": "List",
-            "description": "Acceptable Types: List, Unspecified\n\nDescription: The list to loop.",
-            "types": ["list", "unspecified"],
-            "required": true
-        },
-        {
-            "id": "delay",
-            "name": "Delay in Milliseconds",
-            "description": "Acceptable Types: Number, Unspecified\n\nDescription: How long to wait between each loop.\n\nIf no number is given here, there will be no delay.",
-            "types": ["number", "unspecified"],
-        },
-    ],
-
-    options: [],
-
-    outputs: [
-        {
-            "id": "action",
-            "name": "Action (Loop)",
-            "description": "Type: Action\n\nDescription: Executes the following blocks for each item in the list.",
-            "types": ["action"]
-        },
-        {
-            "id": "action2",
-            "name": "Action (Finish)",
-            "description": "Type: Action\n\nDescription: Executes the following blocks for each item in the list.",
-            "types": ["action"]
-        },
-        {
-            "id": "index",
-            "name": "Position Number",
-            "description": "Type: Number\n\nDescription: The item's position number in the list. Starts at \"0\".",
-            "types": ["number"]
-        },
-        {
-            "id": "value",
-            "name": "Item Value",
-            "description": "Type: Unspecified\n\nDescription: The value of the list item.",
-            "types": ["unspecified"]
-        }
-    ],
-
-    async code(cache) {
-        const list = this.GetInputValue("list", cache);
-        let time = this.GetInputValue("delay", cache) || 0;
-
-
-        const sleep = ms => {
-            return new Promise(resolve => setTimeout(resolve, ms))
-        }
-        for (const [index, value] of Object.entries(list)) {
-            this.StoreOutputValue(Number(index), "index", cache);
-            this.StoreOutputValue(value, "value", cache);
-            this.RunNextBlock("action", cache);
-            await sleep(time);
-        }
-        this.RunNextBlock("action2", cache)
+  inputs: [
+    {
+      id: 'action',
+      name: 'Action',
+      description: 'Executes this block.',
+      types: ['action']
+    },
+    {
+      id: 'list',
+      name: 'List',
+      description: 'The list to loop through.',
+      types: ['list', 'unspecified'],
+      required: true
+    },
+    {
+      id: 'delay',
+      name: 'Delay in Milliseconds',
+      description: 'How long to wait between iterations. The default is no delay.',
+      types: ['number', 'unspecified']
     }
-}
+  ],
 
-//function sleep(milliseconds) {
-//    const date = Date.now();
-//    let currentDate = null;
-//    do {
-//      currentDate = Date.now();
-//    } while (currentDate - date < milliseconds);
-//}
+  options: [],
+
+  outputs: [
+    {
+      id: 'action',
+      name: 'Action (Loop)',
+      description: 'Executes the following workflow once for every list item.',
+      types: ['action']
+    },
+    {
+      id: 'action2',
+      name: 'Action (Finish)',
+      description: 'Executes after every list item and its following workflow have completed.',
+      types: ['action']
+    },
+    {
+      id: 'index',
+      name: 'Position Number',
+      description: 'The zero-based position of the current list item.',
+      types: ['number']
+    },
+    {
+      id: 'value',
+      name: 'Item Value',
+      description: 'The current list item.',
+      types: ['unspecified']
+    }
+  ],
+
+  async code(cache) {
+    const list = this.GetInputValue('list', cache);
+    if (list === null || typeof list !== 'object') throw new Error('Better Loop List requires a list');
+
+    const requestedDelay = Number(this.GetInputValue('delay', cache) ?? 0);
+    if (!Number.isFinite(requestedDelay) || requestedDelay < 0) {
+      throw new Error('Better Loop List delay must be a non-negative number');
+    }
+
+    const entries = Array.isArray(list)
+      ? Array.from(list.entries())
+      : Object.entries(list).map(([key, value], position) => [Number.isInteger(Number(key)) ? Number(key) : position, value]);
+
+    for (let position = 0; position < entries.length; position += 1) {
+      const [index, value] = entries[position];
+      this.StoreOutputValue(index, 'index', cache);
+      this.StoreOutputValue(value, 'value', cache);
+      await this.RunNextBlock('action', cache);
+      if (requestedDelay > 0 && position < entries.length - 1) {
+        await new Promise(resolve => setTimeout(resolve, requestedDelay));
+      }
+    }
+
+    await this.RunNextBlock('action2', cache);
+  }
+};
