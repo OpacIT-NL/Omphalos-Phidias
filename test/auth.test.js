@@ -39,6 +39,10 @@ test('database credential migration and management preserve users and never list
   await auth.createUser('alice', password);
   const created = auth.createDatabaseCredential({ name: 'Primary DB', host: 'db.internal', port: 3306, username: 'app', password: 'database-secret', database: 'operations' });
   assert.equal(auth.listDatabaseCredentials().some(item => Object.hasOwn(item, 'password')), false);
+  const stored = auth.db.prepare('SELECT password FROM credentials WHERE id = ?').get(created.id).password;
+  const legacyStored = auth.db.prepare('SELECT password FROM database_credentials WHERE id = ?').get(created.id).password;
+  assert.match(stored, /^phidias:v1:/); assert.match(legacyStored, /^phidias:v1:/);
+  assert.equal(stored.includes('database-secret'), false); assert.equal(legacyStored.includes('database-secret'), false);
   assert.equal(auth.databaseCredential(created.id).password, 'database-secret');
   auth.updateDatabaseCredential(created.id, { ...created, password: '', host: 'db2.internal' });
   assert.equal(auth.databaseCredential(created.id).password, 'database-secret');
@@ -62,10 +66,25 @@ test('credential manager stores typed credentials without exposing secrets and k
   assert.equal(auth.credential(ssh.id, 'ssh').password, 'ssh-secret');
   assert.equal(auth.credential(windows.id, 'windows').domain, 'EXAMPLE');
   assert.equal(auth.credential(postgres.id, 'postgresql').database, 'events');
+  const raw = auth.db.prepare('SELECT password,private_key FROM credentials WHERE id = ?').get(ssh.id);
+  assert.match(raw.password, /^phidias:v1:/); assert.equal(raw.password.includes('ssh-secret'), false);
   assert.equal(auth.db.prepare('SELECT id FROM database_credentials WHERE id = ?').get(mysql.id).id, mysql.id);
   auth.deleteCredential(ssh.id); auth.close(); current = new Auth(filename);
   assert.equal(current.credential(ssh.id), null);
   assert.equal(current.databaseCredential(mysql.id).password, 'mysql-secret');
+});
+
+test('existing plaintext credential rows are encrypted in place without replacing users or ACL data', async t => {
+  const { auth, filename } = await fixture(t); let current = auth; t.after(() => current.close());
+  await auth.createUser('vaultuser', password);
+  const id = crypto.randomUUID(), now = Date.now();
+  auth.db.prepare(`INSERT INTO credentials (id,type,name,host,port,domain,username,password,private_key,database_name,permissions,extra_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+    .run(id, 'ssh', 'Imported plaintext', 'server', 22, '', 'svc', 'old-password', 'old-private-key', '', '', '{}', now, now);
+  auth.close(); current = new Auth(filename);
+  const stored = current.db.prepare('SELECT password,private_key FROM credentials WHERE id=?').get(id);
+  assert.match(stored.password, /^phidias:v1:/); assert.match(stored.private_key, /^phidias:v1:/);
+  assert.equal(current.credential(id).password, 'old-password'); assert.equal(current.credential(id).privateKey, 'old-private-key');
+  assert.equal(current.user('vaultuser').username, 'vaultuser');
 });
 
 test('SQLite persists salted Argon2id hashes and hashed sessions across restart', async t => {

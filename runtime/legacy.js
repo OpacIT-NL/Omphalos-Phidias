@@ -139,6 +139,12 @@ async function executeLegacy(definition, ctx, block, connectedInputs, follow) {
       const match = text.match(/^\/(.*)\/([a-z]*)$/i);
       return match ? new RegExp(match[1], match[2]) : new RegExp(text);
     },
+    RevealSecret(value) {
+      if (!value?.__phidiasSecret) return value;
+      const raw = String(value);
+      if (raw) ctx.secretValues?.add(raw);
+      return raw;
+    },
     end(error) { throw error; },
     console(level, message) { (ctx.logger?.info || console.log)(`[${level}] ${message}`); },
     client: undefined

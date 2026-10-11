@@ -29,4 +29,18 @@ test('authentication broker verifies app keys, encrypts MySQL settings, and reje
   assert.equal((await send()).status, 401);
   const forged = { ...request, nonce: crypto.randomBytes(16).toString('hex'), timestamp: Date.now(), signature: '0'.repeat(128) };
   assert.equal((await fetch(`http://127.0.0.1:${broker.address().port}/v1/bootstrap`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(forged) })).status, 401);
+
+  auth.createCredential({ type: 'other', name: 'API Service', username: 'service', password: 'credential-secret', extra: { scope: 'read' } });
+  const credentialRequest = { projectId, channel: 'RC', timestamp: Date.now(), nonce: crypto.randomBytes(16).toString('hex'), purpose: 'credential', selector: 'API Service', types: ['other'] };
+  credentialRequest.signature = signRequest(applicationKey, credentialRequest);
+  const credentialResponse = await fetch(`http://127.0.0.1:${broker.address().port}/v1/credential`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(credentialRequest) });
+  assert.equal(credentialResponse.status, 200);
+  const credentialEnvelope = await credentialResponse.json();
+  assert.equal(JSON.stringify(credentialEnvelope).includes('credential-secret'), false);
+  const issued = decryptResponse(applicationKey, credentialRequest, credentialEnvelope);
+  assert.equal(issued.credential.name, 'API Service'); assert.equal(issued.credential.password, 'credential-secret');
+  assert.equal((await fetch(`http://127.0.0.1:${broker.address().port}/v1/credential`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(credentialRequest) })).status, 401);
+  const tampered = { ...credentialRequest, timestamp: Date.now(), nonce: crypto.randomBytes(16).toString('hex') };
+  tampered.signature = signRequest(applicationKey, tampered); tampered.selector = 'Different Credential';
+  assert.equal((await fetch(`http://127.0.0.1:${broker.address().port}/v1/credential`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(tampered) })).status, 401);
 });

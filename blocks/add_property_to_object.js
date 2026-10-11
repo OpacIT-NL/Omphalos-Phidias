@@ -30,7 +30,7 @@ module.exports = {
             "id": "value",
             "name": "Value",
             "description": "Acceptable Types: Unspecified, Undefined, Null, Object, Boolean, Date, Number, Text, List\n\nDescription: The value for this object property.",
-            "types": ["unspecified", "undefined", "null", "object", "boolean", "date", "number", "text", "list"],
+            "types": ["unspecified", "secret", "undefined", "null", "object", "boolean", "date", "number", "text", "list"],
             "required": true
         }
     ],
@@ -55,7 +55,7 @@ module.exports = {
     code(cache) {
         const object = this.GetInputValue("object", cache);
         const key = this.GetInputValue("key", cache);
-        const value = this.GetInputValue("value", cache);
+        const value = this.RevealSecret(this.GetInputValue("value", cache));
 
         object[key] = value;
 

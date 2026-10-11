@@ -215,12 +215,12 @@ module.exports = {
         }
 
         const object = {
-            [key1]: value1,
-            [key2]: value2,
-            [key3]: value3,
-            [key4]: value4,
-            [key5]: value5,
-            [key6]: value6
+            [key1]: this.RevealSecret(value1),
+            [key2]: this.RevealSecret(value2),
+            [key3]: this.RevealSecret(value3),
+            [key4]: this.RevealSecret(value4),
+            [key5]: this.RevealSecret(value5),
+            [key6]: this.RevealSecret(value6)
         }         
 
         for (const [key, value] of Object.entries(object)) {

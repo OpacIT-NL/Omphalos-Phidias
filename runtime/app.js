@@ -85,8 +85,9 @@ function validateAppConfig(value) {
   const authProvider = auth.provider || 'sqlite';
   if (!['sqlite', 'mysql'].includes(authProvider)) throw new Error('config.json: auth.provider must be sqlite or mysql');
   if (authProvider === 'sqlite' && (typeof auth.database !== 'string' || !auth.database.trim())) throw new Error('config.json: auth.database must be a SQLite file path');
-  if (authProvider === 'mysql') {
-    if (!auth.broker || typeof auth.broker !== 'object' || Array.isArray(auth.broker) || typeof auth.broker.url !== 'string') throw new Error('config.json: auth.broker.url is required for MySQL authentication');
+  if (authProvider === 'mysql' && (!auth.broker || typeof auth.broker !== 'object' || Array.isArray(auth.broker) || typeof auth.broker.url !== 'string')) throw new Error('config.json: auth.broker.url is required for MySQL authentication');
+  if (auth.broker !== undefined) {
+    if (!auth.broker || typeof auth.broker !== 'object' || Array.isArray(auth.broker) || typeof auth.broker.url !== 'string') throw new Error('config.json: auth.broker.url must be an HTTP or HTTPS URL');
     let broker;
     try { broker = new URL(auth.broker.url); } catch { throw new Error('config.json: auth.broker.url must be an HTTP or HTTPS URL'); }
     if (!['http:', 'https:'].includes(broker.protocol) || broker.username || broker.password) throw new Error('config.json: auth.broker.url must be an HTTP or HTTPS URL without embedded credentials');
@@ -100,7 +101,9 @@ function validateAppConfig(value) {
     host: value.host,
     'log-level': value['log-level'],
     'force-console-input-log': value['force-console-input-log'],
-    auth: authProvider === 'mysql' ? { provider: 'mysql', broker: { url: auth.broker.url.replace(/\/$/, '') } } : { database: auth.database },
+    auth: authProvider === 'mysql'
+      ? { provider: 'mysql', broker: { url: auth.broker.url.replace(/\/$/, '') } }
+      : { database: auth.database, ...(auth.broker ? { broker: { url: auth.broker.url.replace(/\/$/, '') } } : {}) },
     ...(projectId === null ? {} : { 'project-id': projectId, 'release-channel': releaseChannel }),
     ...(updateUrl ? { 'update-url': updateUrl } : {}),
     ...(database === null ? {} : { database: { 'credential-set': database['credential-set'] } }),
@@ -122,23 +125,35 @@ function loadAppConfig(directory = __dirname) {
   }
   return validateAppConfig(value);
 }
-async function bootstrapAuthentication(config, directory = __dirname) {
-  if (config.auth.provider !== 'mysql') return config.auth;
+function brokerSignatureText(request) {
+  const base = `${request.projectId}\n${request.channel}\n${request.timestamp}\n${request.nonce}`;
+  return request.purpose === 'credential' ? `${base}\ncredential\n${request.selector}\n${request.types.join(',')}` : base;
+}
+function readApplicationKey(config, directory) {
   const keyFile = path.join(directory, 'application.key');
   let applicationKey;
-  try { applicationKey = fs.readFileSync(keyFile); } catch (error) { if (error.code === 'ENOENT') throw new Error('application.key is missing; deploy this application from an authenticated Phidias export before using MySQL authentication'); throw error; }
+  try { applicationKey = fs.readFileSync(keyFile); } catch (error) { if (error.code === 'ENOENT') throw new Error('application.key is missing; deploy this application from an authenticated Phidias export before using the authentication broker'); throw error; }
   if (applicationKey.length !== 32) throw new Error('application.key must contain exactly 32 bytes');
-  const request = { projectId: config['project-id'], channel: config['release-channel'], timestamp: Date.now(), nonce: crypto.randomBytes(16).toString('hex') };
-  if (!request.projectId || !request.channel) throw new Error('MySQL authentication requires project-id and release-channel in config.json');
-  request.signature = crypto.createHmac('sha512', applicationKey).update(`${request.projectId}\n${request.channel}\n${request.timestamp}\n${request.nonce}`).digest('hex');
-  const response = await fetch(`${config.auth.broker.url}/v1/bootstrap`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(request), signal: AbortSignal.timeout(15_000) });
+  if (!config['project-id'] || !config['release-channel']) throw new Error('The authentication broker requires project-id and release-channel in config.json');
+  return applicationKey;
+}
+async function requestBroker(config, directory, endpoint, details = {}) {
+  if (!config.auth.broker?.url) throw new Error('No credential broker URL is configured for this application');
+  const applicationKey = readApplicationKey(config, directory);
+  const request = { projectId: config['project-id'], channel: config['release-channel'], timestamp: Date.now(), nonce: crypto.randomBytes(16).toString('hex'), ...details };
+  request.signature = crypto.createHmac('sha512', applicationKey).update(brokerSignatureText(request)).digest('hex');
+  const response = await fetch(`${config.auth.broker.url}${endpoint}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(request), signal: AbortSignal.timeout(15_000) });
   const envelope = await response.json().catch(() => null);
-  if (!response.ok) throw new Error(`Authentication broker rejected startup (${response.status}): ${envelope?.error || 'Unknown error'}`);
+  if (!response.ok) throw new Error(`Authentication broker rejected the request (${response.status}): ${envelope?.error || 'Unknown error'}`);
   if (envelope?.algorithm !== 'AES-256-GCM') throw new Error('Authentication broker returned an unsupported encrypted response');
   const key = crypto.hkdfSync('sha512', applicationKey, Buffer.from(request.nonce, 'hex'), Buffer.from('phidias/auth-broker/v1'), 32);
   const decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(envelope.iv, 'base64'));
-  decipher.setAAD(Buffer.from(`${request.projectId}\n${request.channel}\n${request.timestamp}\n${request.nonce}`)); decipher.setAuthTag(Buffer.from(envelope.tag, 'base64'));
-  const value = JSON.parse(Buffer.concat([decipher.update(Buffer.from(envelope.ciphertext, 'base64')), decipher.final()]).toString('utf8'));
+  decipher.setAAD(Buffer.from(brokerSignatureText(request))); decipher.setAuthTag(Buffer.from(envelope.tag, 'base64'));
+  return JSON.parse(Buffer.concat([decipher.update(Buffer.from(envelope.ciphertext, 'base64')), decipher.final()]).toString('utf8'));
+}
+async function bootstrapAuthentication(config, directory = __dirname) {
+  if (config.auth.provider !== 'mysql') return config.auth;
+  const value = await requestBroker(config, directory, '/v1/bootstrap');
   if (!value.mysql || value.expiresAt <= Date.now()) throw new Error('Authentication broker response is invalid or expired');
   config.auth.mysql = value.mysql;
   return config.auth;
@@ -217,34 +232,15 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
   const readCredential = async (nameOrId, types = null) => {
     const allowed = types == null ? null : (Array.isArray(types) ? types : [types]);
     const cacheKey = `${allowed?.join(',') || '*'}:${nameOrId}`;
-    if (credentialCache.has(cacheKey)) return credentialCache.get(cacheKey);
-    let row, database;
-    const byId = typeof nameOrId === 'string' && /^[a-f0-9-]{36}$/.test(nameOrId);
-    if (applicationConfig.auth.provider === 'mysql') {
-      const mysql = require('mysql2/promise'), connection = await mysql.createConnection({ host: applicationConfig.auth.mysql.host, port: applicationConfig.auth.mysql.port, user: applicationConfig.auth.mysql.username, password: applicationConfig.auth.mysql.password, database: applicationConfig.auth.mysql.database });
-      try {
-        const clauses = [byId ? 'id = ?' : 'LOWER(name) = LOWER(?)'], parameters = [nameOrId];
-        if (allowed?.length) { clauses.push(`type IN (${allowed.map(() => '?').join(',')})`); parameters.push(...allowed); }
-        [row] = (await connection.query(`SELECT id,type,name,host,port,domain,username,password,private_key AS privateKey,database_name AS \`database\`,permissions,extra_json AS extra FROM credentials WHERE ${clauses.join(' AND ')} LIMIT 1`, parameters))[0];
-      } finally { await connection.end(); }
-    } else try {
-      const { DatabaseSync } = require('./sqlite').loadSQLite();
-      database = new DatabaseSync(path.resolve(directory, applicationConfig.auth.database), { readOnly: true });
-      try {
-        const typeClause = allowed?.length ? ` AND type IN (${allowed.map(() => '?').join(',')})` : '';
-        row = database.prepare(`SELECT id,type,name,host,port,domain,username,password,private_key AS privateKey,database_name AS database,permissions,extra_json AS extra FROM credentials WHERE ${byId ? 'id' : 'name COLLATE NOCASE'} = ?${typeClause}`).get(nameOrId, ...(allowed || []));
-      } catch (error) {
-        if (!String(error.message).includes('no such table')) throw error;
-      }
-      if (!row && byId && (!allowed || allowed.includes('mysql'))) {
-        const legacy = database.prepare('SELECT id,name,host,port,username,password,database_name AS database FROM database_credentials WHERE id = ?').get(nameOrId);
-        if (legacy) row = { ...legacy, type: 'mysql', domain: '', privateKey: '', permissions: '', extra: '{}' };
-      }
-    } finally { database?.close(); }
-    if (!row || (allowed && !allowed.includes(row.type))) return null;
-    try { row.extra = JSON.parse(row.extra || '{}'); } catch { row.extra = {}; }
+    const cached = credentialCache.get(cacheKey);
+    if (cached?.expiresAt > Date.now()) return cached.value;
+    credentialCache.delete(cacheKey);
+    const payload = await requestBroker(applicationConfig, directory, '/v1/credential', { purpose: 'credential', selector: String(nameOrId), types: allowed || [] });
+    if (!payload.credential || payload.expiresAt <= Date.now()) throw new Error('Credential broker response is invalid or expired');
+    const row = payload.credential;
+    if (allowed && !allowed.includes(row.type)) return null;
     Object.defineProperty(row, '__phidiasCredential', { value: true });
-    credentialCache.set(cacheKey, row);
+    credentialCache.set(cacheKey, { value: row, expiresAt: Math.min(payload.expiresAt, Date.now() + 60_000) });
     return row;
   };
   const getConfiguredDatabase = async (selected, label) => {
@@ -283,6 +279,12 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
     context.secret = value => {
       const raw = String(value || ''); if (raw) context.secretValues.add(raw);
       return Object.freeze({ __phidiasSecret: true, toString: () => raw, valueOf: () => raw, toJSON: () => '[REDACTED]' });
+    };
+    context.revealSecret = value => {
+      if (!value?.__phidiasSecret) return value;
+      const raw = String(value);
+      if (raw) context.secretValues.add(raw);
+      return raw;
     };
     context.redactForLog = value => snapshotLogValue(value, new WeakMap(), '$', 0, context.secretValues);
     context.render = value => render(value, context);

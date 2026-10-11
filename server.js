@@ -395,7 +395,7 @@ async function createServer({ directory = loadConfig().directory, repositoryDire
           }
           if (req.method === 'DELETE' && !action) {
             await auth.requireProject(session.username, id, 'delete');
-            const removed = await store.deleteProject(id); await auth.deleteProjectGrants(id);
+            const removed = await store.deleteProject(id); await auth.deleteProjectGrants(id); await auth.deleteApplicationKey?.(id);
             logger.info('Project deleted by %s: %s', session.username, id); return send(200, removed);
           }
         }

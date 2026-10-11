@@ -281,11 +281,11 @@ test('database credential sets stay in auth.sqlite and selected application sett
   const listed = await (await call('/api/database-credentials')).json();
   assert.equal(listed.length, 2); assert.ok(listed.every(item => !Object.hasOwn(item, 'password')));
   const endpoint = `/api/projects/${project.id}`;
-  const saved = await call(endpoint + '/deployment-configs/RC', 'PUT', { port: 3001, host: '127.0.0.1', 'log-level': 3, 'database-credential-set': credential.id, 'logging-database-credential-set': loggingCredential.id });
+  const saved = await call(endpoint + '/deployment-configs/RC', 'PUT', { port: 3001, host: '127.0.0.1', 'log-level': 3, 'credential-broker-url': 'https://phidias.example:3002', 'database-credential-set': credential.id, 'logging-database-credential-set': loggingCredential.id });
   assert.equal(saved.status, 200);
   const archive = zipEntries(Buffer.from(await (await call(endpoint + '/export')).arrayBuffer()));
   const config = JSON.parse(archive.get('config.json'));
-  assert.deepEqual(config.auth, { database: path.join(directory, 'auth.sqlite') });
+  assert.deepEqual(config.auth, { database: path.join(directory, 'auth.sqlite'), broker: { url: 'https://phidias.example:3002' } });
   assert.deepEqual(config.database, { 'credential-set': credential.id });
   assert.deepEqual(config['logging-database'], { 'credential-set': loggingCredential.id });
   assert.doesNotMatch(archive.get('config.json').toString(), /super-secret/);
