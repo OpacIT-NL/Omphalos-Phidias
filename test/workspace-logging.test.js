@@ -213,6 +213,59 @@ test('application-wide logging triggers receive events from another enabled work
   assert.ok(events.every(event => event.run_id === starts[0].run_id));
 });
 
+test('workspace logging discards receiver input probes when the receiver does not run', async t => {
+  const events = [];
+  const definitions = loadDefinitions(path.resolve(__dirname, '../blocks'));
+  definitions.set('capture_skipped_receiver_log', {
+    type: 'capture_skipped_receiver_log', name: 'Capture Skipped Receiver Log', category: 'Tests', description: 'Captures log events.', fields: [],
+    inputPorts: [
+      { id: 'action', name: 'Action', kind: 'action', types: [] },
+      { id: 'content', name: 'Content', kind: 'value', types: ['object'] }
+    ],
+    outputPorts: [], outputs: [],
+    async execute(_ctx, _options, inputs) { events.push(inputs.content); }
+  });
+  const source = {
+    id: 'source', numberId: 1, name: 'Emitter source', active: true, forceLog: false, logAllRunsToBlock: false,
+    blocks: [
+      { id: 'http', numberId: 1, type: 'http', x: 0, y: 0, options: { method: 'GET', path: '/receiver-miss' } },
+      { id: 'emitter-id', numberId: 2, type: 'text', x: 0, y: 100, options: { text: 'wanted' } },
+      { id: 'emit', numberId: 3, type: 'emitter', x: 200, y: 0, options: { restriction_type: 'all', search_type: 'title' } },
+      { id: 'reply', numberId: 4, type: 'respond', x: 400, y: 0, options: { status: 200, format: 'Text', body: 'ok', headers: '{}' } }
+    ],
+    connections: [
+      { id: 'source-emit', from: 'http', output: 'next', to: 'emit', input: 'action', kind: 'action' },
+      { id: 'source-id', from: 'emitter-id', output: 'text', to: 'emit', input: 'id', kind: 'value' },
+      { id: 'source-reply', from: 'emit', output: 'action', to: 'reply', input: 'action', kind: 'action' }
+    ]
+  };
+  const receiver = {
+    id: 'receiver-workspace', numberId: 2, name: 'Unmatched receiver', active: true, forceLog: false, logAllRunsToBlock: true,
+    blocks: [
+      { id: 'receiver-id', numberId: 1, type: 'text', x: 0, y: 0, options: { text: 'different' } },
+      { id: 'receiver', numberId: 2, type: 'receiver', x: 200, y: 0, options: {} }
+    ],
+    connections: [{ id: 'receiver-id-wire', from: 'receiver-id', output: 'text', to: 'receiver', input: 'id', kind: 'value' }]
+  };
+  const logging = {
+    id: 'logging', numberId: 3, name: 'Logging', active: true, forceLog: false, logAllRunsToBlock: false,
+    blocks: [
+      { id: 'workspace-log', numberId: 1, type: 'workspace_log', x: 0, y: 0, options: {} },
+      { id: 'capture', numberId: 2, type: 'capture_skipped_receiver_log', x: 200, y: 0, options: {} }
+    ],
+    connections: [
+      { id: 'log-action', from: 'workspace-log', output: 'next', to: 'capture', input: 'action', kind: 'action' },
+      { id: 'log-content', from: 'workspace-log', output: 'content', to: 'capture', input: 'content', kind: 'value' }
+    ]
+  };
+  const app = createApp({ document: { version: 1, name: 'Skipped receiver logging', workspaces: [source, receiver, logging] }, definitions });
+  await app.start(0, '127.0.0.1');
+  t.after(() => app.stop());
+
+  assert.equal((await fetch(`http://127.0.0.1:${app.server.address().port}/receiver-miss`)).status, 200);
+  assert.deepEqual(events, []);
+});
+
 test('workspace logging settings are optional for older workspaces and validated when present', () => {
   const definitions = loadDefinitions(path.resolve(__dirname, '../blocks'));
   const document = {

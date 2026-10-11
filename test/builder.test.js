@@ -613,13 +613,21 @@ test('HTTP endpoints match sub-paths and expose the unmatched sub-endpoint', asy
       { id: 'subpath', type: 'get_sub_endpoint_by_name', x: 0, y: 0, options: {} },
       { id: 'response', type: 'respond', x: 0, y: 0, options: { status: 200, body: 'fallback', headers: '{}' } },
       { id: 'exact', type: 'http', x: 0, y: 0, options: { method: 'GET', path: '/systems/exact' } },
-      { id: 'exact-response', type: 'respond', x: 0, y: 0, options: { status: 200, body: 'exact endpoint', headers: '{}' } }
+      { id: 'exact-response', type: 'respond', x: 0, y: 0, options: { status: 200, body: 'exact endpoint', headers: '{}' } },
+      { id: 'path-endpoint', type: 'http', x: 0, y: 0, options: { method: 'GET', path: '/iris' } },
+      { id: 'path-response', type: 'respond', x: 0, y: 0, options: { status: 200, format: 'Text', body: '', headers: '{}' } },
+      { id: 'query-endpoint', type: 'http', x: 0, y: 0, options: { method: 'GET', path: '/query' } },
+      { id: 'query-response', type: 'respond', x: 0, y: 0, options: { status: 200, format: 'JSON', body: '', headers: '{}' } }
     ],
     connections: [
       { id: 'a', from: 'systems', output: 'next', to: 'subpath', input: 'action', kind: 'action' },
       { id: 'b', from: 'subpath', output: 'next', to: 'response', input: 'action', kind: 'action' },
       { id: 'c', from: 'subpath', output: 'sub_endpoint', to: 'response', input: 'body', kind: 'value' },
-      { id: 'd', from: 'exact', output: 'next', to: 'exact-response', input: 'action', kind: 'action' }
+      { id: 'd', from: 'exact', output: 'next', to: 'exact-response', input: 'action', kind: 'action' },
+      { id: 'e', from: 'path-endpoint', output: 'next', to: 'path-response', input: 'action', kind: 'action' },
+      { id: 'f', from: 'path-endpoint', output: 'path', to: 'path-response', input: 'body', kind: 'value' },
+      { id: 'g', from: 'query-endpoint', output: 'next', to: 'query-response', input: 'action', kind: 'action' },
+      { id: 'h', from: 'query-endpoint', output: 'query', to: 'query-response', input: 'body', kind: 'value' }
     ]
   }] };
   const app = createApp({ document, definitions });
@@ -633,6 +641,14 @@ test('HTTP endpoints match sub-paths and expose the unmatched sub-endpoint', asy
   const exact = await fetch(base + '/systems/exact');
   assert.equal(exact.status, 200);
   assert.equal(await exact.text(), 'exact endpoint');
+  const pathResponse = await fetch(base + '/iris/example?full=true');
+  assert.equal(pathResponse.status, 200);
+  assert.equal(await pathResponse.text(), '/iris/example');
+  assert.deepEqual(definitions.get('http').outputPorts.find(port => port.id === 'path'), { id: 'path', name: 'Path', kind: 'value', types: ['text'] });
+  const queryResponse = await fetch(base + '/query?full=true&name=Delphi%20RC');
+  assert.equal(queryResponse.status, 200);
+  assert.deepEqual(await queryResponse.json(), { full: 'true', name: 'Delphi RC' });
+  assert.deepEqual(definitions.get('http').outputPorts.find(port => port.id === 'query'), { id: 'query', name: 'Query', kind: 'value', types: ['object'] });
   assert.equal((await fetch(base + '/systematic')).status, 404);
 });
 

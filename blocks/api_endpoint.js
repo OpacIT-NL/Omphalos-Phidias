@@ -1,9 +1,11 @@
 module.exports = {
   type: 'http', name: 'HTTP endpoint', category: 'Triggers',
-  description: 'Receives a request. The Body output contains text or parsed JSON; use {{request.query.key}} or {{request.method}} for request details.',
+  description: 'Receives a request. Path contains the complete requested URL path, Query contains its query parameters, and Body contains text or parsed JSON.',
   trigger: 'http', outputs: ['next'],
   outputPorts: [
     { id: 'next', name: 'Action', kind: 'action', types: [] },
+    { id: 'path', name: 'Path', kind: 'value', types: ['text'] },
+    { id: 'query', name: 'Query', kind: 'value', types: ['object'] },
     { id: 'body', name: 'Body', kind: 'value', types: ['text', 'object'] },
     { id: 'headers', name: 'Headers', kind: 'value', types: ['object'] }
   ],

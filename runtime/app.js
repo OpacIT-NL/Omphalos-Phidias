@@ -44,6 +44,34 @@ async function readBody(request, limit = 1048576) {
 function normalizeRoutePath(value) {
   return value.replace(/\/+$/, '') || '/';
 }
+function parseFormBody(body) {
+  if (body === null || body === undefined || body === '') return {};
+  if (body && typeof body === 'object' && !Array.isArray(body)) return Object.fromEntries(Object.entries(body).filter(([key]) => !key.startsWith('__phidias_')));
+  const result = {};
+  for (const [submittedKey, value] of new URLSearchParams(String(body))) {
+    const list = submittedKey.endsWith('[]'), key = list ? submittedKey.slice(0, -2) : submittedKey;
+    if (!key || key.startsWith('__phidias_')) continue;
+    if (!Object.hasOwn(result, key)) Object.defineProperty(result, key, { value: list ? [value] : value, writable: true, enumerable: true, configurable: true });
+    else if (Array.isArray(result[key])) result[key].push(value);
+    else result[key] = [result[key], value];
+  }
+  return result;
+}
+function safeFormReturnPath(value, fallback = '/') {
+  const target = String(value || '');
+  if (!target.startsWith('/') || target.startsWith('//') || /[\r\n]/.test(target)) return fallback;
+  try {
+    const parsed = new URL(target, 'http://localhost');
+    return `${parsed.pathname}${parsed.search}${parsed.hash}`;
+  } catch { return fallback; }
+}
+function isSameOriginFormRequest(headers = {}) {
+  const host = String(headers['x-forwarded-host'] || headers.host || '').split(',')[0].trim().toLowerCase();
+  const protocol = String(headers['x-forwarded-proto'] || 'http').split(',')[0].trim().toLowerCase() === 'https' ? 'https:' : 'http:';
+  const source = headers.origin || headers.referer;
+  if (!host || !source) return true;
+  try { return new URL(source).origin.toLowerCase() === new URL(`${protocol}//${host}`).origin.toLowerCase(); } catch { return false; }
+}
 function authenticationCookieName(deployment, applicationName) {
   if (!deployment?.projectId || !deployment?.channel) {
     const suffix = crypto.createHash('sha256').update(String(applicationName || 'application')).digest('hex').slice(0, 16);
@@ -218,7 +246,7 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
   const deployment = Object.freeze({ projectId: applicationConfig['project-id'] || null, channel: applicationConfig['release-channel'] || null, updateUrl: applicationConfig['update-url'] || null });
   const cookieName = authenticationCookieName(deployment, document.name);
   validate(document, definitions);
-  const controller = new AbortController(), timers = [], stdinListeners = [], activeRuns = new Set(), routes = [], authenticationStores = new Map();
+  const controller = new AbortController(), timers = [], stdinListeners = [], activeRuns = new Set(), routes = [], formRoutes = new Map(), authenticationStores = new Map();
   const shared = Object.create(null);
   let started = false, stdinInterface = null, controlRequested = null;
   const databasePools = new Map();
@@ -333,6 +361,28 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
     const nodes = new Map(ws.blocks.map(block => [block.id, block]));
     const incoming = (block, port) => ws.connections.find(edge => edge.to === block.id && (edge.input || 'action') === port);
     let steps = 0;
+    const workspaceEvents = [];
+    async function deliverWorkspaceEvent(content) {
+      if (ws.forceLog) {
+        const write = logger?.forceInfo || logger?.info;
+        write?.call(logger, 'Workspace run %s: user=%s content=%s', runId, context.loggedInUser, JSON.stringify(content));
+      }
+      if (!ws.logAllRunsToBlock) return;
+      const listeners = applicationListeners('workspace_log');
+      const results = await Promise.allSettled(listeners.map(listener => run(listener.workspace, listener.block, request, response, {
+        runId,
+        runStartedAt,
+        loggedInUser: context.loggedInUser,
+        sourceWorkspace: workspaceIdentity(ws),
+        logEvent: content,
+        suppressWorkspaceLog: true,
+        suppressRunIdTrigger: true
+      })));
+      for (const result of results) if (result.status === 'rejected') reportError(result.reason);
+    }
+    async function flushWorkspaceEvents() {
+      for (const content of workspaceEvents.splice(0)) await deliverWorkspaceEvent(content);
+    }
     async function publishWorkspaceEvent(block, definition, startedAt, inputs, status, error = null) {
       if (seed.suppressWorkspaceLog || (!ws.forceLog && !ws.logAllRunsToBlock)) return;
       const outputs = Object.create(null);
@@ -355,22 +405,7 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
         outputs,
         ...(error ? { error: context.redactForLog(error) } : {})
       };
-      if (ws.forceLog) {
-        const write = logger?.forceInfo || logger?.info;
-        write?.call(logger, 'Workspace run %s: user=%s content=%s', runId, context.loggedInUser, JSON.stringify(content));
-      }
-      if (!ws.logAllRunsToBlock) return;
-      const listeners = applicationListeners('workspace_log');
-      const results = await Promise.allSettled(listeners.map(listener => run(listener.workspace, listener.block, request, response, {
-        runId,
-        runStartedAt,
-        loggedInUser: context.loggedInUser,
-        sourceWorkspace: workspaceIdentity(ws),
-        logEvent: content,
-        suppressWorkspaceLog: true,
-        suppressRunIdTrigger: true
-      })));
-      for (const result of results) if (result.status === 'rejected') reportError(result.reason);
+      workspaceEvents.push(content);
     }
     async function outputValue(edge, stack) {
       const key = `${edge.from}:${edge.output}`;
@@ -419,13 +454,15 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
           const edge = incoming(block, input.id);
           if (edge) inputs[input.id] = await outputValue(edge, nextStack);
         }
-        if (def.trigger === 'receiver' && seed.receiverID !== undefined && String(inputs.id ?? block.options.id ?? '') !== String(seed.receiverID)) return;
+        if (def.trigger === 'receiver' && seed.receiverID !== undefined && String(inputs.id ?? block.options.id ?? '') !== String(seed.receiverID)) return false;
         if (def.legacy) {
-          if (actionInput === null && context.evaluated.has(block.id)) return;
+          if (actionInput === null && context.evaluated.has(block.id)) return false;
           await executeLegacy(def, context, block, inputs, queueFollow);
           context.evaluated.add(block.id);
         } else {
           if (def.trigger === 'http') {
+            setOutput('path', request?.path ?? '');
+            setOutput('query', request?.query ?? {});
             setOutput('body', request?.body ?? '');
             setOutput('headers', request?.headers ?? {});
           }
@@ -444,6 +481,10 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
             setOutput('workspace_id', workspace.id);
             setOutput('workspace', workspace);
           }
+          if (def.trigger === 'form_submit') {
+            setOutput('form_data', seed.formData || {});
+            setOutput('form_id', block.options.form_id);
+          }
           const output = def.trigger ? 'next' : await def.execute(context, block.options, inputs, setOutput);
           if (output) followedOutputs.push(output);
         }
@@ -453,6 +494,7 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
       }
       await publishWorkspaceEvent(block, def, startedAt, eventInputs, 'completed');
       for (const output of followedOutputs) await follow(output);
+      return true;
     }
     context.emit = async (id, details = {}) => {
       const workspaces = details.restriction_type === 'all' ? document.workspaces.filter(item => item.active) : [ws];
@@ -473,7 +515,14 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
       }
       await Promise.all(tasks);
     };
-    await executeBlock(trigger);
+    try {
+      const executed = await executeBlock(trigger);
+      if (executed) await flushWorkspaceEvents();
+      else workspaceEvents.length = 0;
+    } catch (error) {
+      await flushWorkspaceEvents();
+      throw error;
+    }
     return context.vars;
   }
   function track(promise) {
@@ -517,6 +566,7 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
       const login = reachableLogin(ws, block);
       routes.push({ method: block.options.method, path: normalizeRoutePath(block.options.path), ws, block, loginBlock: login?.block, loginWorkspace: login?.workspace });
     }
+    for (const block of ws.blocks.filter(block => block.type === 'form_submit')) formRoutes.set(block.options.form_id, { ws, block });
   }
   const server = http.createServer(async (req, res) => {
     const requestStarted = Date.now();
@@ -534,6 +584,21 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
       if (url.pathname === '/favicon.ico' && ['GET', 'HEAD'].includes(req.method) && favicon) {
         res.writeHead(200, { 'content-type': 'image/x-icon', 'content-length': favicon.length, 'cache-control': 'public, max-age=86400' });
         res.end(req.method === 'HEAD' ? undefined : favicon); return;
+      }
+      const formMatch = req.method === 'POST' ? url.pathname.match(/^\/_phidias\/forms\/([^/]+)$/) : null;
+      if (formMatch) {
+        if (!isSameOriginFormRequest(req.headers)) { res.writeHead(403); res.end('Cross-origin form submission rejected'); return; }
+        let formID;
+        try { formID = decodeURIComponent(formMatch[1]); } catch { res.writeHead(400); res.end('Invalid form ID'); return; }
+        const formRoute = formRoutes.get(formID);
+        if (!formRoute) { res.writeHead(404); res.end('Form not found'); return; }
+        const rawBody = await readBody(req);
+        const parameters = new URLSearchParams(typeof rawBody === 'string' ? rawBody : '');
+        const formData = parseFormBody(rawBody);
+        const request = { method: req.method, path: url.pathname, endpoint: url.pathname, subpath: '/', query: Object.fromEntries(url.searchParams), headers: req.headers, body: formData, ip: req.socket.remoteAddress, formID };
+        await track(run(formRoute.ws, formRoute.block, request, null, { formData }));
+        res.writeHead(303, { location: safeFormReturnPath(parameters.get('__phidias_return_to'), '/'), 'cache-control': 'no-store' });
+        res.end(); return;
       }
       let route = findRoute(routes, req.method, url.pathname), loginSubmission = false;
       if (!route && req.method === 'POST') {
@@ -644,4 +709,4 @@ if (require.main === module) {
   launch().catch(error => { logger.critical('Could not start application: %s', error?.stack || error); process.exitCode = 1; });
   for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => { stop(signal); });
 }
-module.exports = { createApp, loadDefinitions, render, readBody, findRoute, normalizeRoutePath, loadAppConfig, validateAppConfig, bootstrapAuthentication };
+module.exports = { createApp, loadDefinitions, render, readBody, findRoute, normalizeRoutePath, loadAppConfig, validateAppConfig, bootstrapAuthentication, parseFormBody, safeFormReturnPath, isSameOriginFormRequest };

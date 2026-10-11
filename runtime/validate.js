@@ -31,7 +31,7 @@ function validate(document, definitions) {
   }
   if (!Array.isArray(document.workspaces) || !document.workspaces.length || document.workspaces.length > 100) fail('A project needs 1–100 workspaces');
   ensureNumberIds(document);
-  const workspaceIDs = new Set(), workspaceNumberIds = new Set(), routes = new Set();
+  const workspaceIDs = new Set(), workspaceNumberIds = new Set(), routes = new Set(), formIDs = new Set();
   for (const ws of document.workspaces) {
     if (!ws || typeof ws.id !== 'string' || !safeID.test(ws.id) || workspaceIDs.has(ws.id)) fail('Invalid or duplicate workspace ID');
     workspaceIDs.add(ws.id);
@@ -68,6 +68,12 @@ function validate(document, definitions) {
         const route = `${block.options.method} ${normalizeRoutePath(block.options.path)}`;
         if (ws.active && routes.has(route)) fail(`Duplicate HTTP endpoint: ${route}`);
         if (ws.active) routes.add(route);
+      }
+      if (block.type === 'form_submit') {
+        const formID = block.options.form_id;
+        if (typeof formID !== 'string' || !/^[a-zA-Z][a-zA-Z0-9_-]{0,79}$/.test(formID)) fail('Form Submit ID must start with a letter and contain only letters, numbers, underscores, or dashes');
+        if (ws.active && formIDs.has(formID)) fail(`Duplicate Form Submit ID: ${formID}`);
+        if (ws.active) formIDs.add(formID);
       }
       if (block.type === 'cron') {
         try { parseCron(block.options.expression); } catch (error) { fail(error.message); }
