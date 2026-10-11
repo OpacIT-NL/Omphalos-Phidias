@@ -296,7 +296,7 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
       vars: execution.vars, values: execution.values, evaluated: execution.evaluated,
       request, response, env: process.env, signal, shared, appName: document.name, directory, logger, deployment, database: getDatabase, logDatabase: getLoggingDatabase,
       legacyValues: seed.legacyValues || [], runId, loggedInUser: seed.loggedInUser || 'svc_automation',
-      forceConsoleLog: applicationConfig['force-console-input-log'], secretValues: new Set()
+      forceConsoleLog: applicationConfig['force-console-input-log'], secretValues: new Set(), blockIDs: new Set(ws.blocks.map(block => block.id))
     };
     context.getCredential = async (nameOrId, types = null) => {
       const credential = await readCredential(String(nameOrId || ''), types);
@@ -445,9 +445,9 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
       };
       const setOutput = (id, value) => {
         context.values.set(block.id + ':' + id, value);
-        context.vars[block.id] ||= Object.create(null);
+        if (!context.vars[block.id] || typeof context.vars[block.id] !== 'object' || Array.isArray(context.vars[block.id])) context.vars[block.id] = Object.create(null);
         context.vars[block.id][id] = value;
-        context.vars[id] = value;
+        if (!context.blockIDs.has(id)) context.vars[id] = value;
       };
       try {
         for (const input of def.inputPorts.filter(port => port.kind === 'value')) {

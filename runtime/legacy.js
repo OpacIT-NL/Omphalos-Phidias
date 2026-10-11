@@ -123,9 +123,9 @@ async function executeLegacy(definition, ctx, block, connectedInputs, follow) {
     StoreOutputValue(value, id) {
       stored[id] = value;
       ctx.values.set(`${block.id}:${id}`, value);
-      ctx.vars[block.id] ||= Object.create(null);
+      if (!ctx.vars[block.id] || typeof ctx.vars[block.id] !== 'object' || Array.isArray(ctx.vars[block.id])) ctx.vars[block.id] = Object.create(null);
       ctx.vars[block.id][id] = value;
-      ctx.vars[id] = value;
+      if (!ctx.blockIDs?.has(id)) ctx.vars[id] = value;
     },
     RunNextBlock(id) {
       actionCalled();

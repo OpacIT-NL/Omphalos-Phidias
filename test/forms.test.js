@@ -83,6 +83,6 @@ test('Form Submit triggers its workflow and redirects to the originating page', 
   });
   assert.equal(response.status, 303);
   assert.equal(response.headers.get('location'), '/iris/instances');
-  assert.deepEqual(entries[0][0], { name: 'A "quoted"', roles: ['admin', 'operator'] });
+  assert.deepEqual(Object.fromEntries(Object.entries(entries[0][0])), { name: 'A "quoted"', roles: ['admin', 'operator'] });
   assert.equal((await fetch(`http://127.0.0.1:${address.port}/_phidias/forms/missing`, { method: 'POST' })).status, 404);
 });

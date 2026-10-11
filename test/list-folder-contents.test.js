@@ -73,3 +73,25 @@ test('List Folder Contents accepts its folder path from a Text block in a workfl
   assert.ok(entries.some(entry => entry.relativePath === 'root.txt' && entry.type === 'file'));
   assert.ok(entries.some(entry => entry.relativePath === path.join('alpha', 'nested.txt') && entry.type === 'file'));
 });
+
+test('HTTP output aliases cannot overwrite a block namespace with the same ID', async t => {
+  const { createApp, loadDefinitions } = require('../runtime/app');
+  const root = await fixture(t);
+  const document = { version: 1, name: 'Namespace collision', workspaces: [{
+    id: 'main', name: 'Main', active: true,
+    blocks: [
+      { id: 'http', type: 'http', x: 0, y: 0, options: { method: 'GET', path: '/path-collision' } },
+      { id: 'path', type: 'text', x: 0, y: 0, options: { text: root } },
+      { id: 'reply', type: 'respond', x: 0, y: 0, options: { status: 200, format: 'Text', body: '', headers: '{}' } }
+    ],
+    connections: [
+      { id: 'a1', from: 'http', output: 'next', to: 'reply', input: 'action', kind: 'action' },
+      { id: 'v1', from: 'path', output: 'text', to: 'reply', input: 'body', kind: 'value' }
+    ]
+  }] };
+  const app = createApp({ directory: root, document, definitions: loadDefinitions(path.resolve(__dirname, '../blocks')) });
+  const address = await app.start(0, '127.0.0.1'); t.after(() => app.stop());
+  const response = await fetch(`http://127.0.0.1:${address.port}/path-collision`);
+  assert.equal(response.status, 200);
+  assert.equal(await response.text(), root);
+});
