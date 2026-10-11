@@ -16,14 +16,14 @@ module.exports = {
             "id": "value1",
             "name": "Value 1",
             "description": "Acceptable Types: Unspecified, Undefined, Null, Object, Boolean, Date, Number, Text, List\n\nDescription: The value 1 to compare with the value 2.",
-            "types": ["unspecified", "undefined", "null", "object", "boolean", "date", "number", "text", "list"],
+            "types": ["unspecified", "secret", "undefined", "null", "object", "boolean", "date", "number", "text", "list"],
             "required": true
         },
         {
             "id": "value2",
             "name": "Value 2",
             "description": "Acceptable Types: Unspecified, Undefined, Null, Object, Boolean, Date, Number, Text, List\n\nDescription: The value 2 to compare with the value 1.",
-            "types": ["unspecified", "undefined", "null", "object", "boolean", "date", "number", "text", "list"]
+            "types": ["unspecified", "secret", "undefined", "null", "object", "boolean", "date", "number", "text", "list"]
         }
     ],
 
@@ -72,8 +72,9 @@ module.exports = {
     ],
 
     code(cache) {
-        const value1 = this.GetInputValue("value1", cache);
-        const value2 = this.GetInputValue("value2", cache) || this.GetOptionValue("value2", cache);
+        const value1 = this.RevealSecret(this.GetInputValue("value1", cache));
+        const connectedValue2 = this.GetInputValue("value2", cache);
+        const value2 = this.RevealSecret(connectedValue2 === undefined ? this.GetOptionValue("value2", cache) : connectedValue2);
         const comparison_type = this.GetOptionValue("comparison_type", cache) + "";
 
         let result  = false;

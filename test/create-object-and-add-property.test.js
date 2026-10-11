@@ -50,14 +50,19 @@ test('later duplicate keys overwrite earlier values without prototype mutation',
   assert.equal({}.unsafe, undefined);
 });
 
-test('object builders turn protected secret inputs into usable values through the runtime revealer', async () => {
-  const block = require('../blocks/create_object_and_add_property_1x');
+test('all object-builder sizes turn protected secret inputs into usable values through the runtime revealer', async () => {
   const protectedPassword = { __phidiasSecret: true, toString: () => 'actual-password', toJSON: () => '[REDACTED]' };
-  const outputs = {}, revealed = [];
-  await block.execute({ revealSecret(value) { revealed.push(value); return String(value); } }, {}, {
-    key1: 'password', value1: protectedPassword
-  }, (name, value) => { outputs[name] = value; });
-  assert.deepEqual(revealed, [protectedPassword]);
-  assert.deepEqual(outputs.object, { password: 'actual-password' });
-  assert.equal(JSON.stringify(outputs.object), '{"password":"actual-password"}');
+  for (let count = 1; count <= 9; count++) {
+    const block = require(`../blocks/create_object_and_add_property_${count}x`);
+    const outputs = {}, revealed = [], inputs = {};
+    for (let index = 1; index <= count; index++) {
+      inputs[`key${index}`] = `password${index}`;
+      inputs[`value${index}`] = protectedPassword;
+    }
+    await block.execute({ revealSecret(value) { revealed.push(value); return String(value); } }, {}, inputs, (name, value) => { outputs[name] = value; });
+    assert.equal(revealed.length, count);
+    assert.ok(revealed.every(value => value === protectedPassword));
+    assert.deepEqual(outputs.object, Object.fromEntries(Array.from({ length: count }, (_, index) => [`password${index + 1}`, 'actual-password'])));
+    assert.doesNotMatch(JSON.stringify(outputs.object), /REDACTED/);
+  }
 });

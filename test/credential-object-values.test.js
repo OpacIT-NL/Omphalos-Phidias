@@ -59,3 +59,27 @@ test('Request API reveals a directly connected secret only for the outbound requ
   assert.equal(request.options.body, JSON.stringify({ password }));
   assert.deepEqual([...context.secretValues], [password]);
 });
+
+test('Check Comparison reveals protected passwords for exact and string comparisons', async () => {
+  const definition = normalizeDefinition(require('../blocks/check_comparison'), 'check_comparison.js');
+  const password = 'actual-password';
+  const secret = { __phidiasSecret: true, toString: () => password, valueOf: () => password, toJSON: () => '[REDACTED]' };
+  const run = async (comparisonType, value2) => {
+    const followed = [];
+    const context = { render: value => value, values: new Map(), vars: Object.create(null), legacyValues: [], secretValues: new Set() };
+    await executeLegacy(definition, context, { id: 'compare', options: { comparison_type: comparisonType, value2: '' } }, { value1: secret, value2 }, async output => { followed.push(output); });
+    return { followed, secrets: [...context.secretValues] };
+  };
+
+  const exact = await run('equals_exactly', password);
+  assert.deepEqual(exact.followed, ['action1']);
+  assert.deepEqual(exact.secrets, [password]);
+
+  const startsWith = await run('start_with', 'actual');
+  assert.deepEqual(startsWith.followed, ['action1']);
+  assert.deepEqual(startsWith.secrets, [password]);
+
+  const different = await run('not_equal_exactly', 'different-password');
+  assert.deepEqual(different.followed, ['action1']);
+  assert.deepEqual(different.secrets, [password]);
+});
