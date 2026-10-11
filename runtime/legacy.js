@@ -100,6 +100,21 @@ async function executeLegacy(definition, ctx, block, connectedInputs, follow) {
     if (Object.hasOwn(block.options, id)) return valueFromOption(ctx, inputByID.get(id), block.options[id]);
     return fallback;
   };
+  const revealSecret = value => {
+    if (!value?.__phidiasSecret) return value;
+    const raw = String(value);
+    if (raw) ctx.secretValues?.add(raw);
+    return raw;
+  };
+  const revealSecrets = (value, seen = new WeakMap()) => {
+    if (value?.__phidiasSecret) return revealSecret(value);
+    if (!value || typeof value !== 'object' || value instanceof Date || Buffer.isBuffer(value) || value instanceof Headers) return value;
+    if (seen.has(value)) return seen.get(value);
+    const result = Array.isArray(value) ? [] : {};
+    seen.set(value, result);
+    for (const [key, item] of Object.entries(value)) result[key] = revealSecrets(item, seen);
+    return result;
+  };
   const api = {
     GetInputValue(id, _cache, _required, fallback) { return getInput(id, fallback); },
     GetOptionValue(id, _cache, fallback) {
@@ -140,10 +155,7 @@ async function executeLegacy(definition, ctx, block, connectedInputs, follow) {
       return match ? new RegExp(match[1], match[2]) : new RegExp(text);
     },
     RevealSecret(value) {
-      if (!value?.__phidiasSecret) return value;
-      const raw = String(value);
-      if (raw) ctx.secretValues?.add(raw);
-      return raw;
+      return revealSecret(value);
     },
     end(error) { throw error; },
     console(level, message) { (ctx.logger?.info || console.log)(`[${level}] ${message}`); },
@@ -180,8 +192,8 @@ async function executeLegacy(definition, ctx, block, connectedInputs, follow) {
   }
   if (definition.type === 'request_api') {
     const method = String(api.GetOptionValue('method_type', null, 'get')).toUpperCase();
-    const body = getInput('body');
-    const headers = source.mergeSessionHeaders(getInput('headers'), getInput('session'));
+    const body = revealSecrets(getInput('body'));
+    const headers = source.mergeSessionHeaders(revealSecrets(getInput('headers')), revealSecrets(getInput('session')));
     const response = await fetch(String(getInput('url', '')), {
       method, signal: AbortSignal.any([ctx.signal, AbortSignal.timeout(30000)]),
       ...(Object.keys(headers).length ? { headers } : {}),
