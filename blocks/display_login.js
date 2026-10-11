@@ -25,6 +25,7 @@ module.exports = {
   outputs: ['authenticated'],
   outputPorts: [{ id: 'authenticated', name: 'Already Logged In', kind: 'action', types: [] }],
   fields: [],
+  requiresHttpContext: true,
   async execute(ctx) {
     if (!ctx.request || !ctx.response) throw new Error('Display Login requires an HTTP endpoint trigger');
     if (ctx.response.writableEnded) return null;

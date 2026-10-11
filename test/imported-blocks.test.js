@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
+const { PassThrough } = require('node:stream');
 const { createApp, loadDefinitions } = require('../runtime/app');
 const { validate } = require('../runtime/validate');
 
@@ -137,6 +138,96 @@ test('Receiver accepts a connected ID and keeps emitted values across following 
   assert.equal(responseBody, 'receiver ran');
   assert.deepEqual(observed, ['receiver ran', 'receiver ran']);
   assert.deepEqual(errors, []);
+});
+
+test('console emitters do not start HTTP-only receiver workflows with no request context', async t => {
+  const library = definitions(), observed = [], errors = [], stdin = new PassThrough();
+  library.set('capture_console_receiver', {
+    type: 'capture_console_receiver', name: 'Capture Console Receiver', category: 'Tests', description: 'Records execution.', fields: [], outputs: [],
+    inputPorts: [{ id: 'action', name: 'Action', kind: 'action', types: [] }], outputPorts: [],
+    async execute() { observed.push('ran'); }
+  });
+  const receiverWorkspace = (id, name, finalType) => ({
+    id, name, active: true,
+    blocks: [
+      block(`${id}-id`, 'text', { text: 'shared-event' }),
+      block(`${id}-receiver`, 'receiver', {}),
+      block(`${id}-final`, finalType, {})
+    ],
+    connections: [
+      edge(`${id}-value`, `${id}-id`, 'text', `${id}-receiver`, 'id', 'value'),
+      edge(`${id}-action`, `${id}-receiver`, 'action', `${id}-final`)
+    ]
+  });
+  const document = {
+    version: 1, name: 'Console receiver context', workspaces: [{
+      id: 'console', name: 'Console', active: true,
+      blocks: [
+        block('input', 'bot_input', {}),
+        block('event-id', 'text', { text: 'shared-event' }),
+        block('emit', 'emitter', { restriction_type: 'all', search_type: 'title' })
+      ],
+      connections: [
+        edge('input-emit', 'input', 'action', 'emit'),
+        edge('event-id-emit', 'event-id', 'text', 'emit', 'id', 'value')
+      ]
+    }, receiverWorkspace('plain-login', 'Plain login page', 'check_if_logged_in'), receiverWorkspace('worker', 'Worker', 'capture_console_receiver')]
+  };
+  assert.doesNotThrow(() => validate(structuredClone(document), library));
+  const app = createApp({ document, definitions: library, stdin, onError: error => errors.push(error) });
+  await app.start(0, '127.0.0.1');
+  t.after(() => app.stop());
+  stdin.write('enable\n');
+  await new Promise(resolve => setTimeout(resolve, 30));
+  assert.deepEqual(observed, ['ran']);
+  assert.deepEqual(errors, []);
+});
+
+test('one failed receiver does not fail its emitter or the other receivers', async t => {
+  const library = definitions(), observed = [], errors = [];
+  library.set('failing_receiver_action', {
+    type: 'failing_receiver_action', name: 'Failing Receiver Action', category: 'Tests', description: 'Fails.', fields: [], outputs: [],
+    inputPorts: [{ id: 'action', name: 'Action', kind: 'action', types: [] }], outputPorts: [],
+    async execute() { throw new Error('receiver failure'); }
+  });
+  library.set('successful_receiver_action', {
+    type: 'successful_receiver_action', name: 'Successful Receiver Action', category: 'Tests', description: 'Runs.', fields: [], outputs: [],
+    inputPorts: [{ id: 'action', name: 'Action', kind: 'action', types: [] }], outputPorts: [],
+    async execute() { observed.push('ran'); }
+  });
+  const receiver = (prefix, finalType) => [
+    block(`${prefix}-id`, 'text', { text: 'fan-out' }),
+    block(`${prefix}-receiver`, 'receiver', {}),
+    block(`${prefix}-final`, finalType, {})
+  ];
+  const blocks = [
+    block('http', 'http', { method: 'GET', path: '/fan-out' }),
+    block('event-id', 'text', { text: 'fan-out' }),
+    block('emit', 'emitter', { restriction_type: 'current', search_type: 'title' }),
+    block('reply', 'respond', { status: 200, format: 'Text', body: 'ok', headers: '{}' }),
+    ...receiver('bad', 'failing_receiver_action'),
+    ...receiver('good', 'successful_receiver_action')
+  ];
+  const connections = [
+    edge('http-emit', 'http', 'next', 'emit'),
+    edge('event-id-emit', 'event-id', 'text', 'emit', 'id', 'value'),
+    edge('emit-reply', 'emit', 'action', 'reply'),
+    edge('bad-id-wire', 'bad-id', 'text', 'bad-receiver', 'id', 'value'),
+    edge('bad-action', 'bad-receiver', 'action', 'bad-final'),
+    edge('good-id-wire', 'good-id', 'text', 'good-receiver', 'id', 'value'),
+    edge('good-action', 'good-receiver', 'action', 'good-final')
+  ];
+  const document = { version: 1, name: 'Isolated receivers', workspaces: [{ id: 'main', name: 'Main', active: true, blocks, connections }] };
+  assert.doesNotThrow(() => validate(structuredClone(document), library));
+  const app = createApp({ document, definitions: library, onError: error => errors.push(error) });
+  const address = await app.start(0, '127.0.0.1');
+  t.after(() => app.stop());
+  const response = await fetch(`http://127.0.0.1:${address.port}/fan-out`);
+  assert.equal(response.status, 200);
+  assert.equal(await response.text(), 'ok');
+  assert.deepEqual(observed, ['ran']);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0].message, /receiver failure/);
 });
 
 test('Receiver headers and session remain available to sequential Request API blocks', async t => {

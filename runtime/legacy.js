@@ -194,12 +194,20 @@ async function executeLegacy(definition, ctx, block, connectedInputs, follow) {
     const method = String(api.GetOptionValue('method_type', null, 'get')).toUpperCase();
     const body = revealSecrets(getInput('body'));
     const headers = source.mergeSessionHeaders(revealSecrets(getInput('headers')), revealSecrets(getInput('session')));
+    const hasContentType = Object.keys(headers).some(name => name.toLowerCase() === 'content-type');
+    if (body !== null && typeof body === 'object' && !Buffer.isBuffer(body) && method !== 'GET' && !hasContentType) {
+      headers['Content-Type'] = 'application/json';
+    }
     const response = await fetch(String(getInput('url', '')), {
       method, signal: AbortSignal.any([ctx.signal, AbortSignal.timeout(30000)]),
       ...(Object.keys(headers).length ? { headers } : {}),
       ...(body != null && body !== '' && method !== 'GET' ? { body: typeof body === 'object' ? JSON.stringify(body) : String(body) } : {})
     });
-    if (!response.ok) throw new Error(`API request failed with HTTP ${response.status}`);
+    if (!response.ok) {
+      const responseBody = await response.text().catch(() => '');
+      const detail = responseBody.trim().slice(0, 4096);
+      throw new Error(`API request failed with HTTP ${response.status}${detail ? `: ${detail}` : ''}`);
+    }
     const dataType = api.GetOptionValue('data_type', null, 'text');
     const data = dataType === 'json' ? await response.json() : dataType === 'buffer' ? Buffer.from(await response.arrayBuffer()) : await response.text();
     api.StoreOutputValue(data, 'data');

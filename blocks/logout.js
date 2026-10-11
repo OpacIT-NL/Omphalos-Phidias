@@ -12,6 +12,7 @@ module.exports = {
   fields: [
     { key: 'sessionType', label: 'Session type', type: 'select', choices: ['Browser', 'API'], default: 'Browser' }
   ],
+  requiresHttpContext: true,
   async execute(ctx, options, inputs = {}, setOutput) {
     if (!ctx.request) throw new Error('Logout requires an HTTP endpoint trigger');
     const authentication = ctx.authentication();

@@ -14,6 +14,7 @@ module.exports = {
     { id: 'sub_endpoint', name: 'Sub-endpoint', kind: 'value', types: ['text'] }
   ],
   fields: [],
+  requiresHttpContext: true,
   async execute(ctx, _options, _inputs, setOutput) {
     if (!ctx.request) throw new Error('Get sub-endpoint by name requires an HTTP endpoint trigger');
     setOutput('sub_endpoint', ctx.request.subpath || '/');

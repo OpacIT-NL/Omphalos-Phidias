@@ -10,6 +10,7 @@ module.exports = {
     { id: 'username', name: 'Username', kind: 'value', types: ['text'] }
   ],
   fields: [],
+  requiresHttpContext: true,
   async execute(ctx, options, inputs, setOutput) {
     if (!ctx.request) throw new Error('Check API Token requires an HTTP endpoint trigger');
     const authentication = ctx.authentication();

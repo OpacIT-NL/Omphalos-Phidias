@@ -57,7 +57,39 @@ test('Request API reveals a directly connected secret only for the outbound requ
   }, async () => {});
 
   assert.equal(request.options.body, JSON.stringify({ password }));
+  assert.equal(request.options.headers['Content-Type'], 'application/json');
   assert.deepEqual([...context.secretValues], [password]);
+});
+
+test('Request API preserves an explicit content type and includes a rejected response body in its error', async t => {
+  const definition = normalizeDefinition(require('../blocks/request_api'), 'request_api.js');
+  const originalFetch = global.fetch;
+  let request;
+  global.fetch = async (url, options) => {
+    request = { url, options };
+    return { ok: false, status: 400, text: async () => '{"error":"invalid payload"}' };
+  };
+  t.after(() => { global.fetch = originalFetch; });
+  const context = {
+    render: value => value,
+    values: new Map(),
+    vars: Object.create(null),
+    legacyValues: [],
+    secretValues: new Set(),
+    signal: new AbortController().signal
+  };
+
+  await assert.rejects(() => executeLegacy(definition, context, {
+    id: 'request',
+    options: { method_type: 'post', data_type: 'json' }
+  }, {
+    url: 'https://api.example.test/login',
+    headers: { 'content-type': 'application/vnd.api+json' },
+    body: { username: 'alice' }
+  }, async () => {}), /API request failed with HTTP 400: \{"error":"invalid payload"\}/);
+
+  assert.equal(request.options.headers['content-type'], 'application/vnd.api+json');
+  assert.equal(request.options.headers['Content-Type'], undefined);
 });
 
 test('Check Comparison reveals protected passwords for exact and string comparisons', async () => {

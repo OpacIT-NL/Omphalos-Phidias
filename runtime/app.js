@@ -257,6 +257,28 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
     .flatMap(workspace => workspace.blocks
       .filter(block => definitions.get(block.type)?.trigger === trigger)
       .map(block => ({ workspace, block })));
+  const emitterWorkspaces = (sourceWorkspace, details = {}) => {
+    const active = document.workspaces.filter(workspace => workspace.active);
+    if (details.restriction_type === 'all') return active;
+    if (details.restriction_type !== 'specific') return [sourceWorkspace];
+    const expected = String(details.search_value ?? '');
+    const property = { number: 'numberId', id: 'id', title: 'name', description: 'description' }[details.search_type];
+    return property ? active.filter(workspace => String(workspace[property] ?? '') === expected) : [];
+  };
+  const receiverNeedsHttpContext = (workspace, receiver) => {
+    const queue = [receiver.id], visited = new Set();
+    while (queue.length) {
+      const id = queue.shift();
+      if (visited.has(id)) continue;
+      visited.add(id);
+      const block = workspace.blocks.find(candidate => candidate.id === id);
+      if (definitions.get(block?.type)?.requiresHttpContext) return true;
+      for (const edge of workspace.connections) {
+        if (edge.from === id && (edge.kind || 'action') === 'action') queue.push(edge.to);
+      }
+    }
+    return false;
+  };
   const readCredential = async (nameOrId, types = null) => {
     const allowed = types == null ? null : (Array.isArray(types) ? types : [types]);
     const cacheKey = `${allowed?.join(',') || '*'}:${nameOrId}`;
@@ -497,10 +519,15 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
       return true;
     }
     context.emit = async (id, details = {}) => {
-      const workspaces = details.restriction_type === 'all' ? document.workspaces.filter(item => item.active) : [ws];
+      const workspaces = emitterWorkspaces(ws, details);
       const tasks = [];
       for (const targetWorkspace of workspaces) {
         for (const receiver of targetWorkspace.blocks.filter(block => ['receiver', 'receiver_8x'].includes(block.type))) {
+          const receiverID = connectedStaticValue(targetWorkspace, receiver, 'id');
+          if (receiverID.known && String(receiverID.value) !== String(id)) continue;
+          // Console, startup, interval, and cron events have no HTTP request. Do
+          // not let a shared emitter ID accidentally start a browser/API route.
+          if (!request && receiverNeedsHttpContext(targetWorkspace, receiver)) continue;
           tasks.push(run(targetWorkspace, receiver, request, response, {
             receiverID: id,
             legacyValues: details.values || [],
@@ -513,7 +540,8 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
           }));
         }
       }
-      await Promise.all(tasks);
+      const results = await Promise.allSettled(tasks);
+      for (const result of results) if (result.status === 'rejected') reportError(result.reason);
     };
     try {
       const executed = await executeBlock(trigger);
@@ -550,7 +578,10 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
       }
       if (!['emitter', 'emitter_8x'].includes(current?.type)) continue;
       const emitterID = connectedStaticValue(workspace, current, 'id');
-      const targetWorkspaces = current.options.restriction_type === 'all' ? document.workspaces.filter(item => item.active) : [workspace];
+      const searchValue = connectedStaticValue(workspace, current, 'search_value');
+      const targetWorkspaces = current.options.restriction_type === 'specific' && !searchValue.known
+        ? document.workspaces.filter(item => item.active)
+        : emitterWorkspaces(workspace, { ...current.options, search_value: searchValue.value });
       for (const targetWorkspace of targetWorkspaces) {
         for (const receiver of targetWorkspace.blocks.filter(block => ['receiver', 'receiver_8x'].includes(block.type))) {
           const receiverID = connectedStaticValue(targetWorkspace, receiver, 'id');

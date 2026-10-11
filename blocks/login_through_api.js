@@ -24,6 +24,7 @@ module.exports = {
     { id: 'error_message', name: 'Error Message', kind: 'value', types: ['text'] }
   ],
   fields: [],
+  requiresHttpContext: true,
   async execute(ctx, options, inputs = {}, setOutput) {
     if (!ctx.request) throw new Error('Login Through API requires an HTTP endpoint trigger');
     const body = credentials(ctx.request.body);

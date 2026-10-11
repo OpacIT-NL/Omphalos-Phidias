@@ -23,6 +23,7 @@ module.exports = {
     { key: 'body', label: 'Response body', type: 'text', default: 'Hello from Phidias' },
     { key: 'headers', label: 'Headers (JSON object)', type: 'text', default: '{}' }
   ],
+  requiresHttpContext: true,
   async execute(ctx, options, inputs = {}) {
     if (!ctx.response) throw new Error('HTTP response requires an HTTP endpoint trigger');
     if (ctx.response.writableEnded) throw new Error('Response already sent');
