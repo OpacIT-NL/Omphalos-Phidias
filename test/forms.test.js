@@ -54,6 +54,58 @@ test('choice blocks support list, object, and escaped JSON values', async () => 
   assert.match(longTextOutput.html, /<textarea[^>]+rows="8"[^>]*>&lt;safe&gt;<\/textarea>/);
 });
 
+test('Prefill Form from Object fills every form control and locks an ID field', async () => {
+  const form = createForm('edit_instance', { title: 'Edit instance' }, { path: '/iris/edit', headers: {} });
+  const text = require('../blocks/form_text_input');
+  const longText = require('../blocks/form_long_text_input');
+  const select = require('../blocks/form_select_list');
+  const option = require('../blocks/form_option_list');
+  const checkmarks = require('../blocks/form_checkmark_list');
+  const prefill = require('../blocks/prefill_form_from_object');
+  const apply = async (definition, options, inputs) => {
+    const output = {};
+    await definition.execute({}, options, inputs, (id, value) => { output[id] = value; });
+    return output.html;
+  };
+  let html = await apply(text, { input_type: 'Text', required: 'Yes' }, { form, field_name: 'id', label: 'ID', default_value: 'old-id' });
+  html = await apply(text, { input_type: 'Text', required: 'No' }, { form: html, field_name: 'name', label: 'Name', default_value: 'Old name' });
+  html = await apply(longText, { rows: 5, required: 'No' }, { form: html, field_name: 'notes', label: 'Notes', default_value: 'Old notes' });
+  html = await apply(select, { multiple: 'No', required: 'No' }, { form: html, field_name: 'environment', label: 'Environment', choices: ['rc', 'prod'], selected: 'rc' });
+  html = await apply(option, { required: 'No' }, { form: html, field_name: 'state', label: 'State', choices: ['online', 'offline'], selected: 'offline' });
+  html = await apply(checkmarks, {}, { form: html, field_name: 'roles', label: 'Roles', choices: ['admin', 'operator'], selected: 'operator' });
+
+  const result = prefill.prefillForm(html, JSON.stringify({
+    id: 'node-42', name: 'A "quoted" & safe', notes: '<updated>', environment: 'prod', state: 'online', roles: ['admin']
+  }));
+  assert.match(result, /name="id"[^>]*value="node-42"[^>]*readonly[^>]*aria-readonly="true"/);
+  assert.match(result, /name="name"[^>]*value="A &quot;quoted&quot; &amp; safe"/);
+  assert.match(result, /name="notes"[^>]*>&lt;updated&gt;<\/textarea>/);
+  assert.match(result, /<option value="prod" selected>/);
+  assert.doesNotMatch(result, /<option value="rc" selected>/);
+  assert.match(result, /type="radio" name="state" value="online" checked/);
+  assert.doesNotMatch(result, /type="radio" name="state" value="offline" checked/);
+  assert.match(result, /type="checkbox" name="roles\[\]" value="admin" checked/);
+  assert.doesNotMatch(result, /type="checkbox" name="roles\[\]" value="operator" checked/);
+});
+
+test('Prefill Form from Object keeps locked select IDs submitted and rejects invalid data', async () => {
+  const select = require('../blocks/form_select_list');
+  const prefill = require('../blocks/prefill_form_from_object');
+  const output = {};
+  await select.execute({}, { multiple: 'No', required: 'No' }, {
+    form: createForm('edit_select', {}, { path: '/edit', headers: {} }),
+    field_name: 'id', label: 'ID', choices: ['one', 'two'], selected: 'one'
+  }, (id, value) => { output[id] = value; });
+  const result = prefill.prefillForm(output.html, { id: 'two' });
+  assert.match(result, /<select[^>]*name="id"[^>]*disabled[^>]*aria-disabled="true"/);
+  assert.match(result, /<option value="two" selected>/);
+  assert.match(result, /<input type="hidden" name="id" value="two" data-phidias-locked-copy>/);
+  assert.match(prefill.prefillForm(output.html, [{ id: 'one' }]), /<option value="one" selected>/);
+  assert.throws(() => prefill.prefillForm(output.html, '["not-an-object"]'), /exactly one object/);
+  assert.throws(() => prefill.prefillForm(output.html, [{ id: 'one' }, { id: 'two' }]), /exactly one object/);
+  assert.throws(() => prefill.prefillForm('<p>not a form<\/p>', {}), /must contain a form/);
+});
+
 test('active Form Submit IDs must be valid and unique', () => {
   const { validate } = require('../runtime/validate');
   const definitions = loadDefinitions(path.resolve(__dirname, '../blocks'));

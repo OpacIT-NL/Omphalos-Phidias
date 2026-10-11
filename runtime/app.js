@@ -316,7 +316,7 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
     const runStartedAt = seed.runStartedAt || new Date().toISOString();
     const context = {
       vars: execution.vars, values: execution.values, evaluated: execution.evaluated,
-      request, response, env: process.env, signal, shared, appName: document.name, directory, logger, deployment, database: getDatabase, logDatabase: getLoggingDatabase,
+      request, response, env: process.env, signal, shared, appName: document.name, appRevision: document.revision, directory, logger, deployment, database: getDatabase, logDatabase: getLoggingDatabase,
       legacyValues: seed.legacyValues || [], runId, loggedInUser: seed.loggedInUser || 'svc_automation',
       forceConsoleLog: applicationConfig['force-console-input-log'], secretValues: new Set(), blockIDs: new Set(ws.blocks.map(block => block.id))
     };
