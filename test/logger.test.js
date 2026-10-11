@@ -129,3 +129,20 @@ test('server logs warnings, errors and debug traces without credential or query 
   assert.match(logs, /\[ERROR\] Request failed: GET \/api\/projects: Error: Simulated storage failure/);
   for (const secret of ['private-query', 'private-cookie', 'private-header', 'private-password-for-test', cookie.split('=')[1], session.csrfToken]) assert.ok(!logs.includes(secret));
 });
+
+test('nested null-prototype workflow objects render as ordinary objects', async t => {
+  const folder = await directory(t), output = capture();
+  const logger = createLogger({ level: 3, directory: folder, ...output, now: () => new Date('2026-10-11T22:15:38.382Z') });
+  const first = Object.assign(Object.create(null), { name: 'omphalos-lab' });
+  const second = Object.assign(Object.create(null), { name: 'lab-dmz' });
+  const circular = Object.create(null);
+  circular.name = 'circular'; circular.self = circular;
+  logger.info(['All registered systems', first, second, circular]);
+  const rendered = output.lines.join('');
+  assert.doesNotMatch(rendered, /\[Object: null prototype\]/);
+  assert.match(rendered, /\{ name: 'omphalos-lab' \}/);
+  assert.match(rendered, /\{ name: 'lab-dmz' \}/);
+  assert.match(rendered, /name: 'circular'/);
+  assert.match(rendered, /\[Circular/);
+  assert.equal(await fs.readFile(logger.filename, 'utf8'), rendered);
+});

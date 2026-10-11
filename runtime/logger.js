@@ -4,6 +4,29 @@ const path = require('node:path');
 const { format } = require('node:util');
 
 const LEVELS = Object.freeze({ critical: 0, error: 1, warning: 2, info: 3, debug: 4 });
+
+function normalizeLogValue(value, seen = new WeakMap()) {
+  if (!value || typeof value !== 'object') return value;
+  if (seen.has(value)) return seen.get(value);
+  if (value instanceof Error || value instanceof Date || value instanceof RegExp || value instanceof Map || value instanceof Set || value instanceof URL || Buffer.isBuffer(value) || ArrayBuffer.isView(value) || value instanceof ArrayBuffer) return value;
+  if (Array.isArray(value)) {
+    const result = new Array(value.length);
+    seen.set(value, result);
+    for (const key of Object.keys(value)) Object.defineProperty(result, key, { value: normalizeLogValue(value[key], seen), enumerable: true, configurable: true, writable: true });
+    return result;
+  }
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== null && prototype !== Object.prototype) return value;
+  const result = {};
+  seen.set(value, result);
+  for (const key of Reflect.ownKeys(value)) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (!descriptor?.enumerable) continue;
+    if (Object.hasOwn(descriptor, 'value')) descriptor.value = normalizeLogValue(descriptor.value, seen);
+    Object.defineProperty(result, key, descriptor);
+  }
+  return result;
+}
 function validateLogLevel(level, name = 'log-level') {
   if (!Number.isInteger(level) || level < 0 || level > 4) throw new Error(`config.json: ${name} must be an integer between 0 and 4`);
   return level;
@@ -28,7 +51,7 @@ function createLogger({ level = 3, fileLevel = level, directory = path.join(proc
   let filename = createLogFile(directory, now().toISOString().slice(0, 10));
   const makeLine = (name, values) => {
     const timestamp = now().toISOString();
-    const message = format(...values)
+    const message = format(...values.map(value => normalizeLogValue(value)))
       .replace(/\r\n?|\n/g, '\n')
       .replace(/[\x00-\x09\x0b-\x1f\x7f]/g, character => `\\u${character.charCodeAt(0).toString(16).padStart(4, '0')}`);
     const lines = message.split('\n');
