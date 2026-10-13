@@ -148,7 +148,7 @@ class WorkflowAuth {
 class MySQLWorkflowAuth {
   constructor(config, { cookieName = 'phidias_session' } = {}) {
     const mysql = require('mysql2/promise');
-    this.pool = mysql.createPool({ host: config.host, port: config.port, user: config.username, password: config.password, database: config.database, waitForConnections: true, connectionLimit: 5, queueLimit: 0 });
+    this.pool = mysql.createPool({ host: config.host, port: Number(config.port) || 3306, user: config.username, password: config.password, database: config.database, waitForConnections: true, connectionLimit: 5, queueLimit: 0, charset: 'utf8mb4' });
     this.cookieName = cookieName;
     this.pending = 0;
   }
@@ -161,7 +161,7 @@ class MySQLWorkflowAuth {
       for (const [key, limit] of keys) {
         const [rows] = await connection.query('SELECT attempts,expires_at FROM automation_login_limits WHERE `key` = ? FOR UPDATE', [key]);
         if (rows[0]?.attempts >= limit) throw authError('Too many sign-in attempts. Try again later.', 429, Math.ceil((rows[0].expires_at - now) / 1000));
-        await connection.query('INSERT INTO automation_login_limits (`key`,attempts,expires_at) VALUES (?,1,?) ON DUPLICATE KEY UPDATE attempts=attempts+1,expires_at=VALUES(expires_at)', [key, now + ATTEMPT_WINDOW_MS]);
+        await connection.query('INSERT INTO automation_login_limits (`key`,attempts,expires_at) VALUES (?,1,?) ON DUPLICATE KEY UPDATE attempts=attempts+1,expires_at=?', [key, now + ATTEMPT_WINDOW_MS, now + ATTEMPT_WINDOW_MS]);
       }
       await connection.commit();
     } catch (error) { try { await connection.rollback(); } catch {} throw error; } finally { connection.release(); }

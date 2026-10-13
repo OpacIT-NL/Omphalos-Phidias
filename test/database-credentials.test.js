@@ -2,6 +2,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { normalizeDefinition, executeLegacy } = require('../runtime/legacy');
+const { mysqlPoolOptions } = require('../runtime/app');
 
 const context = database => ({
   render: value => value,
@@ -29,17 +30,28 @@ test('Database SQL Query uses the application database pool and follows success 
   assert.deepEqual(failedBranches, ['erroraction']);
 });
 
+test('Database SQL Query returns MySQL write results without treating them as row lists', async () => {
+  const definition = normalizeDefinition(require('../blocks/database_query'), 'database_query.js');
+  const block = { id: 'write', options: { query: 'INSERT INTO events (name) VALUES (\'ready\')' } };
+  const result = { affectedRows: 1, insertId: 41, warningStatus: 0 };
+  const state = context(async () => ({ execute: async () => [result, undefined] }));
+  const branches = [];
+  await executeLegacy(definition, state, block, {}, async branch => { branches.push(branch); });
+  assert.equal(state.values.get('write:response'), result);
+  assert.deepEqual(branches, ['action']);
+});
+
 test('Send Query to Log Database uses only the logging database pool', async () => {
   const block = require('../blocks/send_query_to_log_database');
   const calls = [], outputs = {};
   const branch = await block.execute({
     database: async () => { throw new Error('application database must not be used'); },
-    logDatabase: async () => ({ execute: async query => { calls.push(query); return [[{ inserted: 1 }], []]; } }),
+    logDatabase: async () => ({ execute: async query => { calls.push(query); return [{ affectedRows: 1, insertId: 7, warningStatus: 0 }, undefined]; } }),
     signal: new AbortController().signal
   }, {}, { query: 'INSERT INTO traces VALUES (1)' }, (name, value) => { outputs[name] = value; });
   assert.equal(branch, 'action');
   assert.deepEqual(calls, ['INSERT INTO traces VALUES (1)']);
-  assert.deepEqual(outputs.response, [{ inserted: 1 }]);
+  assert.deepEqual(outputs.response, { affectedRows: 1, insertId: 7, warningStatus: 0 });
   assert.equal(outputs.errormsg, '');
 
   const failed = {};
@@ -48,7 +60,17 @@ test('Send Query to Log Database uses only the logging database pool', async () 
     signal: new AbortController().signal
   }, {}, { query: 'SELECT 1' }, (name, value) => { failed[name] = value; });
   assert.equal(failedBranch, 'erroraction');
+  assert.equal(failed.response, null);
   assert.equal(failed.errormsg, 'logging database offline');
+});
+
+test('application and logging database pools use MySQL 8 compatible connection options', () => {
+  const password = 'secret';
+  assert.deepEqual(mysqlPoolOptions({ host: 'db.internal', port: '3307', username: 'app', password, database: 'iris' }), {
+    host: 'db.internal', port: 3307, user: 'app', password, database: 'iris',
+    waitForConnections: true, connectionLimit: 10, queueLimit: 0, charset: 'utf8mb4'
+  });
+  assert.equal(mysqlPoolOptions({ host: 'db', port: '', username: 'app', password, database: 'iris' }).port, 3306);
 });
 
 test('Database SQL Bulk Query accepts lists and text, preserves order, and reports partial failures', async () => {
@@ -60,13 +82,18 @@ test('Database SQL Bulk Query accepts lists and text, preserves order, and repor
 
   const calls = [], outputs = {}, released = [];
   const connection = {
-    async execute(query) { calls.push(query); return [[{ query }], []]; },
+    async execute(query) {
+      calls.push(query);
+      return query === 'INSERT ONE'
+        ? [{ affectedRows: 1, insertId: 9, warningStatus: 0 }, undefined]
+        : [[{ query }], []];
+    },
     release() { released.push(true); }
   };
-  const branch = await block.execute({ database: async () => ({ getConnection: async () => connection }), signal: new AbortController().signal }, {}, { queries: ['SELECT 1', 'SELECT 2'] }, (name, value) => { outputs[name] = value; });
+  const branch = await block.execute({ database: async () => ({ getConnection: async () => connection }), signal: new AbortController().signal }, {}, { queries: ['SELECT 1', 'INSERT ONE'] }, (name, value) => { outputs[name] = value; });
   assert.equal(branch, 'success');
-  assert.deepEqual(calls, ['SELECT 1', 'SELECT 2']);
-  assert.deepEqual(outputs.responses, [[{ query: 'SELECT 1' }], [{ query: 'SELECT 2' }]]);
+  assert.deepEqual(calls, ['SELECT 1', 'INSERT ONE']);
+  assert.deepEqual(outputs.responses, [[{ query: 'SELECT 1' }], { affectedRows: 1, insertId: 9, warningStatus: 0 }]);
   assert.equal(outputs.completed_count, 2); assert.equal(outputs.total_count, 2);
   assert.equal(outputs.failed_query_number, 0); assert.equal(outputs.error_message, '');
   assert.equal(released.length, 1);

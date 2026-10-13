@@ -10,6 +10,20 @@ const { validate } = require('./validate');
 const { normalizeDefinition, executeLegacy } = require('./legacy');
 const { parseCron, matchesCron } = require('./cron');
 
+function mysqlPoolOptions(credentials, connectionLimit = 10) {
+  return {
+    host: credentials.host,
+    port: Number(credentials.port) || 3306,
+    user: credentials.username,
+    password: credentials.password,
+    database: credentials.database,
+    waitForConnections: true,
+    connectionLimit,
+    queueLimit: 0,
+    charset: 'utf8mb4'
+  };
+}
+
 function loadDefinitions(directory) {
   return new Map(fs.readdirSync(directory).filter(name => /^[a-z0-9_-]+\.js$/.test(name)).map(name => {
     const filename = require.resolve(path.join(directory, name));
@@ -300,7 +314,7 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
     const credentials = await readCredential(credentialId, 'mysql');
     if (!credentials) throw new Error(`The selected ${label} database credential set was not found`);
     const mysql = require('mysql2/promise');
-    const pool = mysql.createPool({ host: credentials.host, port: credentials.port, user: credentials.username, password: credentials.password, database: credentials.database, waitForConnections: true, connectionLimit: 10, queueLimit: 0 });
+    const pool = mysql.createPool(mysqlPoolOptions(credentials));
     databasePools.set(credentialId, pool);
     return pool;
   };
@@ -740,4 +754,4 @@ if (require.main === module) {
   launch().catch(error => { logger.critical('Could not start application: %s', error?.stack || error); process.exitCode = 1; });
   for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => { stop(signal); });
 }
-module.exports = { createApp, loadDefinitions, render, readBody, findRoute, normalizeRoutePath, loadAppConfig, validateAppConfig, bootstrapAuthentication, parseFormBody, safeFormReturnPath, isSameOriginFormRequest };
+module.exports = { createApp, loadDefinitions, render, readBody, findRoute, normalizeRoutePath, loadAppConfig, validateAppConfig, bootstrapAuthentication, parseFormBody, safeFormReturnPath, isSameOriginFormRequest, mysqlPoolOptions };
