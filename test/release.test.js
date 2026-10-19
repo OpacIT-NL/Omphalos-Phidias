@@ -16,7 +16,7 @@ test('release ZIP excludes local config/data and preserves installed config when
   const source = path.join(temporary, 'source'), installed = path.join(temporary, 'installed');
   await fs.mkdir(source); await fs.mkdir(installed);
   const root = path.resolve(__dirname, '..');
-  for (const file of ['server.js', 'package.json', 'package-lock.json', 'README.md', 'LICENSE', '.env.example', 'blocks', 'lib', 'public', 'runtime', 'scripts', 'test']) await fs.cp(path.join(root, file), path.join(source, file), { recursive: true });
+  for (const file of ['server.js', 'package.json', 'package-lock.json', 'README.md', 'LICENSE', '.env.example', 'blocks', 'defaults', 'lib', 'public', 'runtime', 'scripts', 'test']) await fs.cp(path.join(root, file), path.join(source, file), { recursive: true });
   const personalConfig = '{"port":8123,"host":"0.0.0.0","log-level":1}\n';
   await fs.writeFile(path.join(source, 'config.json'), personalConfig);
   for (const folder of ['data', 'projects', 'log', 'logs', 'node_modules']) {
@@ -39,6 +39,7 @@ test('release ZIP excludes local config/data and preserves installed config when
   }
   assert.equal(archive.readUInt32LE(offset), 0x02014b50);
   assert.ok(files.has('server.js')); assert.ok(files.has('lib/console.js'));
+  for (const name of ['login.html', 'register.html', 'login.css']) assert.ok(files.has(`defaults/templates/${name}`));
   assert.ok(!files.has('config.json'));
   assert.ok([...files.keys()].every(file => !/^(data|projects|log|logs|node_modules)\//.test(file)));
   assert.equal(JSON.parse(files.get('package.json')).version, '0.0.1');
