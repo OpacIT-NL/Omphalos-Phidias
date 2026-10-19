@@ -53,7 +53,7 @@ test('project creation, atomic saves, conflicts, reload, and downloadable ZIP', 
   const library = await (await call(endpoint + '/blocks')).json();
   const replyFormat = library.find(block => block.type === 'respond').fields.find(field => field.key === 'format');
   assert.equal(replyFormat.default, 'JSON'); assert.ok(replyFormat.choices.includes('HTML'));
-  for (const file of ['app.js', 'favicon.ico', 'workspaces.json', 'html', 'blocks/api_endpoint.js', 'blocks/get_sub_endpoint_by_name.js', 'blocks/linux_command.js', 'blocks/update_app.js', 'validate.js', 'cron.js', 'auth.js', 'logger.js', 'package.json']) await fs.access(path.join(directory, project.id, file));
+  for (const file of ['app.js', 'favicon.ico', 'workspaces.json', 'html/login.html', 'html/register.html', 'html/login.css', 'blocks/api_endpoint.js', 'blocks/get_sub_endpoint_by_name.js', 'blocks/linux_command.js', 'blocks/update_app.js', 'validate.js', 'cron.js', 'auth.js', 'logger.js', 'package.json']) await fs.access(path.join(directory, project.id, file));
   assert.equal(project.appConfig, null);
   assert.deepEqual(project.workspaceCategories, []);
   assert.equal(project.workspaces[0].numberId, 1);
@@ -88,6 +88,7 @@ test('project creation, atomic saves, conflicts, reload, and downloadable ZIP', 
   assert.equal(exportedProject.workspaces[0].numberId, 1); assert.deepEqual(exportedProject.workspaces[0].blocks.map(block => block.numberId), [1, 2]);
   assert.ok(extracted.has('auth.js'));
   assert.ok(extracted.has('logger.js'));
+  for (const name of ['login.html', 'register.html', 'login.css']) assert.ok(extracted.has(`html/${name}`));
   assert.equal(extracted.get('application.key').length, 32);
   assert.deepEqual(extracted.get('favicon.ico').subarray(0, 4), Buffer.from([0, 0, 1, 0]));
   assert.equal(JSON.parse(extracted.get('package.json')).dependencies.argon2, '^0.45.1');
@@ -148,6 +149,8 @@ test('projects import from uploaded ZIP files and same-origin repository URLs', 
   assert.equal(urlProject.workspaces[0].blocks[1].options.body, 'Imported response');
 
   const { zip } = require('../lib/zip');
+  const legacyProject = await store.importArchive(zip([['workspaces.json', JSON.stringify(saved)]]), { name: 'Legacy import without authentication templates' });
+  assert.deepEqual(await store.templates(legacyProject.id), ['login.css', 'login.html', 'register.html']);
   await assert.rejects(() => store.importArchive(zip([['../workspaces.json', JSON.stringify(saved)]])), /unsafe path/);
 });
 
@@ -322,12 +325,12 @@ test('HTML templates are edited through the API, included in builds, and restore
   const { call } = await fixture(t);
   const project = await (await call('/api/projects', 'POST', { name: 'Templates' })).json();
   const endpoint = `/api/projects/${project.id}`;
-  assert.deepEqual(await (await call(endpoint + '/templates')).json(), []);
+  assert.deepEqual(await (await call(endpoint + '/templates')).json(), ['login.css', 'login.html', 'register.html']);
 
   let response = await call(endpoint + '/templates/page.html', 'PUT', { contents: '<h1>%title%</h1>', previousName: null, revision: 1 });
   assert.equal(response.status, 200);
   let saved = await response.json(); assert.equal(saved.project.revision, 2);
-  assert.deepEqual(await (await call(endpoint + '/templates')).json(), ['page.html']);
+  assert.deepEqual(await (await call(endpoint + '/templates')).json(), ['login.css', 'login.html', 'page.html', 'register.html']);
   assert.deepEqual(await (await call(endpoint + '/templates/page.html')).json(), { name: 'page.html', contents: '<h1>%title%</h1>', revision: 2 });
   let archive = zipEntries(Buffer.from(await (await call('/repo/TemplatesRC/latest.zip')).arrayBuffer()));
   assert.equal(archive.get('html/page.html').toString(), '<h1>%title%</h1>');
@@ -344,12 +347,12 @@ test('HTML templates are edited through the API, included in builds, and restore
   assert.equal((await call(endpoint + '/templates/home.html', 'PUT', { contents: 'duplicate', previousName: null, revision: 5 })).status, 409);
   response = await call(endpoint + '/templates/home.html', 'DELETE', { revision: 5 });
   assert.equal(response.status, 200); assert.equal((await response.json()).revision, 6);
-  assert.deepEqual(await (await call(endpoint + '/templates')).json(), []);
+  assert.deepEqual(await (await call(endpoint + '/templates')).json(), ['login.css', 'login.html', 'register.html']);
   archive = zipEntries(Buffer.from(await (await call('/repo/TemplatesRC/latest.zip')).arrayBuffer()));
   assert.equal(archive.has('html/home.html'), false);
   response = await call(endpoint + '/templates/styles.css', 'PUT', { contents: 'body { color: purple; }', previousName: null, revision: 6 });
   assert.equal(response.status, 200); assert.equal((await response.json()).project.revision, 7);
-  assert.deepEqual(await (await call(endpoint + '/templates')).json(), ['styles.css']);
+  assert.deepEqual(await (await call(endpoint + '/templates')).json(), ['login.css', 'login.html', 'register.html', 'styles.css']);
   archive = zipEntries(Buffer.from(await (await call('/repo/TemplatesRC/latest.zip')).arrayBuffer()));
   assert.equal(archive.get('html/styles.css').toString(), 'body { color: purple; }');
   const updatedCSS = 'body { color: purple; }\n\n.dashboard { display: grid; }';
@@ -366,6 +369,15 @@ test('HTML templates are edited through the API, included in builds, and restore
   assert.equal((await (await call(endpoint + '/templates/styles.css')).json()).contents, largerCSS);
   archive = zipEntries(Buffer.from(await (await call('/repo/TemplatesRC/latest.zip')).arrayBuffer()));
   assert.equal(archive.get('html/styles.css').toString(), largerCSS);
+
+  const customLogin = '<!doctype html><style>%login_css%</style><h1>Custom %app_name%</h1><form action="%action%"><input name="username" value="%username%"><p>%error%</p></form>';
+  response = await call(endpoint + '/templates/login.html', 'PUT', { contents: customLogin, previousName: 'login.html', revision: 9 });
+  assert.equal(response.status, 200); saved = await response.json(); assert.equal(saved.project.revision, 10);
+  assert.equal((await (await call(endpoint + '/templates/login.html')).json()).contents, customLogin);
+  archive = zipEntries(Buffer.from(await (await call('/repo/TemplatesRC/latest.zip')).arrayBuffer()));
+  assert.equal(archive.get('html/login.html').toString(), customLogin);
+  assert.equal((await call(endpoint + '/templates/login.html', 'DELETE', { revision: 10 })).status, 400);
+  assert.equal((await call(endpoint + '/templates/renamed.html', 'PUT', { contents: customLogin, previousName: 'login.html', revision: 10 })).status, 400);
 });
 
 test('password login, protected routes, CSRF, logout, malformed requests and traversal', async t => {

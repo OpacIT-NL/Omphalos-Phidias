@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>%app_name% · Register</title>
+  <link rel="icon" href="/favicon.ico" sizes="any">
+  <style>%login_css%</style>
+</head>
+<body>
+  <main class="auth-card auth-card--register">
+    <div class="auth-brand">
+      <span class="auth-mark">P</span>
+      <span>
+        <strong>OpacIT Omphalos</strong>
+        <small>Phidias · %app_name%</small>
+      </span>
+    </div>
+    <h1>Create account</h1>
+    <p class="auth-error" role="alert">%error%</p>
+    <form method="post" action="%action%">
+      <label class="auth-field">
+        Username
+        <input name="username" value="%username%" autocomplete="username" minlength="3" maxlength="64" required autofocus>
+      </label>
+      <label class="auth-field">
+        Email
+        <input name="email" type="email" value="%email%" autocomplete="email" maxlength="254" required>
+      </label>
+      <label class="auth-field">
+        Password
+        <input name="password" type="password" autocomplete="new-password" minlength="12" required>
+      </label>
+      <label class="auth-field">
+        Confirm password
+        <input name="confirm_password" type="password" autocomplete="new-password" minlength="12" required>
+      </label>
+      <label class="auth-consent">
+        <input name="accept_terms" type="checkbox" value="yes" required>
+        <span>I accept the <a href="/tos" target="_blank" rel="noopener">terms and conditions</a>.</span>
+      </label>
+      <label class="auth-consent">
+        <input name="accept_privacy" type="checkbox" value="yes" required>
+        <span>I accept the <a href="/privacy" target="_blank" rel="noopener">privacy policy</a>.</span>
+      </label>
+      <button type="submit">Create account</button>
+    </form>
+  </main>
+</body>
+</html>

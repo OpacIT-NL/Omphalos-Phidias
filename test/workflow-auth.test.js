@@ -12,6 +12,7 @@ const { createApp, loadDefinitions } = require('../runtime/app');
 const node = (id, type, options) => ({ id, type, x: 0, y: 0, options });
 const edge = (id, from, output, to, input = 'action', kind = 'action') => ({ id, from, output, to, input, kind });
 const reply = (id, status, format, body) => node(id, 'respond', { status, format, body, headers: '{}' });
+const seedAuthTemplates = directory => fs.cp(path.resolve(__dirname, '../defaults/templates'), path.join(directory, 'html'), { recursive: true });
 
 test('workflow sessions renew while active instead of expiring during a visit', async t => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'phidias-workflow-session-'));
@@ -56,6 +57,7 @@ test('authentication blocks expose no per-block SQLite path setting or connector
 test('workflow browser sessions and API bearer tokens use a builder-compatible auth database', async t => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'phidias-workflow-auth-'));
   const database = path.join(directory, 'builder-auth.sqlite');
+  await seedAuthTemplates(directory);
   const builderAuth = new Auth(database);
   await builderAuth.createUser('alice', 'a-secure-test-password');
   builderAuth.close();
@@ -231,6 +233,7 @@ test('workflow browser sessions and API bearer tokens use a builder-compatible a
 test('login blocks enforce the project and RC or Prod identity packaged in config.json', async t => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'phidias-workflow-acl-'));
   const database = path.join(directory, 'auth.sqlite'), projectId = crypto.randomUUID();
+  await seedAuthTemplates(directory);
   const auth = new Auth(database);
   await auth.createUser('admin', 'admin-secure-password');
   await auth.createUser('rc-user', 'rc-user-secure-password');

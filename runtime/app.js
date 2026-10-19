@@ -237,7 +237,7 @@ function snapshotLogValue(value, seen = new WeakMap(), location = '$', depth = 0
   }
   return result;
 }
-function createApp({ directory = __dirname, document, definitions, onError, onControl = null, logger = null, clock = () => new Date(), stdin = process.stdin } = {}) {
+function createApp({ directory = __dirname, document, definitions, onError, onControl = null, logger = null, clock = () => new Date(), stdin = process.stdin, databaseProvider = null } = {}) {
   const reportError = onError || (error => {
     const context = error?.workflowContext;
     if (context && logger) {
@@ -259,10 +259,11 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
   const applicationConfig = fs.existsSync(configFile) ? validateAppConfig(JSON.parse(fs.readFileSync(configFile, 'utf8'))) : DEFAULT_APP_CONFIG;
   const deployment = Object.freeze({ projectId: applicationConfig['project-id'] || null, channel: applicationConfig['release-channel'] || null, updateUrl: applicationConfig['update-url'] || null });
   const cookieName = authenticationCookieName(deployment, document.name);
+  const localCookieName = cookieName.replace(/^phidias_session/, 'phidias_local_session');
   validate(document, definitions);
   const controller = new AbortController(), timers = [], stdinListeners = [], activeRuns = new Set(), routes = [], formRoutes = new Map(), authenticationStores = new Map();
   const shared = Object.create(null);
-  let started = false, stdinInterface = null, controlRequested = null;
+  let started = false, stdinInterface = null, controlRequested = null, localAuthenticationStore = null, localAuthenticationInitialization = null;
   const databasePools = new Map();
   const credentialCache = new Map();
   const workspaceIdentity = workspace => ({ id: workspace.id, numberId: workspace.numberId, name: workspace.name });
@@ -318,7 +319,9 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
     databasePools.set(credentialId, pool);
     return pool;
   };
-  const getDatabase = () => getConfiguredDatabase(applicationConfig.database, 'application');
+  const getDatabase = typeof databaseProvider === 'function'
+    ? databaseProvider
+    : () => getConfiguredDatabase(applicationConfig.database, 'application');
   const getLoggingDatabase = () => getConfiguredDatabase(applicationConfig['logging-database'], 'logging');
   for (const definition of definitions.values()) {
     if (definition.legacy && typeof definition.source.init === 'function') definition.source.init(shared);
@@ -370,6 +373,16 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
         authenticationStores.set(resolved, applicationConfig.auth.provider === 'mysql' ? new MySQLWorkflowAuth(applicationConfig.auth.mysql, { cookieName }) : new WorkflowAuth(resolved, { cookieName }));
       }
       return authenticationStores.get(resolved);
+    };
+    context.localAuthentication = async () => {
+      if (localAuthenticationStore) return localAuthenticationStore;
+      if (!localAuthenticationInitialization) {
+        const { LocalDatabaseAuth } = require('./local-auth');
+        localAuthenticationInitialization = Promise.resolve(getDatabase())
+          .then(database => (localAuthenticationStore = new LocalDatabaseAuth(database, { cookieName: localCookieName })))
+          .finally(() => { localAuthenticationInitialization = null; });
+      }
+      return localAuthenticationInitialization;
     };
     const runIdListeners = applicationListeners('run_id_triggered');
     if (newRunId && ws.logAllRunsToBlock && runIdListeners.length && !seed.suppressRunIdTrigger) {
@@ -586,7 +599,7 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
       if (visited.has(visitKey)) continue;
       visited.add(visitKey);
       const current = workspace.blocks.find(block => block.id === id);
-      if (current?.type === 'display_login') return { workspace, block: current };
+      if (['display_login', 'login_local', 'register_local_account'].includes(current?.type)) return { workspace, block: current };
       for (const edge of workspace.connections) {
         if (edge.from === id && (edge.kind || 'action') === 'action') queue.push({ workspace, id: edge.to });
       }
@@ -715,6 +728,9 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
       stdinInterface?.close();
       await Promise.allSettled([...authenticationStores.values()].map(authentication => authentication.close()));
       authenticationStores.clear();
+      await Promise.resolve(localAuthenticationInitialization).catch(() => {});
+      await Promise.resolve(localAuthenticationStore?.close());
+      localAuthenticationStore = null;
       await Promise.allSettled([...databasePools.values()].map(pool => pool.end()));
       databasePools.clear();
     }

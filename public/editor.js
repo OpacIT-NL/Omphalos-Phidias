@@ -89,6 +89,15 @@ function clearSelection(clearPending = false) {
   selectedBlocks.clear(); selectedEdge = null;
   if (clearPending) pending = null;
 }
+function resetWorkspaceTabs() {
+  openWorkspaceIDs.clear(); workspaceID = null; clearSelection(true);
+}
+function reconcileWorkspaceTabs() {
+  const available = new Set((project?.workspaces || []).map(workspace => workspace.id));
+  for (const id of openWorkspaceIDs) if (!available.has(id)) openWorkspaceIDs.delete(id);
+  if (!openWorkspaceIDs.has(workspaceID)) workspaceID = (project?.workspaces || []).find(workspace => openWorkspaceIDs.has(workspace.id))?.id || null;
+  clearSelection(true);
+}
 function selectBlock(id, additive = false) {
   if (!additive) selectedBlocks.clear();
   if (additive && selectedBlocks.has(id)) selectedBlocks.delete(id);
@@ -198,9 +207,8 @@ async function openProject(id) {
   if (saving) await saving;
   if (dirty && !confirm('Discard unsaved changes and open another project?')) return;
   const [document, library] = await Promise.all([api(`/api/projects/${id}`), api(`/api/projects/${id}/blocks`)]);
-  project = document; definitions = library; workspaceID = document.workspaces[0]?.id || null;
-  openWorkspaceIDs.clear(); document.workspaces.forEach(workspace => openWorkspaceIDs.add(workspace.id));
-  dirty = false; generation = 0; clearSelection(true); view = { x: 0, y: 60, zoom: 1 };
+  project = document; definitions = library; resetWorkspaceTabs();
+  dirty = false; generation = 0; view = { x: 0, y: 60, zoom: 1 };
   $('#save-state').textContent = 'Saved to server'; setProjectControls(true);
   $('#home-screen').hidden = true; $('#editor').hidden = false;
   $('#workspace-sidebar').classList.remove('empty'); $('.sidebar-empty').hidden = true; $('.sidebar-project').hidden = false; $('[data-home]').classList.remove('active');
@@ -212,7 +220,7 @@ async function createProject() {
   if (dirty && !confirm('Discard unsaved changes and create a project?')) return;
   const created = await api('/api/projects', { method: 'POST', body: JSON.stringify(values) });
   dirty = false; await refreshProjects(); await openProject(created.id);
-  toast('Project created. Right-click the canvas to add a block.');
+  toast('Project created. Select a workspace to start building.');
 }
 function chooseProjectZIP() {
   return new Promise(resolve => {
@@ -550,11 +558,10 @@ async function versionAction(button) {
   if (action === 'restore') {
     if (!confirm(`Restore revision ${revision}? It will be saved as a new RC revision.`)) return;
     const restored = await api(`/api/projects/${project.id}/versions/${revision}/restore`, { method: 'POST', body: JSON.stringify({ revision: project.revision }) });
-    project = restored; workspaceID = restored.workspaces[0]?.id || null;
-    openWorkspaceIDs.clear(); restored.workspaces.forEach(workspace => openWorkspaceIDs.add(workspace.id));
-    dirty = false; generation = 0; clearSelection(true); view = { x: 0, y: 60, zoom: 1 };
+    project = restored; reconcileWorkspaceTabs();
+    dirty = false; generation = 0; view = { x: 0, y: 60, zoom: 1 };
     $('#save-state').textContent = 'Saved to server'; $('#version-dialog').close();
-    await refreshProjects(); setProjectControls(true); render(); requestAnimationFrame(fit);
+    await refreshProjects(); setProjectControls(true); render(); if (workspaceID) requestAnimationFrame(fit);
     toast(`Revision ${revision} restored as revision ${restored.revision}.`);
   }
 }
@@ -562,9 +569,10 @@ function renderTemplateList() {
   $('#template-list').innerHTML = templateNames.length ? templateNames.map(name => `<button type="button" data-template-name="${escapeHTML(name)}" class="${name === templateOriginalName ? 'active' : ''}"><span>◇</span><strong>${escapeHTML(name)}</strong></button>`).join('') : '<p>No templates yet</p>';
 }
 function setTemplateState(message = '') {
+  const requiredAuthenticationTemplate = ['login.html', 'register.html', 'login.css'].includes(templateOriginalName);
   $('#template-state').textContent = message || (templateDirty ? 'Unsaved template changes' : templateOriginalName ? 'Saved' : '');
   $('#template-save').disabled = !templateDirty;
-  $('#template-delete').disabled = !templateOriginalName;
+  $('#template-delete').disabled = !templateOriginalName || requiredAuthenticationTemplate;
 }
 function clearTemplateEditor() {
   templateOriginalName = null; templateDirty = false;
@@ -586,7 +594,7 @@ async function selectTemplate(name, force = false) {
   if (template.revision !== expectedRevision) throw new Error('The template response belongs to an older project revision. Reopen the template editor.');
   templateOriginalName = template.name; templateDirty = false;
   rememberTemplateSelection(template.name);
-  $('#template-name').disabled = false; $('#template-contents').disabled = false;
+  $('#template-name').disabled = ['login.html', 'register.html', 'login.css'].includes(template.name); $('#template-contents').disabled = false;
   $('#template-name').value = template.name; $('#template-contents').value = template.contents;
   setTemplateState(); renderTemplateList();
 }
@@ -692,7 +700,11 @@ function optionEditor(field, value) {
 function portColor(port) { return typeColors[port.kind === 'action' ? 'action' : (port.types?.[0] || 'unspecified')] || typeColors.unspecified; }
 function renderGraph() {
   const workspace = ws();
-  $('#canvas-empty').hidden = !workspace || workspace.blocks.length > 0;
+  const empty = $('#canvas-empty');
+  empty.hidden = Boolean(workspace?.blocks.length);
+  empty.querySelector('strong').textContent = workspace ? 'This workspace is empty' : 'No workspace open';
+  empty.querySelector('small').textContent = workspace ? 'Right-click anywhere to add a block' : 'Select a workspace from the sidebar to open it';
+  empty.querySelector('button').hidden = !workspace;
   $('#nodes').innerHTML = (workspace?.blocks || []).map(block => {
     const definition = def(block.type) || { name: block.type, category: 'Unknown', description: 'Unknown block', fields: [], outputs: [], inputPorts: [], outputPorts: [] };
     const inputs = (definition.inputPorts || []).filter(port => !port.hidden);
@@ -1161,9 +1173,8 @@ $('#workspace-context-delete').onclick = () => {
   if (project.workspaces.length === 1) { closeContextMenu(); toast('A project must keep at least one workspace.', true); return; }
   if (!confirm('Delete workspace "' + workspace.name + '" and all of its blocks and wires?')) return;
   const index = project.workspaces.indexOf(workspace);
-  project.workspaces.splice(index, 1); openWorkspaceIDs.delete(workspace.id);
-  if (workspaceID === workspace.id) { workspaceID = project.workspaces[Math.min(index, project.workspaces.length - 1)].id; openWorkspaceIDs.add(workspaceID); }
-  closeContextMenu(); clearSelection(true); markDirty(); render(); requestAnimationFrame(fit);
+  project.workspaces.splice(index, 1); openWorkspaceIDs.delete(workspace.id); reconcileWorkspaceTabs();
+  closeContextMenu(); markDirty(); render(); if (workspaceID) requestAnimationFrame(fit);
   toast('Deleted workspace ' + workspace.name + '.');
 };
 async function addWorkspace(categoryId = '') {
