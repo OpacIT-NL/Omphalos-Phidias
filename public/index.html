@@ -6,6 +6,7 @@
   <title>OpacIT Omphalos Phidias</title>
   <link rel="icon" href="/favicon.ico" sizes="any">
   <link rel="stylesheet" href="/style.css?v={{APP_VERSION}}">
+  <script src="/editor-clipboard.js?v={{APP_VERSION}}" defer></script>
   <script src="/editor.js?v={{APP_VERSION}}" defer></script>
 </head>
 <body>
@@ -73,7 +74,7 @@
             <div id="world"><svg id="wires" width="1" height="1" aria-label="Workflow connections"></svg><div id="nodes"></div></div><div id="selection-box" class="selection-box" hidden></div>
             <div id="canvas-empty" class="canvas-empty" hidden><span>◇</span><strong>This workspace is empty</strong><small>Right-click anywhere to add a block</small><button id="empty-add-block" class="primary">Add block</button></div>
           </div>
-          <div class="canvas-hint" id="hint">Ctrl/Shift-click or Shift-drag to select · Ctrl+C/Ctrl+V to copy and paste · Right-click to add a block</div>
+          <div class="canvas-hint" id="hint">Ctrl/Shift-click or Shift-drag to select · Ctrl+C/Ctrl+V pastes at the mouse · Right-click to add a block</div>
           <div class="canvas-controls" aria-label="Canvas controls"><button id="zoom-in" aria-label="Zoom in">＋</button><button id="zoom-out" aria-label="Zoom out">−</button><button id="fit" aria-label="Fit view">⌗</button><button id="reset-view">100%</button></div>
         </div>
       </main>

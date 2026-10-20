@@ -6,7 +6,7 @@ const initials = name => String(name || 'Project').split(/[\s_-]+/).filter(Boole
 let project = null, projects = [], definitions = [], workspaceID = null, selectedEdge = null, pending = null;
 let csrfToken = '', dirty = false, generation = 0, saving = null, view = { x: 0, y: 60, zoom: 1 }, toastTimer;
 const selectedBlocks = new Set(), openWorkspaceIDs = new Set();
-let blockClipboard = null, workspaceClipboard = null, clipboardKind = null, pasteSequence = 0, workspaceContextID = null, draggedWorkspaceID = null, draggedWorkspaceCategoryID = null;
+let blockClipboard = null, workspaceClipboard = null, clipboardKind = null, workspaceContextID = null, draggedWorkspaceID = null, draggedWorkspaceCategoryID = null;
 let templateNames = [], templateOriginalName = null, templateDirty = false;
 let sessionPermissions = {}, accessData = null, accessSelection = null;
 let databaseCredentials = [];
@@ -16,6 +16,7 @@ let webConsoleState = null, webConsolePolling = false;
 let pickerWorldPosition = null;
 let geometryFrame = 0;
 let portDrag = null, suppressPortClick = false;
+let lastCanvasPointer = null;
 const observedNodeSizes = new WeakMap();
 const nodeResizeObserver = new ResizeObserver(entries => {
   for (const entry of entries) {
@@ -131,14 +132,17 @@ function pasteSnapshot(snapshot, offsetX, offsetY) {
 function copySelection() {
   const snapshot = selectionSnapshot();
   if (!snapshot) return false;
-  blockClipboard = snapshot; clipboardKind = 'blocks'; pasteSequence = 0;
+  blockClipboard = snapshot; clipboardKind = 'blocks';
   toast('Copied ' + snapshot.blocks.length + ' block' + (snapshot.blocks.length === 1 ? '' : 's') + ' and ' + snapshot.connections.length + ' wire' + (snapshot.connections.length === 1 ? '' : 's') + '.');
   return true;
 }
 function pasteSelection() {
   if (clipboardKind !== 'blocks' || !blockClipboard || !ws()) return false;
-  pasteSequence += 1;
-  const count = pasteSnapshot(blockClipboard, pasteSequence * 40, pasteSequence * 40);
+  const viewport = $('#viewport'), rectangle = viewport.getBoundingClientRect();
+  const pointer = lastCanvasPointer || { clientX: rectangle.left + rectangle.width / 2, clientY: rectangle.top + rectangle.height / 2 };
+  const target = PhidiasClipboard.clientToWorld(pointer, rectangle, view);
+  const offset = PhidiasClipboard.pasteOffset(blockClipboard.blocks, target);
+  const count = pasteSnapshot(blockClipboard, offset.x, offset.y);
   if (count) toast('Pasted ' + count + ' block' + (count === 1 ? '' : 's') + '.');
   return count > 0;
 }
@@ -970,6 +974,9 @@ $('#viewport').addEventListener('click', event => {
   if (output || input) clickPort(output || input);
   else if (edge) { selectedBlocks.clear(); selectedEdge = edge.dataset.edge; renderGraph(); }
 });
+const rememberCanvasPointer = event => { lastCanvasPointer = { clientX: event.clientX, clientY: event.clientY }; };
+$('#viewport').addEventListener('pointermove', rememberCanvasPointer);
+$('#viewport').addEventListener('pointerdown', rememberCanvasPointer);
 function startMarqueeSelection(event) {
   const viewport = $('#viewport'), box = $('#selection-box'), viewportRect = viewport.getBoundingClientRect();
   const origin = { x: event.clientX, y: event.clientY }, existing = new Set(selectedBlocks);
