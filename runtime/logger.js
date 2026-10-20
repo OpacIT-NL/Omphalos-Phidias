@@ -49,6 +49,7 @@ function createLogger({ level = 3, fileLevel = level, directory = path.join(proc
   validateLogLevel(level);
   validateLogLevel(fileLevel, 'file-log-level');
   let filename = createLogFile(directory, now().toISOString().slice(0, 10));
+  const subscribers = new Set(), recent = [];
   const makeLine = (name, values) => {
     const timestamp = now().toISOString();
     const message = format(...values.map(value => normalizeLogValue(value)))
@@ -64,16 +65,28 @@ function createLogger({ level = 3, fileLevel = level, directory = path.join(proc
     try { fs.appendFileSync(filename, line, { encoding: 'utf8', mode: 0o600 }); }
     catch (error) { stderr.write(`${timestamp} [CRITICAL] Cannot write log file (${error.code || 'unknown error'}).\n`); }
   };
+  const publish = (name, rendered) => {
+    const entry = Object.freeze({ level: name, timestamp: rendered.timestamp, line: rendered.line.trimEnd() });
+    recent.push(entry);
+    if (recent.length > 500) recent.splice(0, recent.length - 500);
+    for (const subscriber of subscribers) {
+      try { subscriber(entry); } catch {}
+    }
+  };
   function write(name, values) {
     const severity = LEVELS[name];
     if (severity > level && severity > fileLevel) return;
     const rendered = makeLine(name, values);
-    if (severity <= level) (severity <= LEVELS.warning ? stderr : stdout).write(rendered.line);
+    if (severity <= level) {
+      (severity <= LEVELS.warning ? stderr : stdout).write(rendered.line);
+      publish(name, rendered);
+    }
     if (severity <= fileLevel) append(rendered);
   }
   function forceWrite(name, values) {
     const rendered = makeLine(name, values);
     (LEVELS[name] <= LEVELS.warning ? stderr : stdout).write(rendered.line);
+    publish(name, rendered);
     append(rendered);
   }
   return Object.freeze({
@@ -81,6 +94,7 @@ function createLogger({ level = 3, fileLevel = level, directory = path.join(proc
     notice(...values) {
       const rendered = makeLine('info', values);
       stdout.write(rendered.line);
+      publish('info', rendered);
       if (LEVELS.info <= fileLevel) append(rendered);
     },
     forceInfo(...values) { forceWrite('info', values); },
@@ -89,6 +103,12 @@ function createLogger({ level = 3, fileLevel = level, directory = path.join(proc
     ...Object.fromEntries(Object.keys(LEVELS).map(name => [name, (...values) => write(name, values)])),
     setLevel(value) { level = validateLogLevel(value); },
     setFileLevel(value) { fileLevel = validateLogLevel(value, 'file-log-level'); },
+    subscribe(subscriber, { replay = true } = {}) {
+      if (typeof subscriber !== 'function') throw new TypeError('Log subscriber must be a function');
+      if (replay) for (const entry of recent) subscriber(entry);
+      subscribers.add(subscriber);
+      return () => subscribers.delete(subscriber);
+    },
     startNewCycle() {
       filename = createLogFile(directory, now().toISOString().slice(0, 10));
       return filename;

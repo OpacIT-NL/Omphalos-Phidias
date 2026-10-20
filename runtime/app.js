@@ -261,7 +261,7 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
   const cookieName = authenticationCookieName(deployment, document.name);
   const localCookieName = cookieName.replace(/^phidias_session/, 'phidias_local_session');
   validate(document, definitions);
-  const controller = new AbortController(), timers = [], stdinListeners = [], activeRuns = new Set(), routes = [], formRoutes = new Map(), authenticationStores = new Map();
+  const controller = new AbortController(), timers = [], stdinListeners = [], activeRuns = new Set(), routes = [], formRoutes = new Map(), browserAPIRoutes = new Map(), consoleStreams = new Map(), authenticationStores = new Map();
   const shared = Object.create(null);
   let started = false, stdinInterface = null, controlRequested = null, localAuthenticationStore = null, localAuthenticationInitialization = null;
   const databasePools = new Map();
@@ -355,6 +355,16 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
     };
     context.redactForLog = value => snapshotLogValue(value, new WeakMap(), '$', 0, context.secretValues);
     context.render = value => render(value, context);
+    context.createConsolePassthrough = () => {
+      if (!request) throw new Error('Application Console Passthrough requires an HTTP endpoint trigger');
+      if (typeof logger?.subscribe !== 'function') throw new Error('The application logger does not support live console streaming');
+      const now = Date.now();
+      for (const [key, stream] of consoleStreams) if (stream.expiresAt <= now) consoleStreams.delete(key);
+      while (consoleStreams.size >= 64) consoleStreams.delete(consoleStreams.keys().next().value);
+      const token = randomUUID();
+      consoleStreams.set(token, { expiresAt: now + 60 * 60 * 1000, ip: request.ip });
+      return token;
+    };
     context.setLoggedInUser = session => {
       if (session?.username) context.loggedInUser = String(session.username);
       return session;
@@ -534,7 +544,18 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
             setOutput('form_data', seed.formData || {});
             setOutput('form_id', block.options.form_id);
           }
-          const output = def.trigger ? 'next' : await def.execute(context, block.options, inputs, setOutput);
+          if (def.trigger === 'browser_api_reply') {
+            const result = seed.browserAPIResult || {};
+            setOutput('response', result);
+            setOutput('body', result.body ?? null);
+            setOutput('status', result.status ?? 0);
+            setOutput('headers', result.headers || {});
+            setOutput('error_message', result.error || '');
+            setOutput('request_id', block.options.request_id);
+          }
+          const output = def.trigger === 'browser_api_reply'
+            ? (seed.browserAPIResult?.ok ? 'success' : 'error')
+            : def.trigger ? 'next' : await def.execute(context, block.options, inputs, setOutput);
           if (output) followedOutputs.push(output);
         }
       } catch (error) {
@@ -625,6 +646,7 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
       routes.push({ method: block.options.method, path: normalizeRoutePath(block.options.path), ws, block, loginBlock: login?.block, loginWorkspace: login?.workspace });
     }
     for (const block of ws.blocks.filter(block => block.type === 'form_submit')) formRoutes.set(block.options.form_id, { ws, block });
+    for (const block of ws.blocks.filter(block => block.type === 'browser_api_reply')) browserAPIRoutes.set(block.options.request_id, { ws, block });
   }
   const server = http.createServer(async (req, res) => {
     const requestStarted = Date.now();
@@ -643,6 +665,30 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
         res.writeHead(200, { 'content-type': 'image/x-icon', 'content-length': favicon.length, 'cache-control': 'public, max-age=86400' });
         res.end(req.method === 'HEAD' ? undefined : favicon); return;
       }
+      const consoleMatch = req.method === 'GET' ? url.pathname.match(/^\/_phidias\/application-console\/([^/]+)$/) : null;
+      if (consoleMatch) {
+        let token;
+        try { token = decodeURIComponent(consoleMatch[1]); } catch { res.writeHead(400); res.end('Invalid console token'); return; }
+        const stream = consoleStreams.get(token);
+        if (!stream || stream.expiresAt <= Date.now()) { consoleStreams.delete(token); res.writeHead(404); res.end('Console stream not found'); return; }
+        if (stream.ip && stream.ip !== req.socket.remoteAddress) { res.writeHead(403); res.end('Console stream client does not match'); return; }
+        if (!String(req.headers.accept || '').includes('text/event-stream')) { res.writeHead(406); res.end('Console stream requires EventSource'); return; }
+        clearTimeout(deadline);
+        res.writeHead(200, {
+          'content-type': 'text/event-stream; charset=utf-8',
+          'cache-control': 'no-store, no-transform',
+          connection: 'keep-alive',
+          'x-content-type-options': 'nosniff'
+        });
+        res.write('retry: 2000\n\n');
+        const send = entry => {
+          if (!res.destroyed && !res.writableEnded) res.write(`event: log\ndata: ${JSON.stringify(entry)}\n\n`);
+        };
+        const unsubscribe = logger.subscribe(send);
+        const heartbeat = setInterval(() => { if (!res.destroyed && !res.writableEnded) res.write(': keepalive\n\n'); }, 15000);
+        req.on('close', () => { clearInterval(heartbeat); unsubscribe(); });
+        return;
+      }
       const formMatch = req.method === 'POST' ? url.pathname.match(/^\/_phidias\/forms\/([^/]+)$/) : null;
       if (formMatch) {
         if (!isSameOriginFormRequest(req.headers)) { res.writeHead(403); res.end('Cross-origin form submission rejected'); return; }
@@ -657,6 +703,22 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
         await track(run(formRoute.ws, formRoute.block, request, null, { formData }));
         res.writeHead(303, { location: safeFormReturnPath(parameters.get('__phidias_return_to'), '/'), 'cache-control': 'no-store' });
         res.end(); return;
+      }
+      const browserAPIMatch = req.method === 'POST' ? url.pathname.match(/^\/_phidias\/browser-api\/([^/]+)$/) : null;
+      if (browserAPIMatch) {
+        if (!isSameOriginFormRequest(req.headers)) { res.writeHead(403); res.end('Cross-origin browser API callback rejected'); return; }
+        let requestID;
+        try { requestID = decodeURIComponent(browserAPIMatch[1]); } catch { res.writeHead(400); res.end('Invalid request ID'); return; }
+        const browserAPIRoute = browserAPIRoutes.get(requestID);
+        if (!browserAPIRoute) { res.writeHead(404); res.end('Browser API Reply not found'); return; }
+        if (req.headers['x-phidias-browser-api'] !== requestID) { res.writeHead(403); res.end('Browser API callback header is missing or invalid'); return; }
+        const result = await readBody(req);
+        if (!result || typeof result !== 'object' || Array.isArray(result) || typeof result.ok !== 'boolean' || !Number.isInteger(result.status) || result.status < 0 || result.status > 599 || !result.headers || typeof result.headers !== 'object' || Array.isArray(result.headers) || typeof result.error !== 'string' || result.error.length > 2000) {
+          res.writeHead(400); res.end('Invalid browser API response'); return;
+        }
+        const request = { method: req.method, path: url.pathname, endpoint: url.pathname, subpath: '/', query: Object.fromEntries(url.searchParams), headers: req.headers, body: result, ip: req.socket.remoteAddress, browserAPIRequestID: requestID };
+        await track(run(browserAPIRoute.ws, browserAPIRoute.block, request, null, { browserAPIResult: result }));
+        res.writeHead(202, { 'cache-control': 'no-store' }); res.end(); return;
       }
       let route = findRoute(routes, req.method, url.pathname), loginSubmission = false;
       if (!route && req.method === 'POST') {

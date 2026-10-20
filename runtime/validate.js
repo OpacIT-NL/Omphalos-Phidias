@@ -31,7 +31,7 @@ function validate(document, definitions) {
   }
   if (!Array.isArray(document.workspaces) || !document.workspaces.length || document.workspaces.length > 100) fail('A project needs 1–100 workspaces');
   ensureNumberIds(document);
-  const workspaceIDs = new Set(), workspaceNumberIds = new Set(), routes = new Set(), formIDs = new Set();
+  const workspaceIDs = new Set(), workspaceNumberIds = new Set(), routes = new Set(), formIDs = new Set(), browserAPIIDs = new Set();
   for (const ws of document.workspaces) {
     if (!ws || typeof ws.id !== 'string' || !safeID.test(ws.id) || workspaceIDs.has(ws.id)) fail('Invalid or duplicate workspace ID');
     workspaceIDs.add(ws.id);
@@ -74,6 +74,12 @@ function validate(document, definitions) {
         if (typeof formID !== 'string' || !/^[a-zA-Z][a-zA-Z0-9_-]{0,79}$/.test(formID)) fail('Form Submit ID must start with a letter and contain only letters, numbers, underscores, or dashes');
         if (ws.active && formIDs.has(formID)) fail(`Duplicate Form Submit ID: ${formID}`);
         if (ws.active) formIDs.add(formID);
+      }
+      if (block.type === 'browser_api_reply') {
+        const requestID = block.options.request_id;
+        if (typeof requestID !== 'string' || !/^[a-zA-Z][a-zA-Z0-9_-]{0,79}$/.test(requestID)) fail('Browser API Reply ID must start with a letter and contain only letters, numbers, underscores, or dashes');
+        if (ws.active && browserAPIIDs.has(requestID)) fail(`Duplicate Browser API Reply ID: ${requestID}`);
+        if (ws.active) browserAPIIDs.add(requestID);
       }
       if (block.type === 'cron') {
         try { parseCron(block.options.expression); } catch (error) { fail(error.message); }
