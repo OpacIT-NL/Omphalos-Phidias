@@ -138,3 +138,42 @@ test('Form Submit triggers its workflow and redirects to the originating page', 
   assert.deepEqual(Object.fromEntries(Object.entries(entries[0][0])), { name: 'A "quoted"', roles: ['admin', 'operator'] });
   assert.equal((await fetch(`http://127.0.0.1:${address.port}/_phidias/forms/missing`, { method: 'POST' })).status, 404);
 });
+
+test('Form Submit can return Browser API Request HTML with submitted data instead of redirecting', async t => {
+  const definitions = loadDefinitions(path.resolve(__dirname, '../blocks'));
+  const document = { version: 1, name: 'Form browser request', workspaces: [{
+    id: 'forms', name: 'Forms', active: true,
+    blocks: [
+      { id: 'submit', type: 'form_submit', x: 0, y: 0, options: { form_id: 'lookup' } },
+      { id: 'request-id', type: 'text', x: 0, y: 200, options: { text: 'lookup_result' } },
+      { id: 'url', type: 'text', x: 0, y: 400, options: { text: 'https://supplier.example/search' } },
+      { id: 'request', type: 'browser_api_request', x: 300, y: 0, options: { method: 'POST' } },
+      { id: 'response', type: 'respond', x: 600, y: 0, options: { format: 'HTML' } },
+      { id: 'reply', type: 'browser_api_reply', x: 0, y: 600, options: { request_id: 'lookup_result' } }
+    ],
+    connections: [
+      { id: 'start', from: 'submit', output: 'next', to: 'request', input: 'action', kind: 'action' },
+      { id: 'send', from: 'request', output: 'next', to: 'response', input: 'action', kind: 'action' },
+      { id: 'request-id-value', from: 'request-id', output: 'text', to: 'request', input: 'request_id', kind: 'value' },
+      { id: 'url-value', from: 'url', output: 'text', to: 'request', input: 'url', kind: 'value' },
+      { id: 'form-value', from: 'submit', output: 'form_data', to: 'request', input: 'body', kind: 'value' },
+      { id: 'html-value', from: 'request', output: 'html', to: 'response', input: 'body', kind: 'value' }
+    ]
+  }] };
+  const app = createApp({ document, definitions });
+  const address = await app.start(0, '127.0.0.1');
+  t.after(() => app.stop());
+  const response = await fetch(`http://127.0.0.1:${address.port}/_phidias/forms/lookup`, {
+    method: 'POST', redirect: 'manual', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: '__phidias_return_to=%2Foriginal&query=hello%20world'
+  });
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('content-type'), 'text/html; charset=utf-8');
+  assert.equal(response.headers.get('location'), null);
+  const html = await response.text();
+  assert.match(html, /<script>/);
+  assert.match(html, /https:\/\/supplier\.example\/search/);
+  assert.match(html, /"body":\{"query":"hello world"\}/);
+  assert.match(html, /\/_phidias\/browser-api\/lookup_result/);
+  assert.doesNotMatch(html, /__phidias_return_to/);
+});

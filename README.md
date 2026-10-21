@@ -72,6 +72,10 @@ Use **API Endpoint** to start a workflow from an HTTP request and **API Reply** 
 
 For authenticated browser pages, connect **Display Login** and **Check If Logged In**. API workflows can use the bearer-token login and token-check blocks. Access is checked against the project and its RC or Prod stage.
 
+To request an API from the browser after a form submission, connect **Form Submit → Browser API Request → HTTP response**. Connect **Browser Request HTML** to the response **Body** and select **HTML** as the reply format. Form Submit creates its own endpoint; without an HTTP response, it redirects back automatically.
+
+Add **Browser API Reply** with the same **Request ID** to handle the result. Either its **Successful Response** or **Failed Request** branch can connect to another **HTTP response**. An HTML response replaces the current page, including HTML error responses. To navigate to another page, set status **303** and Headers to `{"Location":"/your-page"}`; navigation makes a new GET request. Relative locations resolve against the callback URL, so prefer a path starting with `/`. JSON and text responses do not replace the page. Without a response block, the callback returns **202** and leaves the page in place. The supplier API must allow browser requests through CORS.
+
 ### HTML and CSS templates
 
 Open **HTML and CSS templates** from the editor toolbar to manage files in the project’s `html` folder. Use:

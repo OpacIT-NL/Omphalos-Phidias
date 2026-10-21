@@ -3,9 +3,82 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
+const vm = require('node:vm');
 const requestBlock = require('../blocks/browser_api_request');
 const { createApp, loadDefinitions } = require('../runtime/app');
 const { validate } = require('../runtime/validate');
+
+async function runBrowserRequest(callback, supplier = () => new Response('{"systems":4}')) {
+  const calls = [], events = [], writes = [], navigations = [], errors = [];
+  const status = { dataset: {} };
+  const html = requestBlock.browserRequestHTML({
+    id: 'supplier_lookup', url: 'https://supplier.example/search', method: 'GET',
+    headers: {}, body: null, bodyFormat: 'JSON', credentials: 'omit', timeoutMs: 30000
+  });
+  await vm.runInNewContext(html.match(/<script>\n([\s\S]*)\n<\/script>$/)[1], {
+    AbortController, Blob, URL, setTimeout, clearTimeout,
+    CustomEvent: class { constructor(type, options) { this.type = type; this.detail = options.detail; } },
+    window: { location: { href: 'https://app.example/form', assign: url => navigations.push(url) } },
+    document: {
+      currentScript: { previousElementSibling: status },
+      dispatchEvent: event => events.push(event),
+      open: () => writes.push('open'), write: html => writes.push(html), close: () => writes.push('close')
+    },
+    console: { error: (...args) => errors.push(args) },
+    fetch: async (url, options) => {
+      calls.push({ url, options });
+      return url.startsWith('/_phidias/') ? callback(url, options) : supplier();
+    }
+  });
+  return { calls, events, writes, navigations, errors, state: status.dataset.state };
+}
+
+test('browser displays callback HTML, including error pages, and leaves acknowledgements and JSON in place', async () => {
+  for (const status of [200, 422]) {
+    const html = '<!doctype html><h1>Result</h1><script>window.result = true;</script>';
+    const result = await runBrowserRequest(() => new Response(html, { status, headers: { 'content-type': 'text/html; charset=utf-8' } }));
+    assert.deepEqual(result.writes, ['open', html, 'close']);
+    assert.deepEqual(result.errors, []);
+    assert.equal(result.events[0].detail.body.systems, 4);
+    assert.equal(result.calls.length, 2);
+  }
+  for (const reply of [new Response(null, { status: 202 }), new Response('{"saved":true}', { headers: { 'content-type': 'application/json' } })]) {
+    const result = await runBrowserRequest(() => reply);
+    assert.deepEqual(result.writes, []);
+    assert.deepEqual(result.navigations, []);
+    assert.equal(result.state, 'complete');
+    assert.equal(result.events.length, 1);
+  }
+});
+
+test('browser navigates callback redirects and rejects executable redirect URLs', async () => {
+  for (const [location, expected] of [['/done', 'https://app.example/done'], ['https://other.example/done', 'https://other.example/done']]) {
+    const result = await runBrowserRequest(() => new Response(null, { headers: { 'x-phidias-redirect': location } }));
+    assert.deepEqual(result.navigations, [expected]);
+    assert.deepEqual(result.writes, []);
+    assert.equal(result.calls[1].options.redirect, 'error');
+  }
+  const result = await runBrowserRequest(() => new Response(null, { headers: { 'x-phidias-redirect': 'javascript:alert(1)' } }));
+  assert.deepEqual(result.navigations, []);
+  assert.equal(result.state, 'callback-error');
+  assert.equal(result.calls.length, 2);
+});
+
+test('browser reports supplier errors once and does not retry failed callbacks', async () => {
+  const result = await runBrowserRequest(() => new Response(null, { status: 202 }), () => { throw new Error('Supplier unreachable'); });
+  const payload = JSON.parse(result.calls[1].options.body);
+  assert.equal(payload.ok, false);
+  assert.equal(payload.status, 0);
+  assert.equal(payload.error, 'Supplier unreachable');
+  assert.equal(result.state, 'error');
+  for (const callback of [() => new Response('Workflow failed', { status: 500 }), () => { throw new Error('Callback unreachable'); }]) {
+    const failed = await runBrowserRequest(callback);
+    assert.equal(failed.calls.length, 2);
+    assert.equal(failed.state, 'callback-error');
+    assert.equal(failed.errors.length, 1);
+    assert.deepEqual(failed.writes, []);
+  }
+});
 
 test('Browser API Request outputs safe browser code and refuses protected credentials', async () => {
   const outputs = {};
@@ -96,4 +169,45 @@ test('Browser API Reply receives browser results and follows success and error w
   assert.equal((await fetch(base + '/_phidias/browser-api/supplier_lookup', {
     method: 'POST', headers: { 'content-type': 'application/json', 'x-phidias-browser-api': 'supplier_lookup', origin: 'https://attacker.example' }, body: JSON.stringify(successful)
   })).status, 403);
+});
+
+test('Browser API Reply supports HTML, JSON, and redirects through HTTP response on either branch', async t => {
+  for (const scenario of [
+    { name: 'HTML success', ok: true, format: 'HTML', status: 200, body: '<h1>Saved</h1>' },
+    { name: 'HTML failure', ok: false, format: 'HTML', status: 422, body: '<h1>Please try again</h1>' },
+    { name: 'JSON success', ok: true, format: 'JSON', status: 201, body: '{"saved":true}' },
+    { name: 'Redirect success', ok: true, format: 'Text', status: 303, body: '', headers: '{"Location":"/done"}' }
+  ]) await t.test(scenario.name, async t => {
+    const definitions = loadDefinitions(path.resolve(__dirname, '../blocks'));
+    const document = { version: 1, name: 'Browser callback response', workspaces: [{
+      id: 'browser-api', name: 'Browser API', active: true,
+      blocks: [
+        { id: 'reply', type: 'browser_api_reply', x: 0, y: 0, options: { request_id: 'supplier_lookup' } },
+        { id: 'response', type: 'respond', x: 300, y: 0, options: {
+          format: scenario.format, status: scenario.status, body: scenario.body, headers: scenario.headers || '{}'
+        } }
+      ],
+      connections: [{ id: 'action', from: 'reply', output: scenario.ok ? 'success' : 'error', to: 'response', input: 'action', kind: 'action' }]
+    }] };
+    const errors = [];
+    const app = createApp({ document, definitions, onError: error => errors.push(error) });
+    const address = await app.start(0, '127.0.0.1');
+    t.after(() => app.stop());
+    const response = await fetch(`http://127.0.0.1:${address.port}/_phidias/browser-api/supplier_lookup`, {
+      method: 'POST', redirect: 'manual',
+      headers: { 'content-type': 'application/json', 'x-phidias-browser-api': 'supplier_lookup' },
+      body: JSON.stringify({ ok: scenario.ok, status: scenario.ok ? 200 : 400, headers: {}, body: {}, error: scenario.ok ? '' : 'Failed' })
+    });
+    assert.equal(response.headers.get('cache-control'), 'no-store');
+    if (scenario.status === 303) {
+      assert.equal(response.status, 200);
+      assert.equal(response.headers.get('x-phidias-redirect'), '/done');
+      assert.equal(response.headers.get('location'), null);
+    } else {
+      assert.equal(response.status, scenario.status);
+      assert.match(response.headers.get('content-type'), scenario.format === 'HTML' ? /text\/html/ : /application\/json/);
+    }
+    assert.equal(await response.text(), scenario.body);
+    assert.deepEqual(errors, []);
+  });
 });

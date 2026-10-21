@@ -4,7 +4,7 @@ module.exports = {
   type: 'browser_api_reply',
   name: 'Browser API Reply',
   category: 'Triggers',
-  description: 'Starts a workflow when Browser API Request sends a supplier response back with the same Request ID.',
+  description: 'Starts a workflow when Browser API Request sends a supplier response back with the same Request ID. Connect HTTP response to display HTML or redirect the browser; without it, the callback is acknowledged automatically.',
   trigger: 'browser_api_reply',
   inputPorts: [],
   fields: [{ key: 'request_id', label: 'Request ID', type: 'text', default: 'browser_request' }],

@@ -41,16 +41,30 @@ function browserRequestHTML(configuration) {
     const reply = await fetch(callbackURL, {
       method: "POST",
       credentials: "same-origin",
+      redirect: "error",
       headers: { "content-type": "application/json", "x-phidias-browser-api": configuration.id },
       body: JSON.stringify(payload)
     });
-    if (!reply.ok) throw new Error("Application callback failed with HTTP " + reply.status);
+    const redirect = reply.headers.get("x-phidias-redirect");
+    const isHTML = (reply.headers.get("content-type") || "").split(";")[0].trim().toLowerCase() === "text/html";
+    if (!reply.ok && !isHTML) throw new Error("Application callback failed with HTTP " + reply.status);
+    const html = isHTML ? await reply.text() : null;
     if (status) status.dataset.state = payload.ok ? "complete" : "error";
     document.dispatchEvent(new CustomEvent("phidias:browser-api-reply", { detail: { requestId: configuration.id, ...payload } }));
+    if (redirect) {
+      const target = new URL(redirect, new URL(callbackURL, window.location.href));
+      if (!["http:", "https:"].includes(target.protocol)) throw new Error("Application redirect must use HTTP or HTTPS");
+      window.location.assign(target.href);
+    } else if (html) {
+      document.open();
+      document.write(html);
+      document.close();
+    }
   };
   const run = async () => {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), configuration.timeoutMs);
+    let payload;
     try {
       const requestHeaders = { ...configuration.headers };
       let body = configuration.body;
@@ -68,21 +82,22 @@ function browserRequestHTML(configuration) {
       if (new Blob([text]).size > limit) throw new Error("Supplier response exceeds 768 KiB");
       let bodyValue = text;
       try { bodyValue = JSON.parse(text); } catch {}
-      await report({
+      payload = {
         ok: response.ok,
         status: response.status,
         headers: Object.fromEntries(response.headers.entries()),
         body: bodyValue,
         error: response.ok ? "" : "Supplier returned HTTP " + response.status
-      });
+      };
     } catch (error) {
-      await report({ ok: false, status: 0, headers: {}, body: null, error: error && error.name === "AbortError" ? "Browser API request timed out" : String(error && error.message || error) });
+      payload = { ok: false, status: 0, headers: {}, body: null, error: error && error.name === "AbortError" ? "Browser API request timed out" : String(error && error.message || error) };
     } finally {
       clearTimeout(timer);
     }
+    await report(payload);
   };
   if (status) status.dataset.state = "loading";
-  run().catch(error => {
+  return run().catch(error => {
     if (status) status.dataset.state = "callback-error";
     console.error("Browser API Request callback failed:", error);
   });

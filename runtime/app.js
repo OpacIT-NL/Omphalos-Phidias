@@ -726,9 +726,12 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
         const parameters = new URLSearchParams(typeof rawBody === 'string' ? rawBody : '');
         const formData = parseFormBody(rawBody);
         const request = { method: req.method, path: url.pathname, endpoint: url.pathname, subpath: '/', query: Object.fromEntries(url.searchParams), headers: req.headers, body: formData, ip: req.socket.remoteAddress, formID };
-        await track(run(formRoute.ws, formRoute.block, request, null, { formData }));
-        res.writeHead(303, { location: safeFormReturnPath(parameters.get('__phidias_return_to'), '/'), 'cache-control': 'no-store' });
-        res.end(); return;
+        await track(run(formRoute.ws, formRoute.block, request, res, { formData }));
+        if (!res.writableEnded) {
+          res.writeHead(303, { location: safeFormReturnPath(parameters.get('__phidias_return_to'), '/'), 'cache-control': 'no-store' });
+          res.end();
+        }
+        return;
       }
       const browserAPIMatch = req.method === 'POST' ? url.pathname.match(/^\/_phidias\/browser-api\/([^/]+)$/) : null;
       if (browserAPIMatch) {
@@ -743,8 +746,10 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
           res.writeHead(400); res.end('Invalid browser API response'); return;
         }
         const request = { method: req.method, path: url.pathname, endpoint: url.pathname, subpath: '/', query: Object.fromEntries(url.searchParams), headers: req.headers, body: result, ip: req.socket.remoteAddress, browserAPIRequestID: requestID };
-        await track(run(browserAPIRoute.ws, browserAPIRoute.block, request, null, { browserAPIResult: result }));
-        res.writeHead(202, { 'cache-control': 'no-store' }); res.end(); return;
+        res.setHeader('cache-control', 'no-store');
+        await track(run(browserAPIRoute.ws, browserAPIRoute.block, request, res, { browserAPIResult: result }));
+        if (!res.writableEnded) { res.writeHead(202); res.end(); }
+        return;
       }
       const chatMatch = ['GET', 'POST'].includes(req.method) ? url.pathname.match(/^\/_phidias\/chat\/([a-f0-9]{64})\/messages$/) : null;
       if (chatMatch) {
