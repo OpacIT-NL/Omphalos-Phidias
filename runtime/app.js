@@ -389,7 +389,7 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
         expiresAt: now + 8 * 60 * 60 * 1000,
         lastSentAt: 0
       });
-      return token;
+      return { token, internal: access.internal, chatType: access.type, title: access.title };
     };
     context.setLoggedInUser = session => {
       if (session?.username) context.loggedInUser = String(session.username);
@@ -772,16 +772,33 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
         if (now - view.lastSentAt < 500) { res.writeHead(429, { 'retry-after': '1' }); res.end('Please wait before sending another message'); return; }
         const body = await readBody(req, 16384);
         if (!body || typeof body !== 'object' || Array.isArray(body)) { res.writeHead(400); res.end('Invalid chat message'); return; }
-        let memberID = '', memberName = '';
+        let memberID = '', memberName = '', proxyPrefix = null, proxySuffix = null;
+        let messageBody = body.body;
         if (access.internal) {
           memberID = access.memberID;
-          memberName = view.members.find(member => member.id === memberID)?.name || memberID;
+          const member = view.members.find(item => item.id === memberID);
+          memberName = member?.displayName || member?.name || memberID;
+          const matched = chat.matchProxy(view.members, messageBody, memberID);
+          if (matched) { messageBody = matched.body; proxyPrefix = matched.prefix; proxySuffix = matched.suffix; }
         } else if (body.member_id) {
           const member = view.members.find(item => item.id === String(body.member_id));
           if (!member) { res.writeHead(403); res.end('Invalid proxy member'); return; }
-          memberID = member.id; memberName = member.name;
+          const matched = chat.matchProxy(view.members, messageBody);
+          if (matched) {
+            memberID = matched.memberID; memberName = matched.memberName; messageBody = matched.body; proxyPrefix = matched.prefix; proxySuffix = matched.suffix;
+          } else {
+            const proxyIndex = body.proxy_index == null ? -1 : Number(body.proxy_index);
+            if (!Number.isInteger(proxyIndex) || proxyIndex < -1 || (proxyIndex >= 0 && !member.proxyTags?.[proxyIndex]) || (proxyIndex === -1 && member.proxyTags?.length)) {
+              res.writeHead(403); res.end('Invalid proxy tag'); return;
+            }
+            const tag = proxyIndex >= 0 ? member.proxyTags[proxyIndex] : null;
+            memberID = member.id; memberName = member.displayName || member.name; proxyPrefix = tag?.prefix ?? null; proxySuffix = tag?.suffix ?? null;
+          }
+        } else {
+          const matched = chat.matchProxy(view.members, messageBody);
+          if (matched) { memberID = matched.memberID; memberName = matched.memberName; messageBody = matched.body; proxyPrefix = matched.prefix; proxySuffix = matched.suffix; }
         }
-        const message = await chat.sendMessage(database, access, body.body, { memberID, memberName, systemName: view.systemName });
+        const message = await chat.sendMessage(database, access, messageBody, { memberID, memberName, systemName: view.systemName, proxyPrefix, proxySuffix });
         view.lastSentAt = now;
         const payload = JSON.stringify(message);
         res.writeHead(201, { 'content-type': 'application/json; charset=utf-8', 'content-length': Buffer.byteLength(payload), 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' });
