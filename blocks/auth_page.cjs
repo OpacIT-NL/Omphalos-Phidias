@@ -21,15 +21,25 @@ async function renderAuthPage(directory, kind, values = {}) {
     if (error.code === 'ENOENT') throw new Error(`Authentication template not found in the html folder: ${path.basename(error.path || templateName)}`);
     throw error;
   }
+  const localLoginOptions = kind === 'login' && values.localLogin
+    ? `<label class="auth-consent auth-remember"><input name="remember_me" type="checkbox" value="yes"${values.remember ? ' checked' : ''}> <span>Remember me</span></label>`
+    : '';
+  const hasLocalLoginPlaceholder = template.includes('%local_login_options%');
   const replacements = {
     app_name: escapeHTML(values.appName),
     action: escapeHTML(values.action),
     error: escapeHTML(values.error),
     username: escapeHTML(values.username),
     email: escapeHTML(values.email),
-    login_css: css
+    login_css: css,
+    local_login_options: localLoginOptions
   };
-  return template.replace(/%(app_name|action|error|username|email|login_css)%/g, (_match, key) => replacements[key]);
+  let html = template.replace(/%(app_name|action|error|username|email|login_css|local_login_options)%/g, (_match, key) => replacements[key]);
+  if (localLoginOptions && !hasLocalLoginPlaceholder) {
+    const submitButton = /<button\b[^>]*type=["']submit["'][^>]*>/i;
+    html = submitButton.test(html) ? html.replace(submitButton, `${localLoginOptions}\n      $&`) : html.replace(/<\/form>/i, `${localLoginOptions}\n    </form>`);
+  }
+  return html;
 }
 
 async function sendAuthPage(ctx, kind, status, values = {}) {

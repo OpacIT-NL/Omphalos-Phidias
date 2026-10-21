@@ -87,11 +87,16 @@ test('project creation, atomic saves, conflicts, reload, and downloadable ZIP', 
   assert.equal(exportedProject.workspaces[0].blocks[1].width, 740); assert.equal(exportedProject.workspaces[0].blocks[1].height, 420);
   assert.equal(exportedProject.workspaces[0].numberId, 1); assert.deepEqual(exportedProject.workspaces[0].blocks.map(block => block.numberId), [1, 2]);
   assert.ok(extracted.has('auth.js'));
+  assert.ok(extracted.has('password-hash.js'));
   assert.ok(extracted.has('logger.js'));
   for (const name of ['login.html', 'register.html', 'login.css']) assert.ok(extracted.has(`html/${name}`));
   assert.equal(extracted.get('application.key').length, 32);
   assert.deepEqual(extracted.get('favicon.ico').subarray(0, 4), Buffer.from([0, 0, 1, 0]));
-  assert.equal(JSON.parse(extracted.get('package.json')).dependencies.argon2, '^0.45.1');
+  const exportedDependencies = JSON.parse(extracted.get('package.json')).dependencies;
+  assert.equal(exportedDependencies.argon2, undefined);
+  assert.equal(exportedDependencies['@noble/hashes'], '2.4.0');
+  assert.equal(exportedDependencies['hash-wasm'], '4.12.0');
+  assert.equal(exportedDependencies['basic-ftp'], '^6.2.3');
   for (const name of ['api_endpoint.js', 'api_call.js', 'api_reply.js']) assert.ok(extracted.has(`blocks/${name}`));
   for (const name of ['json_to_cartesian_chart.js', 'json_to_circular_chart.js', 'chart_helpers.cjs']) assert.ok(extracted.has(`blocks/${name}`));
   for (const name of ['math_operation.js', 'percentage_calculator.js', 'aggregate_numbers.js', 'transform_json_numbers.js', 'math_helpers.cjs']) assert.ok(extracted.has(`blocks/${name}`));

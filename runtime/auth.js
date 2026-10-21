@@ -3,7 +3,7 @@ const { DatabaseSync } = require('./sqlite').loadSQLite();
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const argon2 = require('argon2');
+const argon2 = require('./password-hash');
 
 const BROWSER_SESSION_MS = 24 * 60 * 60 * 1000;
 const API_SESSION_MS = 8 * 60 * 60 * 1000;

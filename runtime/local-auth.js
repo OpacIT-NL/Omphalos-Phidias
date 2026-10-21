@@ -1,13 +1,24 @@
 'use strict';
 
 const crypto = require('node:crypto');
-const argon2 = require('argon2');
 
 const SESSION_MS = 24 * 60 * 60 * 1000;
+const PERSISTENT_COOKIE_SECONDS = 2147483647;
+const PERSISTENT_TOUCH_MS = 5 * 60 * 1000;
 const ATTEMPT_WINDOW_MS = 15 * 60 * 1000;
-const PASSWORD_OPTIONS = { type: argon2.argon2id, memoryCost: 65536, timeCost: 3, parallelism: 1, hashLength: 32 };
 const digest = value => crypto.createHash('sha256').update(String(value)).digest('hex');
 let dummyHash;
+let argon2;
+
+function passwordLibrary() {
+  argon2 ||= require('./password-hash');
+  return argon2;
+}
+
+function passwordOptions() {
+  const library = passwordLibrary();
+  return { type: library.argon2id, memoryCost: 65536, timeCost: 3, parallelism: 1, hashLength: 32 };
+}
 
 function authError(message, status = 401, retryAfter) {
   return Object.assign(new Error(message), { status, retryAfter });
@@ -61,22 +72,24 @@ class LocalDatabaseAuth {
     }
   }
 
-  async login(username, password, ip) {
+  async login(username, password, ip, remember = false) {
     username = typeof username === 'string' ? username.trim() : '';
     this.consumeAttempt(ip, username.toLocaleLowerCase());
     if (this.pending >= 2) throw authError('Sign-in is busy. Try again shortly.', 429, 2);
     this.pending++;
     try {
-      const [rows] = await this.database.execute('SELECT `id`,`username`,`password_hash` FROM `users` WHERE `username` = ? LIMIT 1', [username]);
+      const passwordHasher = passwordLibrary();
+      const [rows] = await this.database.execute('SELECT `id`,`username`,`password_hash`,`allow_login` FROM `users` WHERE `username` = ? LIMIT 1', [username]);
       const user = rows[0];
       const storedHash = typeof user?.password_hash === 'string' && user.password_hash.startsWith('$argon2id$') ? user.password_hash : null;
-      const fallback = await (dummyHash ||= argon2.hash(crypto.randomBytes(32), PASSWORD_OPTIONS));
+      const fallback = await (dummyHash ||= passwordHasher.hash(crypto.randomBytes(32), passwordOptions()));
       const validPassword = typeof password === 'string' && Buffer.byteLength(password) <= 1024;
       let matches = false;
-      try { matches = await argon2.verify(storedHash || fallback, validPassword ? password : 'invalid-password'); } catch {}
+      try { matches = await passwordHasher.verify(storedHash || fallback, validPassword ? password : 'invalid-password'); } catch {}
       if (!user || !storedHash || !validPassword || !matches) throw authError('Invalid username or password.');
+      if (Number(user.allow_login) !== 1) throw authError('This account is not allowed to sign in.', 403);
 
-      return this.createSession(user);
+      return this.createSession(user, remember);
     } finally {
       this.pending--;
     }
@@ -93,11 +106,11 @@ class LocalDatabaseAuth {
     if (this.pending >= 2) throw authError('Registration is busy. Try again shortly.', 429, 2);
     this.pending++;
     try {
-      const passwordHash = await argon2.hash(password, PASSWORD_OPTIONS);
+      const passwordHash = await passwordLibrary().hash(password, passwordOptions());
       let result;
       try {
         [result] = await this.database.execute(
-          'INSERT INTO `users` (`username`,`email`,`password_hash`) VALUES (?,?,?)',
+          'INSERT INTO `users` (`username`,`email`,`password_hash`,`allow_login`) VALUES (?,?,?,1)',
           [username, email, passwordHash]
         );
       } catch (error) {
@@ -111,32 +124,80 @@ class LocalDatabaseAuth {
     }
   }
 
-  createSession(user) {
+  async createSession(user, remember = false) {
     const token = crypto.randomBytes(32).toString('hex');
+    const now = Date.now();
     const session = {
       userid: String(user.id),
       username: String(user.username),
       ...(user.email ? { email: String(user.email) } : {}),
-      expiresAt: Date.now() + SESSION_MS
+      remembered: Boolean(remember),
+      expiresAt: remember ? null : now + SESSION_MS,
+      lastPersistedAt: now
     };
-    this.sessions.set(digest(token), session);
-    return { token, ...session };
+    const tokenHash = digest(token);
+    if (remember) {
+      await this.database.execute(
+        'INSERT INTO `sessions` (`token_hash`,`user_id`,`created_at`,`last_used_at`) VALUES (?,?,?,?)',
+        [tokenHash, user.id, now, now]
+      );
+    }
+    this.sessions.set(tokenHash, session);
+    return { token, ...this.publicSession(session) };
+  }
+
+  publicSession(session) {
+    return {
+      userid: session.userid,
+      username: session.username,
+      ...(session.email ? { email: session.email } : {}),
+      remembered: session.remembered,
+      expiresAt: session.expiresAt
+    };
   }
 
   browserToken(request) {
     return cookieValue(request, this.cookieName);
   }
 
-  browserSession(request) {
+  async browserSession(request) {
     const token = this.browserToken(request);
     if (!/^[a-f0-9]{64}$/.test(token || '')) return null;
-    const key = digest(token), session = this.sessions.get(key), now = Date.now();
-    if (!session || session.expiresAt <= now) {
-      if (session) this.sessions.delete(key);
+    const key = digest(token), now = Date.now();
+    let session = this.sessions.get(key);
+    if (session) {
+      if (!session.remembered && session.expiresAt <= now) {
+        this.sessions.delete(key);
+        return null;
+      }
+      if (session.remembered && now - session.lastPersistedAt >= PERSISTENT_TOUCH_MS) {
+        await this.database.execute('UPDATE `sessions` SET `last_used_at` = ? WHERE `token_hash` = ?', [now, key]);
+        session.lastPersistedAt = now;
+      } else if (!session.remembered) {
+        session.expiresAt = now + SESSION_MS;
+      }
+      return this.publicSession(session);
+    }
+
+    const [rows] = await this.database.execute(
+      'SELECT `u`.`id`,`u`.`username`,`u`.`allow_login` FROM `sessions` AS `s` INNER JOIN `users` AS `u` ON `u`.`id` = `s`.`user_id` WHERE `s`.`token_hash` = ? LIMIT 1',
+      [key]
+    );
+    const user = rows[0];
+    if (!user || Number(user.allow_login) !== 1) {
+      if (user) await this.database.execute('DELETE FROM `sessions` WHERE `token_hash` = ?', [key]);
       return null;
     }
-    session.expiresAt = now + SESSION_MS;
-    return { userid: session.userid, username: session.username, ...(session.email ? { email: session.email } : {}), expiresAt: session.expiresAt };
+    session = {
+      userid: String(user.id),
+      username: String(user.username),
+      remembered: true,
+      expiresAt: null,
+      lastPersistedAt: now
+    };
+    this.sessions.set(key, session);
+    await this.database.execute('UPDATE `sessions` SET `last_used_at` = ? WHERE `token_hash` = ?', [now, key]);
+    return this.publicSession(session);
   }
 
   sessionStatus(request) {
@@ -145,19 +206,24 @@ class LocalDatabaseAuth {
     if (!/^[a-f0-9]{64}$/.test(token)) return 'malformed-token';
     const session = this.sessions.get(digest(token));
     if (!session) return 'unknown-token';
-    if (session.expiresAt <= Date.now()) return 'expired';
+    if (!session.remembered && session.expiresAt <= Date.now()) return 'expired';
     return 'valid';
   }
 
-  logout(request) {
+  async logout(request) {
     const token = this.browserToken(request);
-    const session = this.browserSession(request);
-    if (token) this.sessions.delete(digest(token));
+    const session = await this.browserSession(request);
+    if (token && /^[a-f0-9]{64}$/.test(token)) {
+      const key = digest(token);
+      this.sessions.delete(key);
+      if (session?.remembered) await this.database.execute('DELETE FROM `sessions` WHERE `token_hash` = ?', [key]);
+    }
     return session;
   }
 
-  browserCookie(token, secure = false) {
-    return `${this.cookieName}=${token}; Path=/; HttpOnly; SameSite=Strict${secure ? '; Secure' : ''}`;
+  browserCookie(token, secure = false, remember = false) {
+    const persistence = remember ? `; Max-Age=${PERSISTENT_COOKIE_SECONDS}` : '';
+    return `${this.cookieName}=${token}; Path=/; HttpOnly; SameSite=Strict${persistence}${secure ? '; Secure' : ''}`;
   }
 
   clearBrowserCookie(secure = false) {

@@ -18,8 +18,12 @@ module.exports = {
   async execute(ctx, _options, _inputs, setOutput) {
     if (!ctx.request) throw new Error('Check If User Is Logged In Local requires an HTTP endpoint trigger');
     const authentication = await ctx.localAuthentication();
-    const session = authentication.browserSession(ctx.request);
+    const session = await authentication.browserSession(ctx.request);
     if (!session) ctx.logger?.debug('Local browser session rejected: reason=%s', authentication.sessionStatus(ctx.request));
+    if (session?.remembered && ctx.response && !ctx.response.headersSent) {
+      const secure = String(ctx.request.headers['x-forwarded-proto'] || '').split(',')[0].trim() === 'https';
+      ctx.response.setHeader('Set-Cookie', authentication.browserCookie(authentication.browserToken(ctx.request), secure, true));
+    }
     ctx.setLoggedInUser?.(session);
     setOutput('userid', session?.userid || '');
     setOutput('username', session?.username || '');

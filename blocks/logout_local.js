@@ -18,7 +18,7 @@ module.exports = {
   async execute(ctx, _options, _inputs, setOutput) {
     if (!ctx.request) throw new Error('Logout Local requires an HTTP endpoint trigger');
     const authentication = await ctx.localAuthentication();
-    const session = authentication.logout(ctx.request);
+    const session = await authentication.logout(ctx.request);
     if (ctx.response && !ctx.response.headersSent) {
       const secure = String(ctx.request.headers['x-forwarded-proto'] || '').split(',')[0].trim() === 'https';
       ctx.response.setHeader('Set-Cookie', authentication.clearBrowserCookie(secure));

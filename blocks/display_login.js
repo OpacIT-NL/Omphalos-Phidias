@@ -2,12 +2,15 @@
 
 const { renderAuthPage, sendAuthPage } = require('./auth_page.cjs');
 function credentials(body) {
-  if (body && typeof body === 'object' && !Array.isArray(body)) return body;
+  if (body && typeof body === 'object' && !Array.isArray(body)) return {
+    ...body,
+    remember: body.remember_me === true || body.remember_me === 'yes'
+  };
   const form = new URLSearchParams(String(body || ''));
-  return { username: form.get('username') || '', password: form.get('password') || '' };
+  return { username: form.get('username') || '', password: form.get('password') || '', remember: form.get('remember_me') === 'yes' };
 }
 const page = (directory, title, action, error = '', username = '') => renderAuthPage(directory, 'login', { appName: title, action, error, username });
-const sendPage = (ctx, status, error = '', username = '') => sendAuthPage(ctx, 'login', status, { error, username });
+const sendPage = (ctx, status, error = '', username = '', values = {}) => sendAuthPage(ctx, 'login', status, { error, username, ...values });
 module.exports = {
   type: 'display_login', name: 'Display Login', category: 'Authentication',
   description: 'Shows a browser login page backed by the authentication database in config.json.',

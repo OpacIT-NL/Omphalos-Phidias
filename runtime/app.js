@@ -252,6 +252,9 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
   });
   definitions ||= loadDefinitions(path.join(directory, 'blocks'));
   for (const [type, definition] of definitions) definitions.set(type, normalizeDefinition(definition, `${type}.js`));
+  const chatHelpersFile = fs.existsSync(path.join(directory, 'blocks/chat_helpers.cjs'))
+    ? path.join(directory, 'blocks/chat_helpers.cjs')
+    : path.resolve(__dirname, '../blocks/chat_helpers.cjs');
   document ||= JSON.parse(fs.readFileSync(path.join(directory, 'workspaces.json'), 'utf8'));
   let favicon = null;
   try { favicon = fs.readFileSync(path.join(directory, 'favicon.ico')); } catch (error) { if (error.code !== 'ENOENT') throw error; }
@@ -261,7 +264,7 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
   const cookieName = authenticationCookieName(deployment, document.name);
   const localCookieName = cookieName.replace(/^phidias_session/, 'phidias_local_session');
   validate(document, definitions);
-  const controller = new AbortController(), timers = [], stdinListeners = [], activeRuns = new Set(), routes = [], formRoutes = new Map(), browserAPIRoutes = new Map(), consoleStreams = new Map(), authenticationStores = new Map();
+  const controller = new AbortController(), timers = [], stdinListeners = [], activeRuns = new Set(), routes = [], formRoutes = new Map(), browserAPIRoutes = new Map(), consoleStreams = new Map(), chatViews = new Map(), authenticationStores = new Map();
   const shared = Object.create(null);
   let started = false, stdinInterface = null, controlRequested = null, localAuthenticationStore = null, localAuthenticationInitialization = null;
   const databasePools = new Map();
@@ -363,6 +366,29 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
       while (consoleStreams.size >= 64) consoleStreams.delete(consoleStreams.keys().next().value);
       const token = randomUUID();
       consoleStreams.set(token, { expiresAt: now + 60 * 60 * 1000, ip: request.ip });
+      return token;
+    };
+    context.createChatView = async configuration => {
+      if (!request) throw new Error('Display HTML Chat requires an HTTP endpoint trigger');
+      if (context.loggedInUser === 'svc_automation') throw Object.assign(new Error('Display HTML Chat must run after a successful login check'), { status: 401 });
+      const cookie = String(request.headers?.cookie || '');
+      if (!cookie) throw Object.assign(new Error('Display HTML Chat requires an authenticated browser session'), { status: 401 });
+      const chat = require(chatHelpersFile);
+      const database = await getDatabase();
+      const access = await chat.authorize(database, configuration.conversationID, configuration.systemID, configuration.memberID);
+      const now = Date.now();
+      for (const [key, view] of chatViews) if (view.expiresAt <= now) chatViews.delete(key);
+      while (chatViews.size >= 512) chatViews.delete(chatViews.keys().next().value);
+      const token = crypto.randomBytes(32).toString('hex');
+      chatViews.set(token, {
+        ...configuration,
+        conversationID: access.id,
+        access,
+        members: Array.isArray(configuration.members) ? configuration.members : [],
+        cookieHash: crypto.createHash('sha256').update(cookie).digest('hex'),
+        expiresAt: now + 8 * 60 * 60 * 1000,
+        lastSentAt: 0
+      });
       return token;
     };
     context.setLoggedInUser = session => {
@@ -720,6 +746,42 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
         await track(run(browserAPIRoute.ws, browserAPIRoute.block, request, null, { browserAPIResult: result }));
         res.writeHead(202, { 'cache-control': 'no-store' }); res.end(); return;
       }
+      const chatMatch = ['GET', 'POST'].includes(req.method) ? url.pathname.match(/^\/_phidias\/chat\/([a-f0-9]{64})\/messages$/) : null;
+      if (chatMatch) {
+        const token = chatMatch[1], view = chatViews.get(token), now = Date.now();
+        if (!view || view.expiresAt <= now) { chatViews.delete(token); res.writeHead(404); res.end('Chat view not found'); return; }
+        const cookieHash = crypto.createHash('sha256').update(String(req.headers.cookie || '')).digest('hex');
+        const expected = Buffer.from(view.cookieHash, 'hex'), received = Buffer.from(cookieHash, 'hex');
+        if (expected.length !== received.length || !crypto.timingSafeEqual(expected, received)) { res.writeHead(403); res.end('Chat session does not match'); return; }
+        view.expiresAt = now + 8 * 60 * 60 * 1000;
+        const chat = require(chatHelpersFile);
+        const database = await getDatabase();
+        const access = await chat.authorize(database, view.conversationID, view.systemID, view.memberID);
+        if (req.method === 'GET') {
+          const messages = await chat.messagesAfter(database, access, url.searchParams.get('after'), 100);
+          const payload = JSON.stringify({ messages });
+          res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'content-length': Buffer.byteLength(payload), 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' });
+          res.end(payload); return;
+        }
+        if (!isSameOriginFormRequest(req.headers) || req.headers['x-phidias-chat-token'] !== token) { res.writeHead(403); res.end('Chat submission rejected'); return; }
+        if (now - view.lastSentAt < 500) { res.writeHead(429, { 'retry-after': '1' }); res.end('Please wait before sending another message'); return; }
+        const body = await readBody(req, 16384);
+        if (!body || typeof body !== 'object' || Array.isArray(body)) { res.writeHead(400); res.end('Invalid chat message'); return; }
+        let memberID = '', memberName = '';
+        if (access.internal) {
+          memberID = access.memberID;
+          memberName = view.members.find(member => member.id === memberID)?.name || memberID;
+        } else if (body.member_id) {
+          const member = view.members.find(item => item.id === String(body.member_id));
+          if (!member) { res.writeHead(403); res.end('Invalid proxy member'); return; }
+          memberID = member.id; memberName = member.name;
+        }
+        const message = await chat.sendMessage(database, access, body.body, { memberID, memberName, systemName: view.systemName });
+        view.lastSentAt = now;
+        const payload = JSON.stringify(message);
+        res.writeHead(201, { 'content-type': 'application/json; charset=utf-8', 'content-length': Buffer.byteLength(payload), 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' });
+        res.end(payload); return;
+      }
       let route = findRoute(routes, req.method, url.pathname), loginSubmission = false;
       if (!route && req.method === 'POST') {
         route = findRoute(routes, 'GET', url.pathname, candidate => candidate.method === 'GET' && candidate.loginBlock);
@@ -793,6 +855,7 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
       await Promise.resolve(localAuthenticationInitialization).catch(() => {});
       await Promise.resolve(localAuthenticationStore?.close());
       localAuthenticationStore = null;
+      chatViews.clear();
       await Promise.allSettled([...databasePools.values()].map(pool => pool.end()));
       databasePools.clear();
     }

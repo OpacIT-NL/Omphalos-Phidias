@@ -23,7 +23,7 @@ module.exports = {
   type: 'register_local_account',
   name: 'Register Local Account',
   category: 'Authentication',
-  description: 'Shows a registration form and creates an Application Database users row with an Argon2id password hash.',
+  description: 'Shows a registration form and creates an enabled Application Database users row with an Argon2id password hash and allow_login set to 1.',
   inputPorts: [{ id: 'action', name: 'Action', kind: 'action', types: [] }],
   outputs: ['registered'],
   outputPorts: [
@@ -39,7 +39,7 @@ module.exports = {
     if (ctx.response.writableEnded) return null;
     const authentication = await ctx.localAuthentication();
     if (ctx.request.method !== 'POST') {
-      const existing = authentication.browserSession(ctx.request);
+      const existing = await authentication.browserSession(ctx.request);
       if (existing) {
         ctx.setLoggedInUser?.(existing);
         setOutput('userid', existing.userid);

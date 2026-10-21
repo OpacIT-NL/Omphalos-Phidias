@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
-const argon2 = require('argon2');
+const argon2 = require('../lib/password-hash');
 const { LocalDatabaseAuth } = require('../runtime/local-auth');
 const { createApp, loadDefinitions } = require('../runtime/app');
 
@@ -13,13 +13,13 @@ const node = (id, type, options = {}) => ({ id, type, x: 0, y: 0, options });
 const edge = (id, from, output, to, input = 'action', kind = 'action') => ({ id, from, output, to, input, kind });
 const reply = (id, body) => node(id, 'respond', { status: 200, format: 'Text', body, headers: '{}' });
 
-test('local database authentication reads only the required users columns and keeps sessions in memory', async () => {
+test('local database authentication reads only the required users columns and keeps ordinary sessions in memory', async () => {
   const passwordHash = await argon2.hash('correct horse battery staple', { type: argon2.argon2id });
   const queries = [];
   const database = {
     async execute(sql, parameters) {
       queries.push({ sql, parameters });
-      return [[parameters[0] === 'alice' ? { id: 42, username: 'alice', password_hash: passwordHash, ignored: 'value' } : undefined].filter(Boolean), []];
+      return [[parameters[0] === 'alice' ? { id: 42, username: 'alice', password_hash: passwordHash, allow_login: 1, ignored: 'value' } : undefined].filter(Boolean), []];
     }
   };
   const authentication = new LocalDatabaseAuth(database, { cookieName: 'local_test_session' });
@@ -30,18 +30,34 @@ test('local database authentication reads only the required users columns and ke
   assert.equal(loggedIn.username, 'alice');
   assert.match(loggedIn.token, /^[a-f0-9]{64}$/);
   assert.deepEqual(queries.map(query => query.sql), [
-    'SELECT `id`,`username`,`password_hash` FROM `users` WHERE `username` = ? LIMIT 1',
-    'SELECT `id`,`username`,`password_hash` FROM `users` WHERE `username` = ? LIMIT 1'
+    'SELECT `id`,`username`,`password_hash`,`allow_login` FROM `users` WHERE `username` = ? LIMIT 1',
+    'SELECT `id`,`username`,`password_hash`,`allow_login` FROM `users` WHERE `username` = ? LIMIT 1'
   ]);
   assert.deepEqual(queries.map(query => query.parameters), [['alice'], ['alice']]);
 
   const request = { headers: { cookie: authentication.browserCookie(loggedIn.token).split(';')[0] } };
-  const browserSession = authentication.browserSession(request);
+  const browserSession = await authentication.browserSession(request);
   assert.equal(browserSession.userid, '42');
   assert.equal(browserSession.username, 'alice');
   assert.ok(browserSession.expiresAt >= loggedIn.expiresAt);
-  assert.equal(authentication.logout(request).userid, '42');
-  assert.equal(authentication.browserSession(request), null);
+  assert.equal((await authentication.logout(request)).userid, '42');
+  assert.equal(await authentication.browserSession(request), null);
+  authentication.close();
+});
+
+test('local database authentication refuses an account when allow_login is 0', async () => {
+  const passwordHash = await argon2.hash('correct horse battery staple', { type: argon2.argon2id });
+  const database = {
+    async execute() {
+      return [[{ id: 42, username: 'alice', password_hash: passwordHash, allow_login: 0 }], []];
+    }
+  };
+  const authentication = new LocalDatabaseAuth(database);
+  await assert.rejects(
+    authentication.login('alice', 'correct horse battery staple', '127.0.0.1'),
+    error => error?.status === 403 && /not allowed to sign in/.test(error.message)
+  );
+  assert.equal(authentication.sessions.size, 0);
   authentication.close();
 });
 
@@ -69,7 +85,7 @@ test('local account registration validates consent and stores an Argon2id passwo
   assert.equal(session.username, 'new.user');
   assert.equal(session.email, 'person@example.test');
   assert.equal(inserts.length, 1);
-  assert.equal(inserts[0].sql, 'INSERT INTO `users` (`username`,`email`,`password_hash`) VALUES (?,?,?)');
+  assert.equal(inserts[0].sql, 'INSERT INTO `users` (`username`,`email`,`password_hash`,`allow_login`) VALUES (?,?,?,1)');
   assert.equal(inserts[0].parameters[0], 'new.user');
   assert.equal(inserts[0].parameters[1], 'person@example.test');
   assert.match(inserts[0].parameters[2], /^\$argon2id\$/);
@@ -97,7 +113,7 @@ test('Login Local, local session check, userid output, and Logout Local work thr
     async execute(sql, parameters) {
       queries.push({ sql, parameters });
       if (sql.startsWith('INSERT INTO `users`')) return [{ insertId: 7002 }, []];
-      return [[parameters[0] === 'local-user' ? { id: 7001, username: 'local-user', password_hash: passwordHash } : undefined].filter(Boolean), []];
+      return [[parameters[0] === 'local-user' ? { id: 7001, username: 'local-user', password_hash: passwordHash, allow_login: 1 } : undefined].filter(Boolean), []];
     }
   };
   const blocks = [
@@ -139,6 +155,7 @@ test('Login Local, local session check, userid output, and Logout Local work thr
   const loginPage = await fetch(base + '/local');
   assert.equal(loginPage.status, 200);
   assert.match(loginPage.headers.get('content-type'), /^text\/html/);
+  assert.match(await loginPage.text(), /name="remember_me"/);
 
   const rejected = await fetch(base + '/local', {
     method: 'POST',
@@ -223,15 +240,15 @@ test('Login Local, local session check, userid output, and Logout Local work thr
   assert.equal(registeredPage.status, 200);
   assert.equal(await registeredPage.text(), '7002');
 
-  const selectQueries = queries.filter(query => query.sql.startsWith('SELECT'));
+  const selectQueries = queries.filter(query => query.sql === 'SELECT `id`,`username`,`password_hash`,`allow_login` FROM `users` WHERE `username` = ? LIMIT 1');
   assert.equal(selectQueries.length, 2);
   for (const query of selectQueries) {
-    assert.equal(query.sql, 'SELECT `id`,`username`,`password_hash` FROM `users` WHERE `username` = ? LIMIT 1');
+    assert.equal(query.sql, 'SELECT `id`,`username`,`password_hash`,`allow_login` FROM `users` WHERE `username` = ? LIMIT 1');
     assert.deepEqual(query.parameters, ['local-user']);
   }
   const insertQueries = queries.filter(query => query.sql.startsWith('INSERT'));
   assert.equal(insertQueries.length, 1);
-  assert.equal(insertQueries[0].sql, 'INSERT INTO `users` (`username`,`email`,`password_hash`) VALUES (?,?,?)');
+  assert.equal(insertQueries[0].sql, 'INSERT INTO `users` (`username`,`email`,`password_hash`,`allow_login`) VALUES (?,?,?,1)');
   assert.deepEqual(insertQueries[0].parameters.slice(0, 2), ['new.user', 'new@example.test']);
   assert.match(insertQueries[0].parameters[2], /^\$argon2id\$/);
   assert.equal(await argon2.verify(insertQueries[0].parameters[2], registrationValues.password), true);
