@@ -17,6 +17,35 @@ function inlineMarkdown(value) {
   value = value.replace(/(^|[^*])\*([^*]+)\*/g, '$1<em>$2</em>').replace(/(^|[^_])_([^_]+)_/g, '$1<em>$2</em>');
   return value.replace(/\u0000CODE(\d+)\u0000/g, (_match, index) => code[Number(index)]);
 }
+
+function tableCells(line) {
+  const cells = [];
+  let value = String(line).trim(), cell = '', code = false;
+  if (value.startsWith('|')) value = value.slice(1);
+  if (value.endsWith('|') && !value.endsWith('\\|')) value = value.slice(0, -1);
+  for (let index = 0; index < value.length; index++) {
+    const character = value[index];
+    if (character === '\\' && value[index + 1] === '|') { cell += '|'; index++; continue; }
+    if (character === '`') code = !code;
+    if (character === '|' && !code) { cells.push(cell.trim()); cell = ''; continue; }
+    cell += character;
+  }
+  cells.push(cell.trim());
+  return cells;
+}
+
+function tableAlignment(cell) {
+  const value = String(cell).trim();
+  if (!/^:?-{3,}:?$/.test(value)) return null;
+  if (value.startsWith(':') && value.endsWith(':')) return 'center';
+  if (value.endsWith(':')) return 'right';
+  return 'left';
+}
+
+function tableCell(tag, value, alignment) {
+  return `<${tag} style="text-align:${alignment}">${inlineMarkdown(value)}</${tag}>`;
+}
+
 function markdownToHTML(markdown) {
   if (typeof markdown !== 'string') throw new Error('Markdown input is required');
   const lines = markdown.replace(/\r\n?/g, '\n').split('\n'), output = [];
@@ -35,6 +64,21 @@ function markdownToHTML(markdown) {
     }
     const heading = line.match(/^(#{1,6})\s+(.+)$/);
     if (heading) { flushParagraph(); output.push(`<h${heading[1].length}>${inlineMarkdown(heading[2])}</h${heading[1].length}>`); index++; continue; }
+    if (index + 1 < lines.length && /(^|[^\\])\|/.test(line) && /(^|[^\\])\|/.test(lines[index + 1])) {
+      const headings = tableCells(line), alignments = tableCells(lines[index + 1]).map(tableAlignment);
+      if (headings.length === alignments.length && headings.length > 0 && alignments.every(Boolean)) {
+        flushParagraph(); index += 2;
+        const rows = [];
+        while (index < lines.length && lines[index].trim() && /(^|[^\\])\|/.test(lines[index])) {
+          const cells = tableCells(lines[index]).slice(0, headings.length);
+          while (cells.length < headings.length) cells.push('');
+          rows.push(`<tr>${cells.map((cell, cellIndex) => tableCell('td', cell, alignments[cellIndex])).join('')}</tr>`);
+          index++;
+        }
+        output.push(`<table><thead><tr>${headings.map((cell, cellIndex) => tableCell('th', cell, alignments[cellIndex])).join('')}</tr></thead><tbody>${rows.join('')}</tbody></table>`);
+        continue;
+      }
+    }
     if (/^\s*(?:---+|___+|\*\*\*+)\s*$/.test(line)) { flushParagraph(); output.push('<hr>'); index++; continue; }
     if (/^>\s?/.test(line)) {
       flushParagraph(); const quote = [];
@@ -59,7 +103,7 @@ module.exports = {
   type: 'markdown_to_html',
   name: 'Markdown to HTML',
   category: 'Data',
-  description: 'Converts Markdown text to escaped HTML with headings, formatting, links, lists, quotes, and code blocks.',
+  description: 'Converts Markdown text to escaped HTML with headings, formatting, links, lists, quotes, tables, and code blocks.',
   inputPorts: [
     { id: 'action', name: 'Action', kind: 'action', types: [] },
     { id: 'markdown', name: 'Markdown', kind: 'value', types: ['text'], required: true }
@@ -75,5 +119,6 @@ module.exports = {
     return 'next';
   },
   markdownToHTML,
-  inlineMarkdown
+  inlineMarkdown,
+  tableCells
 };

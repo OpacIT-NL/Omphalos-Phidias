@@ -64,6 +64,19 @@ test('Markdown to HTML supports common Markdown and escapes embedded HTML', () =
   assert.doesNotMatch(markdownToHTML('[Bad](javascript:alert(1))'), /href=/);
 });
 
+test('Markdown to HTML converts aligned tables and safely handles cell contents', () => {
+  const html = markdownToHTML('| Name | Value | Notes |\n| :--- | ---: | :---: |\n| **Alpha** | 12 | `a|b` |\n| A \\| B | <script>alert(1)</script> | short |');
+  assert.match(html, /^<table><thead><tr>/);
+  assert.match(html, /<th style="text-align:left">Name<\/th>/);
+  assert.match(html, /<th style="text-align:right">Value<\/th>/);
+  assert.match(html, /<th style="text-align:center">Notes<\/th>/);
+  assert.match(html, /<td style="text-align:left"><strong>Alpha<\/strong><\/td>/);
+  assert.match(html, /<code>a\|b<\/code>/);
+  assert.match(html, /A \| B/);
+  assert.match(html, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
+  assert.doesNotMatch(html, /<script>/);
+});
+
 test('template, Markdown, and variable blocks form an HTML response workflow', async t => {
   const { createApp, loadDefinitions } = require('../runtime/app');
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'phidias-template-app-'));
