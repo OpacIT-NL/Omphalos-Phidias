@@ -16,6 +16,9 @@ test('Application Console Passthrough outputs safe bounded HTML', async () => {
   assert.match(outputs.html, /application-console\/safe-token/);
   assert.match(outputs.html, /--phidias-console-height:1200px/);
   assert.match(outputs.html, /const maximum = 10/);
+  assert.match(outputs.html, /class="phidias-application-console__input-form"/);
+  assert.match(outputs.html, /method: "POST"/);
+  assert.match(outputs.html, /"x-phidias-console-token": "safe-token"/);
   assert.doesNotMatch(outputs.html, /<script>alert\(1\)<\/script>/);
   assert.match(outputs.html, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
   const script = outputs.html.match(/<script>\n([\s\S]*)\n<\/script>$/)?.[1];
@@ -23,7 +26,7 @@ test('Application Console Passthrough outputs safe bounded HTML', async () => {
   assert.doesNotThrow(() => new Function(script));
 });
 
-test('Application Console Passthrough streams logger entries with replay', async t => {
+test('Application Console Passthrough streams output and passes input to Console Input blocks', async t => {
   const folder = await fs.mkdtemp(path.join(os.tmpdir(), 'phidias-console-stream-'));
   t.after(() => fs.rm(folder, { recursive: true, force: true }));
   const logger = createLogger({ level: 4, directory: folder, stdout: { write() {} }, stderr: { write() {} } });
@@ -34,12 +37,16 @@ test('Application Console Passthrough streams logger entries with replay', async
     blocks: [
       { id: 'http', type: 'http', x: 0, y: 0, options: { method: 'GET', path: '/console' } },
       { id: 'panel', type: 'application_console_passthrough', x: 200, y: 0, options: { title: 'Logs', height: 300, max_lines: 100 } },
-      { id: 'reply', type: 'respond', x: 400, y: 0, options: { status: 200, format: 'HTML', body: '', headers: '{}' } }
+      { id: 'reply', type: 'respond', x: 400, y: 0, options: { status: 200, format: 'HTML', body: '', headers: '{}' } },
+      { id: 'input', type: 'bot_input', x: 0, y: 200, options: {} },
+      { id: 'input-log', type: 'console_log', x: 200, y: 200, options: { level: 'info', value: '' } }
     ],
     connections: [
       { id: 'a1', from: 'http', output: 'next', to: 'panel', input: 'action', kind: 'action' },
       { id: 'a2', from: 'panel', output: 'next', to: 'reply', input: 'action', kind: 'action' },
-      { id: 'v1', from: 'panel', output: 'html', to: 'reply', input: 'body', kind: 'value' }
+      { id: 'v1', from: 'panel', output: 'html', to: 'reply', input: 'body', kind: 'value' },
+      { id: 'a3', from: 'input', output: 'action', to: 'input-log', input: 'action', kind: 'action' },
+      { id: 'v2', from: 'input', output: 'value', to: 'input-log', input: 'value', kind: 'value' }
     ]
   }] };
   const app = createApp({ document, definitions, logger });
@@ -49,16 +56,31 @@ test('Application Console Passthrough streams logger entries with replay', async
   const page = await (await fetch(base + '/console')).text();
   const streamPath = page.match(/\/_phidias\/application-console\/[a-f0-9-]{36}/)?.[0];
   assert.ok(streamPath);
+  const token = streamPath.split('/').at(-1);
   assert.equal((await fetch(base + streamPath)).status, 406);
+  assert.equal((await fetch(base + streamPath, {
+    method: 'POST', headers: { origin: base, 'content-type': 'application/json' }, body: JSON.stringify({ input: 'rejected' })
+  })).status, 403);
+  assert.equal((await fetch(base + streamPath, {
+    method: 'POST',
+    headers: { origin: base, 'content-type': 'application/json', 'x-phidias-console-token': token },
+    body: JSON.stringify({ input: 'two\nlines' })
+  })).status, 400);
   const controller = new AbortController();
   const response = await fetch(base + streamPath, { headers: { accept: 'text/event-stream' }, signal: controller.signal });
   assert.equal(response.status, 200);
   const reader = response.body.getReader();
-  logger.warning('After page');
+  const inputResponse = await fetch(base + streamPath, {
+    method: 'POST',
+    headers: { origin: base, 'content-type': 'application/json', 'x-phidias-console-token': token },
+    body: JSON.stringify({ input: 'status from browser' })
+  });
+  assert.equal(inputResponse.status, 202);
+  assert.deepEqual(await inputResponse.json(), { accepted: true, receivers: 1 });
   let received = '';
-  while (!received.includes('After page')) received += new TextDecoder().decode((await reader.read()).value || new Uint8Array());
+  while (!received.includes('status from browser')) received += new TextDecoder().decode((await reader.read()).value || new Uint8Array());
   controller.abort();
   assert.match(received, /Before page/);
-  assert.match(received, /After page/);
-  assert.match(received, /"level":"warning"/);
+  assert.match(received, /status from browser/);
+  assert.match(received, /"level":"info"/);
 });

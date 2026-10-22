@@ -7,7 +7,7 @@ let project = null, projects = [], definitions = [], workspaceID = null, selecte
 let csrfToken = '', dirty = false, generation = 0, saving = null, view = { x: 0, y: 60, zoom: 1 }, toastTimer;
 const selectedBlocks = new Set(), openWorkspaceIDs = new Set();
 let blockClipboard = null, workspaceClipboard = null, clipboardKind = null, workspaceContextID = null, draggedWorkspaceID = null, draggedWorkspaceCategoryID = null;
-let templateNames = [], templateOriginalName = null, templateDirty = false;
+let templateNames = [], templateOriginalName = null, templateDirty = false, templateSaving = null;
 let sessionPermissions = {}, accessData = null, accessSelection = null;
 let databaseCredentials = [];
 let credentialData = [], credentialCategory = 'ssh';
@@ -620,25 +620,29 @@ async function openTemplateEditor() {
   if (templateNames.length) await selectTemplate(templateNames.includes(preferred) ? preferred : templateNames[0], true);
 }
 async function saveTemplate() {
-  const name = $('#template-name').value.trim();
-  if (!name) throw new Error('Enter a template filename.');
-  const contents = $('#template-contents').value;
-  const previousName = templateOriginalName;
-  setTemplateState('Saving…');
-  try {
-    const result = await api(`/api/projects/${project.id}/templates/${encodeURIComponent(name)}`, { method: 'PUT', body: JSON.stringify({ contents, previousName, revision: project.revision }) });
-    project.revision = result.project.revision; project.updatedAt = result.project.updatedAt;
-    templateOriginalName = result.template.name;
-    rememberTemplateSelection(result.template.name);
-    if (result.template.contents !== contents) {
-      templateDirty = true;
-      throw new Error('The server did not preserve the complete template contents. Your editor copy has been kept unsaved.');
-    }
-    templateDirty = $('#template-name').value.trim() !== name || $('#template-contents').value !== contents;
-    templateNames = await api(`/api/projects/${project.id}/templates?revision=${project.revision}`);
-    setTemplateState(); renderTemplateList(); await refreshProjects(); setProjectControls(true);
-    toast(templateDirty ? `Template ${result.template.name} saved as project revision ${project.revision}; newer editor changes are still unsaved.` : `Template ${result.template.name} saved as project revision ${project.revision}.`);
-  } catch (error) { setTemplateState(); throw error; }
+  if (templateSaving) return templateSaving;
+  templateSaving = Promise.resolve().then(async () => {
+    const name = $('#template-name').value.trim();
+    if (!name) throw new Error('Enter a template filename.');
+    const contents = $('#template-contents').value;
+    const previousName = templateOriginalName;
+    setTemplateState('Saving…');
+    try {
+      const result = await api(`/api/projects/${project.id}/templates/${encodeURIComponent(name)}`, { method: 'PUT', body: JSON.stringify({ contents, previousName, revision: project.revision }) });
+      project.revision = result.project.revision; project.updatedAt = result.project.updatedAt;
+      templateOriginalName = result.template.name;
+      rememberTemplateSelection(result.template.name);
+      if (result.template.contents !== contents) {
+        templateDirty = true;
+        throw new Error('The server did not preserve the complete template contents. Your editor copy has been kept unsaved.');
+      }
+      templateDirty = $('#template-name').value.trim() !== name || $('#template-contents').value !== contents;
+      templateNames = await api(`/api/projects/${project.id}/templates?revision=${project.revision}`);
+      setTemplateState(); renderTemplateList(); await refreshProjects(); setProjectControls(true);
+      toast(templateDirty ? `Template ${result.template.name} saved as project revision ${project.revision}; newer editor changes are still unsaved.` : `Template ${result.template.name} saved as project revision ${project.revision}.`);
+    } catch (error) { setTemplateState(); throw error; }
+  });
+  try { return await templateSaving; } finally { templateSaving = null; setTemplateState(); }
 }
 async function deleteTemplate() {
   if (!templateOriginalName || !confirm(`Delete ${templateOriginalName}? This creates a new project revision.`)) return;
@@ -1320,10 +1324,14 @@ function setTheme(theme) { document.documentElement.dataset.theme = theme; local
 setTheme(localStorage.getItem('phidias-theme') || 'system');
 $('#theme-toggle').onclick = () => setTheme(themes[(themes.indexOf(document.documentElement.dataset.theme) + 1) % themes.length]);
 window.addEventListener('keydown', event => {
-  if ($('#form-dialog').open || $('#version-dialog').open || $('#template-dialog').open || $('#access-dialog').open || $('#credential-dialog').open || $('#console-dialog').open) return;
   const command = event.ctrlKey || event.metaKey;
-  const editing = event.target.closest?.('input,textarea,select,[contenteditable]');
   const key = event.key.toLowerCase();
+  if ($('#template-dialog').open) {
+    if (command && key === 's') { event.preventDefault(); if (templateDirty) handle(saveTemplate)(); }
+    return;
+  }
+  if ($('#form-dialog').open || $('#version-dialog').open || $('#access-dialog').open || $('#credential-dialog').open || $('#console-dialog').open) return;
+  const editing = event.target.closest?.('input,textarea,select,[contenteditable]');
   if (command && key === 's') { event.preventDefault(); handle(save)(); }
   if (command && key === 'c' && !editing && (selectedBlocks.size || (!selectedEdge && ws()))) {
     event.preventDefault(); if (selectedBlocks.size) copySelection(); else copyWorkspace();

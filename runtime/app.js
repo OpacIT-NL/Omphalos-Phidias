@@ -365,7 +365,8 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
       for (const [key, stream] of consoleStreams) if (stream.expiresAt <= now) consoleStreams.delete(key);
       while (consoleStreams.size >= 64) consoleStreams.delete(consoleStreams.keys().next().value);
       const token = randomUUID();
-      consoleStreams.set(token, { expiresAt: now + 60 * 60 * 1000, ip: request.ip });
+      const cookie = String(request.headers?.cookie || '');
+      consoleStreams.set(token, { expiresAt: now + 60 * 60 * 1000, ip: request.ip, cookieHash: cookie ? crypto.createHash('sha256').update(cookie).digest('hex') : null });
       return token;
     };
     context.createChatView = async configuration => {
@@ -691,13 +692,30 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
         res.writeHead(200, { 'content-type': 'image/x-icon', 'content-length': favicon.length, 'cache-control': 'public, max-age=86400' });
         res.end(req.method === 'HEAD' ? undefined : favicon); return;
       }
-      const consoleMatch = req.method === 'GET' ? url.pathname.match(/^\/_phidias\/application-console\/([^/]+)$/) : null;
+      const consoleMatch = ['GET', 'POST'].includes(req.method) ? url.pathname.match(/^\/_phidias\/application-console\/([^/]+)$/) : null;
       if (consoleMatch) {
         let token;
         try { token = decodeURIComponent(consoleMatch[1]); } catch { res.writeHead(400); res.end('Invalid console token'); return; }
         const stream = consoleStreams.get(token);
         if (!stream || stream.expiresAt <= Date.now()) { consoleStreams.delete(token); res.writeHead(404); res.end('Console stream not found'); return; }
         if (stream.ip && stream.ip !== req.socket.remoteAddress) { res.writeHead(403); res.end('Console stream client does not match'); return; }
+        if (stream.cookieHash) {
+          const cookieHash = crypto.createHash('sha256').update(String(req.headers.cookie || '')).digest('hex');
+          const expected = Buffer.from(stream.cookieHash, 'hex'), received = Buffer.from(cookieHash, 'hex');
+          if (expected.length !== received.length || !crypto.timingSafeEqual(expected, received)) { res.writeHead(403); res.end('Console session does not match'); return; }
+        }
+        stream.expiresAt = Date.now() + 60 * 60 * 1000;
+        if (req.method === 'POST') {
+          if (!isSameOriginFormRequest(req.headers) || req.headers['x-phidias-console-token'] !== token) { res.writeHead(403); res.end('Console input rejected'); return; }
+          const body = await readBody(req, 8192);
+          const input = body && typeof body === 'object' && !Array.isArray(body) ? body.input : null;
+          if (typeof input !== 'string' || !input.trim() || input.length > 4096 || /[\r\n\u0000]/.test(input)) { res.writeHead(400); res.end('Console input must contain 1–4096 characters on one line'); return; }
+          if (!stdinListeners.length) { res.writeHead(409); res.end('No active Console Input blocks are available'); return; }
+          for (const listener of [...stdinListeners]) listener(input);
+          const payload = JSON.stringify({ accepted: true, receivers: stdinListeners.length });
+          res.writeHead(202, { 'content-type': 'application/json; charset=utf-8', 'content-length': Buffer.byteLength(payload), 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' });
+          res.end(payload); return;
+        }
         if (!String(req.headers.accept || '').includes('text/event-stream')) { res.writeHead(406); res.end('Console stream requires EventSource'); return; }
         clearTimeout(deadline);
         res.writeHead(200, {
