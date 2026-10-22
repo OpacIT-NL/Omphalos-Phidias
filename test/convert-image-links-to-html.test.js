@@ -29,10 +29,22 @@ test('Convert Image Links to HTML rejects unsupported and unsafe URLs and escape
   assert.match(result, /alt="A &amp; B"/);
 });
 
+test('Convert Image Links to HTML applies a responsive configurable maximum width', () => {
+  const automatic = block.convertImageLinksToHTML('https://example.test/image.png');
+  const limited = block.convertImageLinksToHTML('https://example.test/image.png', 640.4);
+  assert.doesNotMatch(automatic, /style=/);
+  assert.match(limited, /style="width:auto;max-width:min\(100%, 640px\);height:auto"/);
+  assert.equal(block.maximumWidth(0), null);
+  assert.equal(block.maximumWidth('invalid'), null);
+  assert.equal(block.maximumWidth(9000), 4096);
+});
+
 test('Convert Image Links to HTML exposes typed ports and executes as a value block', async () => {
   const outputs = {};
-  assert.equal(await block.execute({}, {}, { content: 'https://example.test/image.png' }, (id, value) => { outputs[id] = value; }), 'next');
+  assert.equal(await block.execute({}, { max_width: 480 }, { content: 'https://example.test/image.png' }, (id, value) => { outputs[id] = value; }), 'next');
   assert.match(outputs.html, /^<img class="phidias-linked-image"/);
+  assert.match(outputs.html, /max-width:min\(100%, 480px\)/);
+  assert.equal(block.fields.find(field => field.key === 'max_width').default, 0);
   assert.deepEqual(block.inputPorts.find(port => port.id === 'content').types, ['text']);
   assert.deepEqual(block.outputPorts.find(port => port.id === 'html').types, ['text']);
 });
