@@ -236,7 +236,7 @@ async function createServer({ directory = loadConfig().directory, repositoryDire
         const accessGrantMatch = url.pathname.match(/^\/api\/access\/grants\/(core|projects\/([^/]+))\/(user|group)\/(\d+)$/);
         if (url.pathname === '/api/access' || accessUserMatch || accessGroupMatch || accessGrantMatch) {
           await auth.requireCore(session.username, 'manage_users');
-          if (url.pathname === '/api/access' && req.method === 'GET') return send(200, auth.accessModel(await store.list()));
+          if (url.pathname === '/api/access' && req.method === 'GET') return send(200, await auth.accessModel(await store.list()));
           if (accessUserMatch) {
             const [, encodedUsername, passwordAction] = accessUserMatch;
             if (!encodedUsername && req.method === 'POST') {

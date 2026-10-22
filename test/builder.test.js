@@ -424,7 +424,12 @@ test('password login, protected routes, CSRF, logout, malformed requests and tra
 });
 
 test('users and groups receive additive core and per-project ACL permissions', async t => {
-  const { call, rawCall } = await fixture(t);
+  const { call, rawCall, auth } = await fixture(t);
+  const accessModel = auth.accessModel.bind(auth);
+  auth.accessModel = async projects => {
+    await Promise.resolve();
+    return accessModel(projects);
+  };
   const administratorSession = await (await call('/api/session')).json();
   assert.equal(administratorSession.permissions.manageUsers, true);
   const project = await (await call('/api/projects', 'POST', { name: 'Restricted' })).json();

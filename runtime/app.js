@@ -10,6 +10,23 @@ const { validate } = require('./validate');
 const { normalizeDefinition, executeLegacy } = require('./legacy');
 const { parseCron, matchesCron } = require('./cron');
 
+const CONSOLE_MODE_PROMPTS = new Map([
+  ['0', 'Console$>'],
+  ['1', 'Console#>'],
+  ['2', 'Config#>'],
+  ['db', 'DB_CLI#>'],
+  ['sql', 'MySQL>'],
+  ['enablepassword', 'Please type the Enable Password: ']
+]);
+function consolePromptFromMode(value) {
+  const mode = String(value ?? '').trim();
+  return CONSOLE_MODE_PROMPTS.get(mode) ?? `${mode}_CLI>`;
+}
+function readConsolePrompt(directory) {
+  try { return consolePromptFromMode(fs.readFileSync(path.join(directory, 'config', 'console-mode.txt'), 'utf8')); }
+  catch { return CONSOLE_MODE_PROMPTS.get('0'); }
+}
+
 function mysqlPoolOptions(credentials, connectionLimit = 10) {
   return {
     host: credentials.host,
@@ -358,6 +375,7 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
     };
     context.redactForLog = value => snapshotLogValue(value, new WeakMap(), '$', 0, context.secretValues);
     context.render = value => render(value, context);
+    context.getConsolePrompt = () => readConsolePrompt(directory);
     context.createConsolePassthrough = () => {
       if (!request) throw new Error('Application Console Passthrough requires an HTTP endpoint trigger');
       if (typeof logger?.subscribe !== 'function') throw new Error('The application logger does not support live console streaming');
@@ -365,8 +383,7 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
       for (const [key, stream] of consoleStreams) if (stream.expiresAt <= now) consoleStreams.delete(key);
       while (consoleStreams.size >= 64) consoleStreams.delete(consoleStreams.keys().next().value);
       const token = randomUUID();
-      const cookie = String(request.headers?.cookie || '');
-      consoleStreams.set(token, { expiresAt: now + 60 * 60 * 1000, ip: request.ip, cookieHash: cookie ? crypto.createHash('sha256').update(cookie).digest('hex') : null });
+      consoleStreams.set(token, { expiresAt: now + 60 * 60 * 1000, ip: request.ip });
       return token;
     };
     context.createChatView = async configuration => {
@@ -699,11 +716,6 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
         const stream = consoleStreams.get(token);
         if (!stream || stream.expiresAt <= Date.now()) { consoleStreams.delete(token); res.writeHead(404); res.end('Console stream not found'); return; }
         if (stream.ip && stream.ip !== req.socket.remoteAddress) { res.writeHead(403); res.end('Console stream client does not match'); return; }
-        if (stream.cookieHash) {
-          const cookieHash = crypto.createHash('sha256').update(String(req.headers.cookie || '')).digest('hex');
-          const expected = Buffer.from(stream.cookieHash, 'hex'), received = Buffer.from(cookieHash, 'hex');
-          if (expected.length !== received.length || !crypto.timingSafeEqual(expected, received)) { res.writeHead(403); res.end('Console session does not match'); return; }
-        }
         stream.expiresAt = Date.now() + 60 * 60 * 1000;
         if (req.method === 'POST') {
           if (!isSameOriginFormRequest(req.headers) || req.headers['x-phidias-console-token'] !== token) { res.writeHead(403); res.end('Console input rejected'); return; }
@@ -725,12 +737,21 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
           'x-content-type-options': 'nosniff'
         });
         res.write('retry: 2000\n\n');
+        let currentPrompt = readConsolePrompt(directory);
+        res.write(`event: prompt\ndata: ${JSON.stringify(currentPrompt)}\n\n`);
         const send = entry => {
           if (!res.destroyed && !res.writableEnded) res.write(`event: log\ndata: ${JSON.stringify(entry)}\n\n`);
         };
         const unsubscribe = logger.subscribe(send);
+        const promptRefresh = setInterval(() => {
+          const prompt = readConsolePrompt(directory);
+          if (prompt !== currentPrompt && !res.destroyed && !res.writableEnded) {
+            currentPrompt = prompt;
+            res.write(`event: prompt\ndata: ${JSON.stringify(prompt)}\n\n`);
+          }
+        }, 500);
         const heartbeat = setInterval(() => { if (!res.destroyed && !res.writableEnded) res.write(': keepalive\n\n'); }, 15000);
-        req.on('close', () => { clearInterval(heartbeat); unsubscribe(); });
+        req.on('close', () => { clearInterval(promptRefresh); clearInterval(heartbeat); unsubscribe(); });
         return;
       }
       const formMatch = req.method === 'POST' ? url.pathname.match(/^\/_phidias\/forms\/([^/]+)$/) : null;
@@ -935,4 +956,4 @@ if (require.main === module) {
   launch().catch(error => { logger.critical('Could not start application: %s', error?.stack || error); process.exitCode = 1; });
   for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => { stop(signal); });
 }
-module.exports = { createApp, loadDefinitions, render, readBody, findRoute, normalizeRoutePath, loadAppConfig, validateAppConfig, bootstrapAuthentication, parseFormBody, safeFormReturnPath, isSameOriginFormRequest, mysqlPoolOptions };
+module.exports = { createApp, loadDefinitions, render, readBody, findRoute, normalizeRoutePath, loadAppConfig, validateAppConfig, bootstrapAuthentication, parseFormBody, safeFormReturnPath, isSameOriginFormRequest, mysqlPoolOptions, consolePromptFromMode, readConsolePrompt };

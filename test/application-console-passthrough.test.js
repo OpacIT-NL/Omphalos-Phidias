@@ -5,7 +5,7 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const { createLogger } = require('../runtime/logger');
-const { createApp, loadDefinitions } = require('../runtime/app');
+const { createApp, loadDefinitions, consolePromptFromMode } = require('../runtime/app');
 const consoleBlock = require('../blocks/application_console_passthrough');
 
 test('Application Console Passthrough outputs safe bounded HTML', async () => {
@@ -26,9 +26,21 @@ test('Application Console Passthrough outputs safe bounded HTML', async () => {
   assert.doesNotThrow(() => new Function(script));
 });
 
+test('Application Console Passthrough maps console modes to visible prompts', async () => {
+  assert.equal(consolePromptFromMode('0\n'), 'Console$>');
+  assert.equal(consolePromptFromMode('1'), 'Console#>');
+  assert.equal(consolePromptFromMode('2'), 'Config#>');
+  assert.equal(consolePromptFromMode('db'), 'DB_CLI#>');
+  assert.equal(consolePromptFromMode('sql'), 'MySQL>');
+  assert.equal(consolePromptFromMode('enablepassword'), 'Please type the Enable Password: ');
+  assert.equal(consolePromptFromMode('PluralPage'), 'PluralPage_CLI>');
+});
+
 test('Application Console Passthrough streams output and passes input to Console Input blocks', async t => {
   const folder = await fs.mkdtemp(path.join(os.tmpdir(), 'phidias-console-stream-'));
   t.after(() => fs.rm(folder, { recursive: true, force: true }));
+  await fs.mkdir(path.join(folder, 'config'));
+  await fs.writeFile(path.join(folder, 'config', 'console-mode.txt'), '0\n');
   const logger = createLogger({ level: 4, directory: folder, stdout: { write() {} }, stderr: { write() {} } });
   logger.info('Before page');
   const definitions = loadDefinitions(path.resolve(__dirname, '../blocks'));
@@ -49,11 +61,12 @@ test('Application Console Passthrough streams output and passes input to Console
       { id: 'v2', from: 'input', output: 'value', to: 'input-log', input: 'value', kind: 'value' }
     ]
   }] };
-  const app = createApp({ document, definitions, logger });
+  const app = createApp({ directory: folder, document, definitions, logger });
   const address = await app.start(0, '127.0.0.1');
   t.after(() => app.stop());
   const base = `http://127.0.0.1:${address.port}`;
-  const page = await (await fetch(base + '/console')).text();
+  const page = await (await fetch(base + '/console', { headers: { cookie: 'session=before-page' } })).text();
+  assert.match(page, /class="phidias-application-console__prompt" aria-hidden="true">Console\$&gt;<\/span>/);
   const streamPath = page.match(/\/_phidias\/application-console\/[a-f0-9-]{36}/)?.[0];
   assert.ok(streamPath);
   const token = streamPath.split('/').at(-1);
@@ -67,20 +80,22 @@ test('Application Console Passthrough streams output and passes input to Console
     body: JSON.stringify({ input: 'two\nlines' })
   })).status, 400);
   const controller = new AbortController();
-  const response = await fetch(base + streamPath, { headers: { accept: 'text/event-stream' }, signal: controller.signal });
+  const response = await fetch(base + streamPath, { headers: { accept: 'text/event-stream', cookie: 'session=after-page; preference=dark' }, signal: controller.signal });
   assert.equal(response.status, 200);
   const reader = response.body.getReader();
+  await fs.writeFile(path.join(folder, 'config', 'console-mode.txt'), 'sql\n');
   const inputResponse = await fetch(base + streamPath, {
     method: 'POST',
-    headers: { origin: base, 'content-type': 'application/json', 'x-phidias-console-token': token },
+    headers: { origin: base, cookie: 'session=after-page; preference=dark', 'content-type': 'application/json', 'x-phidias-console-token': token },
     body: JSON.stringify({ input: 'status from browser' })
   });
   assert.equal(inputResponse.status, 202);
   assert.deepEqual(await inputResponse.json(), { accepted: true, receivers: 1 });
   let received = '';
-  while (!received.includes('status from browser')) received += new TextDecoder().decode((await reader.read()).value || new Uint8Array());
+  while (!received.includes('status from browser') || !received.includes('data: "MySQL>"')) received += new TextDecoder().decode((await reader.read()).value || new Uint8Array());
   controller.abort();
   assert.match(received, /Before page/);
   assert.match(received, /status from browser/);
+  assert.match(received, /event: prompt\ndata: "MySQL>"/);
   assert.match(received, /"level":"info"/);
 });

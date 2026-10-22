@@ -4,7 +4,7 @@ const escapeHTML = value => String(value).replace(/[&<>"']/g, character => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
 })[character]);
 
-function consoleHTML({ token, title, height, maxLines }) {
+function consoleHTML({ token, title, height, maxLines, prompt }) {
   const streamURL = `/_phidias/application-console/${encodeURIComponent(token)}`;
   return `<section class="phidias-application-console" data-console-token="${escapeHTML(token)}" style="--phidias-console-height:${height}px">
   <header class="phidias-application-console__header">
@@ -14,7 +14,7 @@ function consoleHTML({ token, title, height, maxLines }) {
   </header>
   <div class="phidias-application-console__output" role="log" aria-live="polite" aria-relevant="additions text"></div>
   <form class="phidias-application-console__input-form">
-    <label><span class="phidias-application-console__sr-only">Console input</span><input type="text" maxlength="4096" autocomplete="off" spellcheck="false" placeholder="Enter console input"></label>
+    <label><span class="phidias-application-console__sr-only">Console input</span><span class="phidias-application-console__prompt" aria-hidden="true">${escapeHTML(prompt)}</span><input type="text" maxlength="4096" autocomplete="off" spellcheck="false" placeholder="Enter console input"></label>
     <button type="submit">Send</button>
   </form>
 </section>
@@ -32,7 +32,7 @@ function consoleHTML({ token, title, height, maxLines }) {
 .phidias-application-console__line--warning{color:#e8ad60}
 .phidias-application-console__line--error,.phidias-application-console__line--critical{color:#dd6b72}
 .phidias-application-console__input-form{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;padding:9px 11px;border-top:1px solid #343a44;background:#171a20}
-.phidias-application-console__input-form label{min-width:0}.phidias-application-console__input-form input{width:100%;height:34px;box-sizing:border-box;border:1px solid #434b57;border-radius:4px;padding:6px 9px;background:#101318;color:#edf0f4;font:inherit}.phidias-application-console__input-form input:focus{border-color:#69b7e6;outline:2px solid rgb(105 183 230 / 20%)}
+.phidias-application-console__input-form label{min-width:0;display:grid;grid-template-columns:auto minmax(0,1fr);gap:8px;align-items:center}.phidias-application-console__prompt{color:#edf0f4;white-space:pre}.phidias-application-console__input-form input{width:100%;height:34px;box-sizing:border-box;border:1px solid #434b57;border-radius:4px;padding:6px 9px;background:#101318;color:#edf0f4;font:inherit}.phidias-application-console__input-form input:focus{border-color:#69b7e6;outline:2px solid rgb(105 183 230 / 20%)}
 .phidias-application-console__input-form button{height:34px;border:1px solid #5798bd;border-radius:4px;padding:0 13px;background:#397da5;color:#fff;font:600 11px/1.2 Inter,ui-sans-serif,system-ui,sans-serif;cursor:pointer}.phidias-application-console__input-form button:disabled{cursor:wait;opacity:.6}
 .phidias-application-console__sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)}
 </style>
@@ -46,6 +46,7 @@ function consoleHTML({ token, title, height, maxLines }) {
   const status = panel.querySelector(".phidias-application-console__status");
   const clear = panel.querySelector(".phidias-application-console__clear");
   const form = panel.querySelector(".phidias-application-console__input-form");
+  const prompt = form.querySelector(".phidias-application-console__prompt");
   const input = form.querySelector("input");
   const send = form.querySelector("button");
   const maximum = ${maxLines};
@@ -54,6 +55,7 @@ function consoleHTML({ token, title, height, maxLines }) {
   const source = new EventSource(${JSON.stringify(streamURL)});
   source.addEventListener("open", () => { connected = true; status.textContent = "Live"; status.dataset.state = "connected"; });
   source.addEventListener("error", () => { connected = false; status.textContent = "Reconnecting"; status.dataset.state = "error"; });
+  source.addEventListener("prompt", event => { try { prompt.textContent = JSON.parse(event.data); } catch {} });
   source.addEventListener("log", event => {
     let entry;
     try { entry = JSON.parse(event.data); } catch { return; }
@@ -105,7 +107,8 @@ module.exports = {
     const height = Math.max(120, Math.min(1200, Number(options.height) || 360));
     const maxLines = Math.max(10, Math.min(2000, Number(options.max_lines) || 250));
     const token = ctx.createConsolePassthrough();
-    setOutput('html', consoleHTML({ token, title: options.title || 'Application Console', height, maxLines }));
+    const prompt = typeof ctx.getConsolePrompt === 'function' ? ctx.getConsolePrompt() : 'Console$>';
+    setOutput('html', consoleHTML({ token, title: options.title || 'Application Console', height, maxLines, prompt }));
     return 'next';
   },
   consoleHTML
