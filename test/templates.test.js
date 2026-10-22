@@ -30,6 +30,16 @@ test('Apply Variable replaces every matching placeholder with text or HTML', () 
   assert.throws(() => applyVariable('', '%name%', 'x'), /without percent signs/);
 });
 
+test('Apply Variable safely inserts multiline values into quoted inline script placeholders', () => {
+  const value = 'D6-system:\r\n- Age: 26\n"quoted" \\ path </script>\u2028next';
+  const html = applyVariable('<script>const body = "%description%"; window.saved = body;</script><textarea>%description%</textarea>', 'description', value);
+  const script = html.match(/<script>([\s\S]*?)<\/script>/)?.[1];
+  assert.ok(script);
+  assert.doesNotThrow(() => new Function(script));
+  assert.match(script, /D6-system:\\r\\n- Age: 26\\n\\"quoted\\" \\\\ path \\u003c\/script>/);
+  assert.match(html, /<textarea>D6-system:\r\n- Age: 26\n"quoted" \\ path <\/script>/);
+});
+
 test('multi-template, multi-variable, and requested multi-text blocks expose every numbered value', async t => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'phidias-multi-template-'));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
