@@ -39,7 +39,6 @@ const nextNumberId = items => Math.max(0, ...items.map(item => Number.isInteger(
 const defaultNodeWidth = block => (def(block.type)?.fields.length ? 500 : 300);
 const nodeWidth = block => Number.isFinite(block.width) ? block.width : defaultNodeWidth(block);
 const nodeHeight = block => Number.isFinite(block.height) ? block.height : 300;
-const typeColors = { action: '#23a559', string: '#e67e22', number: '#168df0', boolean: '#d42ee7', object: '#6f42c1', array: '#e83e8c', unspecified: '#8b949e' };
 
 function toast(message, error = false) {
   $('#toast').textContent = message; $('#toast').className = error ? 'error' : ''; $('#toast').hidden = false;
@@ -705,7 +704,8 @@ function optionEditor(field, value) {
   if (field.type === 'checkbox') return `${open}<input class="option-checkbox" type="checkbox" data-field="${key}" ${value ? 'checked' : ''}></label>`;
   return `${open}<textarea class="option-control" data-field="${key}" spellcheck="false">${escapeHTML(value)}</textarea></label>`;
 }
-function portColor(port) { return typeColors[port.kind === 'action' ? 'action' : (port.types?.[0] || 'unspecified')] || typeColors.unspecified; }
+function portVisualType(port) { return PhidiasWireColors.typeForPort(port); }
+function portColor(port) { return PhidiasWireColors.colorForType(portVisualType(port)); }
 function renderGraph() {
   const workspace = ws();
   const empty = $('#canvas-empty');
@@ -717,8 +717,8 @@ function renderGraph() {
     const definition = def(block.type) || { name: block.type, category: 'Unknown', description: 'Unknown block', fields: [], outputs: [], inputPorts: [], outputPorts: [] };
     const inputs = (definition.inputPorts || []).filter(port => !port.hidden);
     const outputs = (definition.outputPorts || (definition.outputs || []).map(id => ({ id, name: id, kind: 'action', types: [] }))).filter(port => !port.hidden);
-    const inputHTML = inputs.map(port => `<div class="port-row input-row" data-port-kind="${port.kind}" data-field-link="${escapeHTML(port.id)}"><button class="port input" style="--port-color:${portColor(port)}" data-input="${block.id}" data-port="${escapeHTML(port.id)}" data-kind="${port.kind}" data-types="${escapeHTML((port.types || []).join(','))}" aria-label="Connect ${escapeHTML(port.name)} input"></button><span>${escapeHTML(port.name)}</span></div>`).join('');
-    const outputHTML = outputs.map(port => `<div class="port-row output-row" data-port-kind="${port.kind}" data-field-link="${escapeHTML(port.id)}"><span>${escapeHTML(port.name)}</span><button class="port ${pending?.from === block.id && pending.output === port.id ? 'pending' : ''}" style="--port-color:${portColor(port)}" data-output="${escapeHTML(port.id)}" data-from="${block.id}" data-kind="${port.kind}" data-types="${escapeHTML((port.types || []).join(','))}" aria-label="Connect ${escapeHTML(port.name)} output"></button></div>`).join('');
+    const inputHTML = inputs.map(port => `<div class="port-row input-row" data-port-kind="${port.kind}" data-field-link="${escapeHTML(port.id)}"><button class="port input" style="--port-color:${portColor(port)}" data-input="${block.id}" data-port="${escapeHTML(port.id)}" data-kind="${port.kind}" data-types="${escapeHTML((port.types || []).join(','))}" data-visual-type="${portVisualType(port)}" aria-label="Connect ${escapeHTML(port.name)} input"></button><span>${escapeHTML(port.name)}</span></div>`).join('');
+    const outputHTML = outputs.map(port => `<div class="port-row output-row" data-port-kind="${port.kind}" data-field-link="${escapeHTML(port.id)}"><span>${escapeHTML(port.name)}</span><button class="port ${pending?.from === block.id && pending.output === port.id ? 'pending' : ''}" style="--port-color:${portColor(port)}" data-output="${escapeHTML(port.id)}" data-from="${block.id}" data-kind="${port.kind}" data-types="${escapeHTML((port.types || []).join(','))}" data-visual-type="${portVisualType(port)}" aria-label="Connect ${escapeHTML(port.name)} output"></button></div>`).join('');
     const optionHTML = definition.fields.map(field => optionEditor(field, block.options[field.key])).join('');
     const classes = [inputs.length && 'has-inputs', definition.fields.length && 'has-options', outputs.length && 'has-outputs'].filter(Boolean).join(' ');
     const height = Number.isFinite(block.height) ? `;height:${block.height}px` : '';
@@ -753,7 +753,8 @@ function renderWires() {
     if (!from || !to) return '';
     const path = wirePath(point(from), point(to));
     const selectedClass = selectedEdge === edge.id ? ' selected' : '';
-    return `<g class="wire${selectedClass}" data-edge="${edge.id}"><path class="wire-hit" d="${path}"/><path class="wire-line" style="--wire-color:${from.style.getPropertyValue('--port-color')}" d="${path}"/></g>`;
+    const color = PhidiasWireColors.colorForConnection(edge.kind || from.dataset.kind, from.dataset.visualType, to.dataset.visualType);
+    return `<g class="wire${selectedClass}" data-edge="${edge.id}"><path class="wire-hit" d="${path}"/><path class="wire-line" style="--wire-color:${color}" d="${path}"/></g>`;
   }).join('');
   let preview = '';
   if (portDrag?.portElement?.isConnected) {
@@ -761,7 +762,12 @@ function renderWires() {
     const cursor = portDrag.snapTarget?.isConnected
       ? point(portDrag.snapTarget)
       : { x: (portDrag.pointerX - worldRect.x) / view.zoom, y: (portDrag.pointerY - worldRect.y) / view.zoom };
-    const color = portDrag.portElement.style.getPropertyValue('--port-color');
+    let color = PhidiasWireColors.colorForType(portDrag.portElement.dataset.visualType);
+    if (portDrag.snapTarget?.isConnected) {
+      const outputType = portDrag.origin === 'output' ? portDrag.portElement.dataset.visualType : portDrag.snapTarget.dataset.visualType;
+      const inputType = portDrag.origin === 'input' ? portDrag.portElement.dataset.visualType : portDrag.snapTarget.dataset.visualType;
+      color = PhidiasWireColors.colorForConnection(portDrag.portData.kind, outputType, inputType);
+    }
     preview = `<path class="dragging-wire" style="--wire-color:${color}" d="${wirePath(anchor, cursor)}"/>`;
   }
   $('#wires').innerHTML = paths + preview;

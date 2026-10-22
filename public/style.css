@@ -146,7 +146,7 @@ button.primary { min-height:32px;border:1px solid var(--accent);border-radius:5p
 #wires .wire { pointer-events:stroke;cursor:pointer; }
 #wires .wire-line { fill:none;stroke:var(--wire-color,var(--accent));stroke-width:3;pointer-events:none;opacity:.9; }
 #wires .wire-hit { fill:none;stroke:transparent;stroke-width:18;pointer-events:stroke; }
-#wires .wire:hover .wire-line,#wires .wire.selected .wire-line { stroke-width:5;filter:drop-shadow(0 0 3px var(--accent)); }
+#wires .wire:hover .wire-line,#wires .wire.selected .wire-line { stroke-width:5;filter:drop-shadow(0 0 3px var(--wire-color,var(--accent))); }
 #wires path.dragging-wire { fill:none;stroke:var(--wire-color,var(--accent));stroke-width:3;stroke-dasharray:6 5;opacity:.72;pointer-events:none; }
 #nodes { position:absolute;inset:0;pointer-events:none; }
 .selection-box { position:absolute;z-index:5;border:1px solid var(--accent);background:var(--accent-soft);pointer-events:none; }
