@@ -199,21 +199,46 @@ async function executeLegacy(definition, ctx, block, connectedInputs, follow) {
     if (body !== null && typeof body === 'object' && !Buffer.isBuffer(body) && method !== 'GET' && !hasContentType) {
       headers['Content-Type'] = 'application/json';
     }
-    const response = await fetch(String(getInput('url', '')), {
-      method, signal: AbortSignal.any([ctx.signal, AbortSignal.timeout(30000)]),
-      ...(Object.keys(headers).length ? { headers } : {}),
-      ...(body != null && body !== '' && method !== 'GET' ? { body: typeof body === 'object' ? JSON.stringify(body) : String(body) } : {})
-    });
-    if (!response.ok) {
-      const responseBody = await response.text().catch(() => '');
-      const detail = responseBody.trim().slice(0, 4096);
-      throw new Error(`API request failed with HTTP ${response.status}${detail ? `: ${detail}` : ''}`);
-    }
     const dataType = api.GetOptionValue('data_type', null, 'text');
-    const data = dataType === 'json' ? await response.json() : dataType === 'buffer' ? Buffer.from(await response.arrayBuffer()) : await response.text();
-    api.StoreOutputValue(data, 'data');
+    let response;
+    try {
+      response = await fetch(String(getInput('url', '')), {
+        method, signal: AbortSignal.any([ctx.signal, AbortSignal.timeout(30000)]),
+        ...(Object.keys(headers).length ? { headers } : {}),
+        ...(body != null && body !== '' && method !== 'GET' ? { body: typeof body === 'object' ? JSON.stringify(body) : String(body) } : {})
+      });
+    } catch (error) {
+      api.StoreOutputValue(0, 'http_status');
+      api.StoreOutputValue(error?.message || String(error), 'error_data');
+      api.RunNextBlock('erroraction');
+      await Promise.all(branches);
+      return stored;
+    }
+    api.StoreOutputValue(response.status, 'http_status');
+    let data;
+    try {
+      if (!response.ok && dataType === 'json') {
+        const text = await response.text();
+        try { data = JSON.parse(text); } catch { data = text; }
+      } else {
+        data = dataType === 'json' ? await response.json() : dataType === 'buffer' ? Buffer.from(await response.arrayBuffer()) : await response.text();
+      }
+    } catch (error) {
+      api.StoreOutputValue(error?.message || String(error), 'error_data');
+      api.RunNextBlock('erroraction');
+      await Promise.all(branches);
+      return stored;
+    }
     api.StoreOutputValue(source.readResponseSession(response.headers), 'session');
     api.StoreOutputValue(source.readSessionToken(response.headers, data), 'session_token');
+    if (!response.ok) {
+      api.StoreOutputValue(data, 'error_data');
+      api.RunNextBlock('erroraction');
+      await Promise.all(branches);
+      return stored;
+    }
+    api.StoreOutputValue(data, 'data');
+    api.StoreOutputValue(null, 'error_data');
     api.RunNextBlock('action');
     await Promise.all(branches);
     return stored;

@@ -116,10 +116,28 @@ module.exports = {
             "types": ["action"]
         },
         {
+            "id": "erroraction",
+            "name": "Action (Error)",
+            "description": "Type: Action\n\nDescription: Executes the following blocks when the request fails or the API returns a non-success HTTP status.",
+            "types": ["action"]
+        },
+        {
             "id": "data",
             "name": "API Data",
             "description": "Type: Object\n\nDescription: The API data obtained if possible.",
             "types": ["object", "unspecified"]
+        },
+        {
+            "id": "http_status",
+            "name": "HTTP Status",
+            "description": "Type: Number\n\nDescription: The HTTP response status, or 0 when no response was received.",
+            "types": ["number"]
+        },
+        {
+            "id": "error_data",
+            "name": "Error Data",
+            "description": "Type: Object, Text, Unspecified\n\nDescription: The response body or error message returned when the request fails.",
+            "types": ["object", "text", "unspecified"]
         },
         {
             "id": "session",
@@ -148,11 +166,34 @@ module.exports = {
         options.method = method;
         if (body) options.body = typeof body == "object" ? JSON.stringify(body) : body + "";
         options.headers = mergeSessionHeaders(headers, session);
-        options.timeout == 7000
-        const res = await fetch(url, options).catch(err => console.error(err));
-
-        var data = data_type == "json" ? await res.json() : data_type == "buffer" ? await res.buffer() : await res.text();
+        options.timeout = 30000;
+        let res;
+        try {
+            res = await fetch(url, options);
+        } catch (error) {
+            this.StoreOutputValue(0, "http_status", cache);
+            this.StoreOutputValue(error?.message || String(error), "error_data", cache);
+            this.RunNextBlock("erroraction", cache);
+            return;
+        }
+        this.StoreOutputValue(res.status, "http_status", cache);
+        let data;
+        try {
+            data = data_type == "json" ? await res.json() : data_type == "buffer" ? await res.buffer() : await res.text();
+        } catch (error) {
+            this.StoreOutputValue(error?.message || String(error), "error_data", cache);
+            this.RunNextBlock("erroraction", cache);
+            return;
+        }
+        if (!res.ok) {
+            this.StoreOutputValue(data, "error_data", cache);
+            this.StoreOutputValue(readResponseSession(res.headers), "session", cache);
+            this.StoreOutputValue(readSessionToken(res.headers, data), "session_token", cache);
+            this.RunNextBlock("erroraction", cache);
+            return;
+        }
         this.StoreOutputValue(data, "data", cache);
+        this.StoreOutputValue(null, "error_data", cache);
         this.StoreOutputValue(readResponseSession(res.headers), "session", cache);
         this.StoreOutputValue(readSessionToken(res.headers, data), "session_token", cache);
         this.RunNextBlock("action", cache);
