@@ -46,6 +46,29 @@ function zipEntries(zip) {
   return extracted;
 }
 
+const onePixelPNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64');
+
+test('project icon upload creates revisioned logo and favicon assets', async t => {
+  const { call, store } = await fixture(t);
+  const project = await (await call('/api/projects', 'POST', { name: 'Icon app' })).json();
+  const empty = await (await call(`/api/projects/${project.id}/icon`)).json();
+  assert.equal(empty.logo, null); assert.equal(empty.revision, 1);
+  const uploadedResponse = await call(`/api/projects/${project.id}/icon`, 'PUT', {
+    revision: project.revision,
+    logo: `data:image/png;base64,${onePixelPNG.toString('base64')}`
+  });
+  assert.equal(uploadedResponse.status, 200);
+  const uploaded = await uploadedResponse.json();
+  assert.equal(uploaded.project.revision, 2);
+  assert.equal(uploaded.logo, `data:image/png;base64,${onePixelPNG.toString('base64')}`);
+  const files = zipEntries(await store.export(project.id));
+  assert.deepEqual(files.get('logo.png'), onePixelPNG);
+  assert.deepEqual(files.get('favicon.ico').subarray(22), onePixelPNG);
+  assert.equal(files.get('favicon.ico').readUInt32LE(18), 22);
+  const conflict = await call(`/api/projects/${project.id}/icon`, 'PUT', { revision: 1, logo: uploaded.logo });
+  assert.equal(conflict.status, 409);
+});
+
 test('project creation, atomic saves, conflicts, reload, and downloadable ZIP', async t => {
   const { store, call, directory } = await fixture(t);
   const response = await call('/api/projects', 'POST', { name: 'My project' }); assert.equal(response.status, 201);

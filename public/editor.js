@@ -612,11 +612,41 @@ function newTemplate(type = 'html') {
 async function openTemplateEditor() {
   if (!project) return;
   if (dirty) await save();
-  templateNames = await api(`/api/projects/${project.id}/templates?revision=${project.revision}`);
+  const [names, icon] = await Promise.all([
+    api(`/api/projects/${project.id}/templates?revision=${project.revision}`),
+    api(`/api/projects/${project.id}/icon`)
+  ]);
+  templateNames = names;
+  $('#template-icon-preview').innerHTML = icon.logo ? `<img src="${icon.logo}" alt="">` : '<span>No icon</span>';
   let preferred = null;
   try { preferred = sessionStorage.getItem(templateSelectionKey()); } catch {}
   clearTemplateEditor(); $('#template-dialog').showModal();
   if (templateNames.length) await selectTemplate(templateNames.includes(preferred) ? preferred : templateNames[0], true);
+}
+async function normalizeAppIcon(file) {
+  const supportedType = file && ['image/png', 'image/jpeg'].includes(file.type);
+  const supportedName = file && /\.(?:png|jpe?g)$/i.test(file.name);
+  if (!file || (!supportedType && !supportedName)) throw new Error('Choose a PNG or JPEG image.');
+  if (file.size > 10 * 1024 * 1024) throw new Error('Choose an image smaller than 10 MiB.');
+  const bitmap = await createImageBitmap(file);
+  try {
+    const canvas = document.createElement('canvas'); canvas.width = 256; canvas.height = 256;
+    const context = canvas.getContext('2d');
+    context.imageSmoothingEnabled = true; context.imageSmoothingQuality = 'high';
+    const scale = Math.min(256 / bitmap.width, 256 / bitmap.height);
+    const width = Math.max(1, Math.round(bitmap.width * scale)), height = Math.max(1, Math.round(bitmap.height * scale));
+    context.drawImage(bitmap, Math.round((256 - width) / 2), Math.round((256 - height) / 2), width, height);
+    return canvas.toDataURL('image/png');
+  } finally { bitmap.close(); }
+}
+async function uploadAppIcon(file) {
+  const logo = await normalizeAppIcon(file);
+  const result = await api(`/api/projects/${project.id}/icon`, { method: 'PUT', body: JSON.stringify({ logo, revision: project.revision }) });
+  project.revision = result.project.revision; project.updatedAt = result.project.updatedAt;
+  $('#template-icon-preview').innerHTML = `<img src="${result.logo}" alt="">`;
+  $('#template-icon-file').value = '';
+  await refreshProjects(); setProjectControls(true);
+  toast(`App icon saved as project revision ${project.revision}.`);
 }
 async function saveTemplate() {
   if (templateSaving) return templateSaving;
@@ -1272,6 +1302,8 @@ $('#version-cleanup').onsubmit = event => handle(() => cleanupOldRCVersions(even
 $('#version-list').onclick = event => { const button = event.target.closest('[data-version-action]'); if (button) handle(() => versionAction(button))(); };
 $('#template-new-html').onclick = () => newTemplate('html');
 $('#template-new-css').onclick = () => newTemplate('css');
+$('#template-icon-upload').onclick = () => $('#template-icon-file').click();
+$('#template-icon-file').onchange = event => { const [file] = event.currentTarget.files; if (file) handle(() => uploadAppIcon(file))(); };
 $('#template-save').onclick = handle(saveTemplate);
 $('#template-delete').onclick = handle(deleteTemplate);
 $('#template-close').onclick = closeTemplateEditor;

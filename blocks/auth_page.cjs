@@ -32,9 +32,10 @@ async function renderAuthPage(directory, kind, values = {}) {
     username: escapeHTML(values.username),
     email: escapeHTML(values.email),
     login_css: css,
+    logo: '/logo.png',
     local_login_options: localLoginOptions
   };
-  let html = template.replace(/%(app_name|action|error|username|email|login_css|local_login_options)%/g, (_match, key) => replacements[key]);
+  let html = template.replace(/%(app_name|action|error|username|email|login_css|logo|local_login_options)%/g, (_match, key) => replacements[key]);
   if (localLoginOptions && !hasLocalLoginPlaceholder) {
     const submitButton = /<button\b[^>]*type=["']submit["'][^>]*>/i;
     html = submitButton.test(html) ? html.replace(submitButton, `${localLoginOptions}\n      $&`) : html.replace(/<\/form>/i, `${localLoginOptions}\n    </form>`);
@@ -48,7 +49,7 @@ async function sendAuthPage(ctx, kind, status, values = {}) {
   });
   ctx.response.writeHead(status, {
     'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff',
-    'referrer-policy': 'same-origin', 'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
+    'referrer-policy': 'same-origin', 'content-security-policy': "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
   });
   ctx.response.end(html);
 }

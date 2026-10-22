@@ -13,7 +13,7 @@ function templateName(value) {
 }
 async function getTemplate(directory, name) {
   const filename = path.join(directory, 'html', templateName(name));
-  try { return await fs.readFile(filename, 'utf8'); }
+  try { return (await fs.readFile(filename, 'utf8')).replaceAll('%logo%', '/logo.png'); }
   catch (error) { if (error.code === 'ENOENT') throw new Error(`Template not found: ${templateName(name)}`); throw error; }
 }
 

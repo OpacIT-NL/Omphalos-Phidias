@@ -12,10 +12,10 @@ test('Get Template reads HTML and CSS files only from the application html folde
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'phidias-template-'));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   await fs.mkdir(path.join(directory, 'html'));
-  await fs.writeFile(path.join(directory, 'html', 'page.html'), '<main>%content%</main>');
+  await fs.writeFile(path.join(directory, 'html', 'page.html'), '<img src="%logo%"><main>%content%</main>');
   await fs.writeFile(path.join(directory, 'html', 'styles.css'), 'body { color: purple; }');
-  assert.equal(await getTemplate(directory, 'page'), '<main>%content%</main>');
-  assert.equal(await getTemplate(directory, 'page.html'), '<main>%content%</main>');
+  assert.equal(await getTemplate(directory, 'page'), '<img src="/logo.png"><main>%content%</main>');
+  assert.equal(await getTemplate(directory, 'page.html'), '<img src="/logo.png"><main>%content%</main>');
   assert.equal(await getTemplate(directory, 'styles.css'), 'body { color: purple; }');
   await assert.rejects(getTemplate(directory, '../page.html'), /must be a file in the html folder/);
   await assert.rejects(getTemplate(directory, 'missing.html'), /Template not found/);

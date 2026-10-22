@@ -81,6 +81,7 @@ Add **Browser API Reply** with the same **Request ID** to handle the result. Eit
 Open **HTML and CSS templates** from the editor toolbar to manage files in the project’s `html` folder. Use:
 
 - **Get Template** to load an `.html` or `.css` file.
+- **App icon** to upload a PNG or JPEG. Phidias creates the application favicon and replaces every `%logo%` placeholder loaded from an HTML template with `/logo.png`.
 - **Apply Variable** to replace `%variable%` placeholders.
 - **Markdown to HTML** for Markdown content.
 - Table, detail-page, chart, and form blocks to generate reusable HTML.

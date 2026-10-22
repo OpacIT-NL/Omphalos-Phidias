@@ -307,6 +307,22 @@ async function createServer({ directory = loadConfig().directory, repositoryDire
           }
           return send(405, { error: 'Method not allowed' });
         }
+        const iconMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/icon$/);
+        if (iconMatch) {
+          const id = iconMatch[1];
+          if (req.method === 'GET') {
+            await auth.requireProject(session.username, id, 'view');
+            return send(200, await store.icon(id));
+          }
+          if (req.method === 'PUT') {
+            await auth.requireProject(session.username, id, 'edit');
+            const body = await readBody(req, 2 * 1024 * 1024);
+            const saved = await store.saveIcon(id, body?.logo, body?.revision);
+            logger.info('Project icon saved: %s (revision %d)', id, saved.project.revision);
+            return send(200, saved);
+          }
+          return send(405, { error: 'Method not allowed' });
+        }
         const templateMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/templates(?:\/([^/]+))?$/);
         if (templateMatch) {
           const [, id, encodedName] = templateMatch;

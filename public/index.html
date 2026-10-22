@@ -122,7 +122,15 @@
   <dialog id="template-dialog" class="template-dialog">
     <header><div><h2>HTML and CSS templates</h2><p>Files are stored in the project's html folder and included in every build.</p></div><button id="template-close" type="button" aria-label="Close template editor">×</button></header>
     <div class="template-layout">
-      <aside><div class="template-new-actions"><button id="template-new-html" type="button" class="primary">＋ HTML</button><button id="template-new-css" type="button">＋ CSS</button></div><div id="template-list"></div></aside>
+      <aside>
+        <section class="template-icon-panel">
+          <div id="template-icon-preview" class="template-icon-preview" aria-label="App icon preview"><span>No icon</span></div>
+          <div><strong>App icon</strong><small>PNG or JPEG. Use <code>%logo%</code> in HTML.</small></div>
+          <input id="template-icon-file" type="file" accept="image/png,image/jpeg,.png,.jpg,.jpeg" hidden>
+          <button id="template-icon-upload" type="button">Choose icon</button>
+        </section>
+        <div class="template-new-actions"><button id="template-new-html" type="button" class="primary">＋ HTML</button><button id="template-new-css" type="button">＋ CSS</button></div><div id="template-list"></div>
+      </aside>
       <section class="template-editor">
         <label><span>Filename</span><input id="template-name" type="text" maxlength="101" placeholder="page.html" spellcheck="false"></label>
         <label><span>HTML</span><textarea id="template-contents" spellcheck="false" placeholder="Select or create a template"></textarea></label>

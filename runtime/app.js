@@ -275,6 +275,8 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
   document ||= JSON.parse(fs.readFileSync(path.join(directory, 'workspaces.json'), 'utf8'));
   let favicon = null;
   try { favicon = fs.readFileSync(path.join(directory, 'favicon.ico')); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  let logo = null;
+  try { logo = fs.readFileSync(path.join(directory, 'logo.png')); } catch (error) { if (error.code !== 'ENOENT') throw error; }
   const configFile = path.join(directory, 'config.json');
   const applicationConfig = fs.existsSync(configFile) ? validateAppConfig(JSON.parse(fs.readFileSync(configFile, 'utf8'))) : DEFAULT_APP_CONFIG;
   const deployment = Object.freeze({ projectId: applicationConfig['project-id'] || null, channel: applicationConfig['release-channel'] || null, updateUrl: applicationConfig['update-url'] || null });
@@ -708,6 +710,10 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
       if (url.pathname === '/favicon.ico' && ['GET', 'HEAD'].includes(req.method) && favicon) {
         res.writeHead(200, { 'content-type': 'image/x-icon', 'content-length': favicon.length, 'cache-control': 'public, max-age=86400' });
         res.end(req.method === 'HEAD' ? undefined : favicon); return;
+      }
+      if (url.pathname === '/logo.png' && ['GET', 'HEAD'].includes(req.method) && logo) {
+        res.writeHead(200, { 'content-type': 'image/png', 'content-length': logo.length, 'cache-control': 'public, max-age=86400', 'x-content-type-options': 'nosniff' });
+        res.end(req.method === 'HEAD' ? undefined : logo); return;
       }
       const consoleMatch = ['GET', 'POST'].includes(req.method) ? url.pathname.match(/^\/_phidias\/application-console\/([^/]+)$/) : null;
       if (consoleMatch) {
