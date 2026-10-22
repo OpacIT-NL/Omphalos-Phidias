@@ -17,6 +17,9 @@ test('Convert JSON to HTML Detail creates headed vertical rows from objects and 
   assert.match(html, /<th scope="row">Details<\/th><td>\s*<table class="phidias-detail-table">/);
   assert.match(html, /<th scope="row">Status<\/th><td>Online<\/td>/);
   assert.match(html, /<th>Admin|<td>Admin/);
+  const multiline = convertJSONToHTMLDetail(JSON.stringify({ Description: 'First line\nSecond <line>\rThird line' }));
+  assert.match(multiline, /<th scope="row">Description<\/th><td>First line<br>Second &lt;line&gt;<br>Third line<\/td>/);
+  assert.doesNotMatch(multiline, /<line>/);
   const list = convertJSONToHTMLDetail([ { ID: 1 }, { ID: 2 } ]);
   assert.match(list, /<th scope="row">0<\/th>/);
   assert.match(list, /<th scope="row">1<\/th>/);

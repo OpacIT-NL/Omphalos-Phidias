@@ -1,5 +1,5 @@
 'use strict';
-const { convertJSONToHTMLTable } = require('./convert_json_to_html_table');
+const { convertJSONToHTMLTable, renderScalar } = require('./convert_json_to_html_table');
 
 function escapeHTML(value) {
   return String(value).replace(/[&<>"']/g, character => ({
@@ -18,7 +18,7 @@ function renderValue(value, ancestors, depth) {
   if (value === null || value === undefined) return '';
   if (Array.isArray(value)) return `\n${convertJSONToHTMLTable(value)}\n${'  '.repeat(depth)}`;
   if (typeof value === 'object') return `\n${renderDetail(value, ancestors, depth)}\n${'  '.repeat(depth)}`;
-  return escapeHTML(value);
+  return renderScalar(value);
 }
 function renderDetail(value, ancestors = new Set(), depth = 0) {
   if (ancestors.has(value)) throw new Error('Convert JSON to HTML detail cannot convert circular objects');

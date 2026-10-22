@@ -50,6 +50,7 @@ function createLogger({ level = 3, fileLevel = level, directory = path.join(proc
   validateLogLevel(fileLevel, 'file-log-level');
   let filename = createLogFile(directory, now().toISOString().slice(0, 10));
   const subscribers = new Set(), recent = [];
+  let sequence = 0;
   const makeLine = (name, values) => {
     const timestamp = now().toISOString();
     const message = format(...values.map(value => normalizeLogValue(value)))
@@ -66,7 +67,7 @@ function createLogger({ level = 3, fileLevel = level, directory = path.join(proc
     catch (error) { stderr.write(`${timestamp} [CRITICAL] Cannot write log file (${error.code || 'unknown error'}).\n`); }
   };
   const publish = (name, rendered) => {
-    const entry = Object.freeze({ level: name, timestamp: rendered.timestamp, line: rendered.line.trimEnd() });
+    const entry = Object.freeze({ cursor: ++sequence, level: name, timestamp: rendered.timestamp, line: rendered.line.trimEnd() });
     recent.push(entry);
     if (recent.length > 500) recent.splice(0, recent.length - 500);
     for (const subscriber of subscribers) {
@@ -108,6 +109,10 @@ function createLogger({ level = 3, fileLevel = level, directory = path.join(proc
       if (replay) for (const entry of recent) subscriber(entry);
       subscribers.add(subscriber);
       return () => subscribers.delete(subscriber);
+    },
+    snapshot(after = 0) {
+      const cursor = Number.isSafeInteger(Number(after)) && Number(after) >= 0 ? Number(after) : 0;
+      return { cursor: sequence, entries: recent.filter(entry => entry.cursor > cursor) };
     },
     startNewCycle() {
       filename = createLogFile(directory, now().toISOString().slice(0, 10));

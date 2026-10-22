@@ -25,6 +25,7 @@ test('Apply Variable replaces every matching placeholder with text or HTML', () 
   const table = '<table><tr><td>Online</td></tr></table>';
   assert.equal(applyVariable('<title>%name%</title><h1>%name%</h1>', 'name', 'Delphi'), '<title>Delphi</title><h1>Delphi</h1>');
   assert.equal(applyVariable('<main>%content%</main>', 'content', table), `<main>${table}</main>`);
+  assert.equal(applyVariable('<main>%content%</main>', 'content', 'Console$&gt; $$ $` $\''), '<main>Console$&gt; $$ $` $\'</main>');
   assert.equal(applyVariable('<p>%missing%</p>', 'other', 'value'), '<p>%missing%</p>');
   assert.throws(() => applyVariable('', '%name%', 'x'), /without percent signs/);
 });

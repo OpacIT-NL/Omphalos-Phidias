@@ -7,6 +7,7 @@ const path = require('node:path');
 const { createLogger } = require('../runtime/logger');
 const { createApp, loadDefinitions, consolePromptFromMode } = require('../runtime/app');
 const consoleBlock = require('../blocks/application_console_passthrough');
+const { applyVariable } = require('../blocks/apply_variable');
 
 test('Application Console Passthrough outputs safe bounded HTML', async () => {
   const outputs = {};
@@ -24,6 +25,9 @@ test('Application Console Passthrough outputs safe bounded HTML', async () => {
   const script = outputs.html.match(/<script>\n([\s\S]*)\n<\/script>$/)?.[1];
   assert.ok(script);
   assert.doesNotThrow(() => new Function(script));
+  const inserted = applyVariable('<main>%content%</main>', 'content', outputs.html);
+  assert.match(inserted, /Console\$&gt;/);
+  assert.doesNotMatch(inserted, /Console%content%gt/);
 });
 
 test('Application Console Passthrough maps console modes to visible prompts', async () => {
@@ -70,6 +74,10 @@ test('Application Console Passthrough streams output and passes input to Console
   const streamPath = page.match(/\/_phidias\/application-console\/[a-f0-9-]{36}/)?.[0];
   assert.ok(streamPath);
   const token = streamPath.split('/').at(-1);
+  const polled = await (await fetch(base + streamPath + '?poll=1&after=0')).json();
+  assert.equal(polled.prompt, 'Console$>');
+  assert.ok(polled.entries.some(entry => entry.line.includes('Before page')));
+  assert.ok(Number.isSafeInteger(polled.cursor));
   assert.equal((await fetch(base + streamPath)).status, 406);
   assert.equal((await fetch(base + streamPath, {
     method: 'POST', headers: { origin: base, 'content-type': 'application/json' }, body: JSON.stringify({ input: 'rejected' })

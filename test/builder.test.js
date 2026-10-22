@@ -773,6 +773,9 @@ test('JSON-to-HTML table block converts objects and connects to file content', a
   assert.match(html, /^<table>/);
   assert.match(html, /<th>Name<\/th><th>Access<\/th><th>Details<\/th><th>Age<\/th>/);
   assert.match(html, /<td>&lt;admin&gt;<\/td>/);
+  const multiline = block.convertJSONToHTMLTable(JSON.stringify([{ Description: 'First line\nSecond <line>\r\nThird line' }]));
+  assert.match(multiline, /<td>First line<br>Second &lt;line&gt;<br>Third line<\/td>/);
+  assert.doesNotMatch(multiline, /<line>/);
   assert.equal((html.match(/<table>/g) || []).length, 2);
   assert.match(html, /<th>active<\/th>/);
   assert.match(html, /<td>true<\/td>/);

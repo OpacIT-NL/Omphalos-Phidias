@@ -6,7 +6,11 @@ function applyVariable(html, name, value) {
   if (!name) throw new Error('Variable Name is required');
   if (name.includes('%')) throw new Error('Enter the variable name without percent signs');
   const replacement = value === null || value === undefined ? '' : typeof value === 'object' ? JSON.stringify(value) : String(value);
-  return html.replaceAll(`%${name}%`, replacement);
+  // String.replace/replaceAll interpret $&, $`, $', and $$ inside replacement
+  // strings. Generated HTML commonly contains those sequences (Console$&gt;
+  // for example), so join literal segments instead of treating output as a
+  // JavaScript replacement pattern.
+  return html.split(`%${name}%`).join(replacement);
 }
 
 module.exports = {

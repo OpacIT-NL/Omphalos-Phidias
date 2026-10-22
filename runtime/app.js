@@ -734,15 +734,24 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
           res.writeHead(202, { 'content-type': 'application/json; charset=utf-8', 'content-length': Buffer.byteLength(payload), 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' });
           res.end(payload); return;
         }
+        if (url.searchParams.get('poll') === '1') {
+          const after = Math.max(0, Number.parseInt(url.searchParams.get('after') || '0', 10) || 0);
+          const snapshot = typeof logger.snapshot === 'function' ? logger.snapshot(after) : { cursor: after, entries: [] };
+          const payload = JSON.stringify({ ...snapshot, prompt: readConsolePrompt(directory) });
+          res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'content-length': Buffer.byteLength(payload), 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' });
+          res.end(payload); return;
+        }
         if (!String(req.headers.accept || '').includes('text/event-stream')) { res.writeHead(406); res.end('Console stream requires EventSource'); return; }
         clearTimeout(deadline);
         res.writeHead(200, {
           'content-type': 'text/event-stream; charset=utf-8',
           'cache-control': 'no-store, no-transform',
           connection: 'keep-alive',
+          'x-accel-buffering': 'no',
           'x-content-type-options': 'nosniff'
         });
-        res.write('retry: 2000\n\n');
+        res.flushHeaders?.();
+        res.write(`retry: 2000\n: ${' '.repeat(2048)}\n\n`);
         let currentPrompt = readConsolePrompt(directory);
         res.write(`event: prompt\ndata: ${JSON.stringify(currentPrompt)}\n\n`);
         const send = entry => {

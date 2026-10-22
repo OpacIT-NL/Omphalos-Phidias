@@ -51,14 +51,12 @@ function consoleHTML({ token, title, height, maxLines, prompt }) {
   const send = form.querySelector("button");
   const maximum = ${maxLines};
   let connected = false;
+  let streaming = false;
+  let cursor = 0;
+  let pollTimer = null;
   clear.addEventListener("click", () => output.replaceChildren());
-  const source = new EventSource(${JSON.stringify(streamURL)});
-  source.addEventListener("open", () => { connected = true; status.textContent = "Live"; status.dataset.state = "connected"; });
-  source.addEventListener("error", () => { connected = false; status.textContent = "Reconnecting"; status.dataset.state = "error"; });
-  source.addEventListener("prompt", event => { try { prompt.textContent = JSON.parse(event.data); } catch {} });
-  source.addEventListener("log", event => {
-    let entry;
-    try { entry = JSON.parse(event.data); } catch { return; }
+  const appendEntry = entry => {
+    if (Number.isSafeInteger(entry.cursor) && entry.cursor <= cursor) return;
     const line = document.createElement("div");
     const level = /^(critical|error|warning|info|debug)$/.test(entry.level) ? entry.level : "info";
     line.className = "phidias-application-console__line phidias-application-console__line--" + level;
@@ -66,7 +64,33 @@ function consoleHTML({ token, title, height, maxLines, prompt }) {
     output.append(line);
     while (output.childElementCount > maximum) output.firstElementChild.remove();
     output.scrollTop = output.scrollHeight;
+    if (Number.isSafeInteger(entry.cursor)) cursor = Math.max(cursor, entry.cursor);
+  };
+  const poll = async () => {
+    try {
+      const response = await fetch(${JSON.stringify(streamURL)} + "?poll=1&after=" + cursor, { credentials: "same-origin", cache: "no-store" });
+      if (!response.ok) throw new Error("HTTP " + response.status);
+      const result = await response.json();
+      for (const entry of result.entries || []) appendEntry(entry);
+      if (Number.isSafeInteger(result.cursor)) cursor = Math.max(cursor, result.cursor);
+      if (typeof result.prompt === "string") prompt.textContent = result.prompt;
+      connected = true; status.textContent = streaming ? "Live" : "Live (polling)"; status.dataset.state = "connected";
+    } catch (error) { if (!streaming) { connected = false; status.textContent = "Reconnecting"; status.dataset.state = "error"; } }
+  };
+  const startPolling = () => {
+    if (pollTimer) return;
+    poll(); pollTimer = window.setInterval(poll, 1000);
+  };
+  const source = new EventSource(${JSON.stringify(streamURL)});
+  source.addEventListener("open", () => { streaming = connected = true; status.textContent = "Live"; status.dataset.state = "connected"; });
+  source.addEventListener("error", () => { streaming = false; source.close(); status.textContent = "Reconnecting"; status.dataset.state = "error"; });
+  source.addEventListener("prompt", event => { try { prompt.textContent = JSON.parse(event.data); } catch {} });
+  source.addEventListener("log", event => {
+    let entry;
+    try { entry = JSON.parse(event.data); } catch { return; }
+    appendEntry(entry);
   });
+  startPolling();
   form.addEventListener("submit", async event => {
     event.preventDefault();
     const value = input.value;
@@ -80,7 +104,7 @@ function consoleHTML({ token, title, height, maxLines, prompt }) {
     } catch (error) { status.textContent = String(error.message || error); status.dataset.state = "error"; }
     finally { input.disabled = send.disabled = false; input.focus(); window.setTimeout(() => { if (connected) { status.textContent = "Live"; status.dataset.state = "connected"; } }, 1200); }
   });
-  window.addEventListener("pagehide", () => source.close(), { once: true });
+  window.addEventListener("pagehide", () => { source.close(); if (pollTimer) window.clearInterval(pollTimer); }, { once: true });
 })();
 </script>`;
 }

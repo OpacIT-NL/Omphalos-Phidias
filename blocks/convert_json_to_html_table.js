@@ -5,6 +5,9 @@ function escapeHTML(value) {
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
   })[character]);
 }
+function renderScalar(value) {
+  return escapeHTML(value).replace(/\r\n?|\n/g, '<br>');
+}
 function normalizeRows(value) {
   const values = Array.isArray(value) ? value : [value];
   return values.map(item => item && typeof item === 'object' && !Array.isArray(item) ? item : { Value: item });
@@ -27,7 +30,7 @@ function renderTable(value, ancestors = new Set(), depth = 0) {
     const cells = columns.map(column => {
       const cell = row[column];
       if (cell !== null && typeof cell === 'object') return `<td>\n${renderTable(cell, ancestors, depth + 4)}\n${indent}      </td>`;
-      return `<td>${cell === null || cell === undefined ? '' : escapeHTML(cell)}</td>`;
+      return `<td>${cell === null || cell === undefined ? '' : renderScalar(cell)}</td>`;
     }).join('');
     return `${indent}    <tr>${cells}</tr>`;
   }).join('\n');
@@ -64,5 +67,6 @@ module.exports = {
     setOutput('html', convertJSONToHTMLTable(inputs.json));
     return 'next';
   },
-  convertJSONToHTMLTable
+  convertJSONToHTMLTable,
+  renderScalar
 };
