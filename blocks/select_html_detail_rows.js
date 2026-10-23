@@ -9,16 +9,24 @@ function selectHTMLDetailRows(html, rowsText) {
   if (typeof html !== 'string' || !html.trim()) throw new Error('HTML Detail is required');
   const selectedNames = String(rowsText ?? '').split(',').map(value => value.trim()).filter(Boolean);
   if (!selectedNames.length) throw new Error('Enter at least one comma-separated row header');
-  const outer = outerTable(html), rows = detailRows(outer.html);
+  const outer = outerTable(html), allRows = directRows(outer.html).map(row => ({ ...row, cells: directCells(row.html) }));
+  const rows = allRows.filter(row => row.cells.length >= 2 && row.cells[0].tag === 'th');
   if (!rows.length) throw new Error('HTML detail does not contain headed rows');
   const names = rows.map(row => detailRowName(row).toLocaleLowerCase());
   const missing = selectedNames.filter(name => !names.includes(name.toLocaleLowerCase()));
   if (missing.length) throw new Error(`Row${missing.length === 1 ? '' : 's'} not found: ${missing.join(', ')}`);
-  const wanted = new Set(selectedNames.map(name => name.toLocaleLowerCase()));
+  const requestedNames = [...new Set(selectedNames.map(name => name.toLocaleLowerCase()))];
+  const selectedRows = requestedNames.flatMap(name => rows.filter(row => detailRowName(row).toLocaleLowerCase() === name));
+  const detailSet = new Set(rows);
   let filtered = '', position = 0;
-  for (const row of rows) {
+  let inserted = false;
+  for (const row of allRows) {
     filtered += outer.html.slice(position, row.start);
-    if (wanted.has(detailRowName(row).toLocaleLowerCase())) filtered += row.html;
+    if (!detailSet.has(row)) filtered += row.html;
+    else if (!inserted) {
+      filtered += selectedRows.map(selected => selected.html).join('');
+      inserted = true;
+    }
     position = row.end;
   }
   filtered += outer.html.slice(position);
@@ -29,7 +37,7 @@ module.exports = {
   type: 'select_html_detail_rows',
   name: 'Select HTML Detail Rows',
   category: 'Data',
-  description: 'Keeps selected detail rows and removes every non-selected row.',
+  description: 'Keeps selected detail rows in the order supplied and removes every non-selected row.',
   inputPorts: [
     { id: 'action', name: 'Action', kind: 'action', types: [] },
     { id: 'html', name: 'HTML Detail', kind: 'value', types: ['text'], required: true },

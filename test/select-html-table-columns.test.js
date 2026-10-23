@@ -4,24 +4,25 @@ const assert = require('node:assert/strict');
 const { selectHTMLTableColumns } = require('../blocks/select_html_table_columns');
 const { convertJSONToHTMLTable } = require('../blocks/convert_json_to_html_table');
 
-test('Select HTML Table Columns keeps requested headings in original order', () => {
+test('Select HTML Table Columns follows the requested heading order', () => {
   const html = convertJSONToHTMLTable([
     { Name: 'Alice', Role: 'Admin', Email: 'alice@example.test' },
     { Name: 'Bob', Role: 'User', Email: 'bob@example.test' }
   ]);
   const filtered = selectHTMLTableColumns(html, 'email, NAME');
-  assert.match(filtered, /<th>Name<\/th><th>Email<\/th>/);
+  assert.match(filtered, /<th>Email<\/th><th>Name<\/th>/);
   assert.doesNotMatch(filtered, /<th>Role<\/th>|>Admin<|>User</);
-  assert.match(filtered, /<td>Alice<\/td><td>alice@example\.test<\/td>/);
-  assert.match(filtered, /<td>Bob<\/td><td>bob@example\.test<\/td>/);
+  assert.match(filtered, /<td>alice@example\.test<\/td><td>Alice<\/td>/);
+  assert.match(filtered, /<td>bob@example\.test<\/td><td>Bob<\/td>/);
 });
 
 test('Select HTML Table Columns preserves wrappers and nested tables inside selected cells', () => {
   const table = convertJSONToHTMLTable([{ Name: 'Server A', Details: { Status: 'Online', Region: 'EU' }, Secret: 'remove-me' }]);
   const html = `<!doctype html><main>${table}</main>`;
-  const filtered = selectHTMLTableColumns(html, 'Name, Details');
+  const filtered = selectHTMLTableColumns(html, 'Details, Name');
   assert.match(filtered, /^<!doctype html><main><table>/);
   assert.match(filtered, /<th>Status<\/th><th>Region<\/th>/);
+  assert.ok(filtered.indexOf('<th>Details</th>') < filtered.indexOf('<th>Name</th>'));
   assert.match(filtered, />Online<|>EU</);
   assert.doesNotMatch(filtered, /Secret|remove-me/);
   assert.match(filtered, /<\/table><\/main>$/);

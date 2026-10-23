@@ -33,13 +33,13 @@ function createButtonColumn(html, columnName, urlTemplate, argumentColumn) {
     result += outer.html.slice(position, row.start);
     const cells = directCells(row.html);
     let added;
-    if (row.start === headerRow.start) added = `<th>${escapeHTML(columnName)}</th>`;
-    else if (cells.some(cell => cell.tag === 'th')) added = '<th></th>';
+    if (row.start === headerRow.start) added = `<th class="phidias-table-button-column" style="width:1%;white-space:nowrap">${escapeHTML(columnName)}</th>`;
+    else if (cells.some(cell => cell.tag === 'th')) added = '<th class="phidias-table-button-column" style="width:1%;white-space:nowrap"></th>';
     else if ((hasBody && row.section === 'tbody') || (!hasBody && row.section !== 'thead' && row.section !== 'tfoot')) {
       const argument = cells[argumentIndex] ? headerText(cells[argumentIndex].html) : '';
       const url = urlTemplate.replaceAll('${text1}', encodeURIComponent(argument));
-      added = `<td><a class="phidias-table-button" href="${escapeHTML(url)}" role="button">${escapeHTML(columnName)}</a></td>`;
-    } else added = '<td></td>';
+      added = `<td class="phidias-table-button-column" style="width:1%;white-space:nowrap"><a class="phidias-table-button" style="min-width:max-content;white-space:nowrap" href="${escapeHTML(url)}" role="button">${escapeHTML(columnName)}</a></td>`;
+    } else added = '<td class="phidias-table-button-column" style="width:1%;white-space:nowrap"></td>';
     result += appendCell(row.html, added);
     position = row.end;
   }

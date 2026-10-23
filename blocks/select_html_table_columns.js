@@ -85,20 +85,14 @@ function directCells(row) {
 function filterRow(row, selectedIndexes) {
   const cells = directCells(row);
   if (!cells.length) return row;
-  let output = '', position = 0;
-  for (let index = 0; index < cells.length; index++) {
-    const cell = cells[index];
-    output += row.slice(position, cell.start);
-    if (selectedIndexes.has(index)) output += cell.html;
-    position = cell.end;
-  }
-  return output + row.slice(position);
+  const selected = selectedIndexes.map(index => cells[index]).filter(Boolean);
+  return row.slice(0, cells[0].start) + selected.map(cell => cell.html).join('') + row.slice(cells.at(-1).end);
 }
 function selectHTMLTableColumns(html, columnsText) {
   if (typeof html !== 'string' || !html.trim()) throw new Error('HTML Table is required');
   const selectedNames = String(columnsText ?? '').split(',').map(value => value.trim()).filter(Boolean);
   if (!selectedNames.length) throw new Error('Enter at least one comma-separated column header');
-  const wanted = new Set(selectedNames.map(value => value.toLocaleLowerCase()));
+  const requestedNames = [...new Set(selectedNames.map(value => value.toLocaleLowerCase()))];
   const { start: tableStart, end: tableEnd, html: table } = outerTable(html);
   const rows = directRows(table);
   const headerRow = rows.find(row => directCells(row.html).some(cell => cell.tag === 'th'));
@@ -107,7 +101,9 @@ function selectHTMLTableColumns(html, columnsText) {
   const normalizedHeaders = headers.map(cell => headerText(cell.html).toLocaleLowerCase());
   const missing = selectedNames.filter(name => !normalizedHeaders.includes(name.toLocaleLowerCase()));
   if (missing.length) throw new Error(`Column${missing.length === 1 ? '' : 's'} not found: ${missing.join(', ')}`);
-  const selectedIndexes = new Set(normalizedHeaders.map((name, index) => wanted.has(name) ? index : -1).filter(index => index >= 0));
+  const selectedIndexes = requestedNames.flatMap(name => normalizedHeaders
+    .map((header, index) => header === name ? index : -1)
+    .filter(index => index >= 0));
   let filteredTable = '', position = 0;
   for (const row of rows) {
     filteredTable += table.slice(position, row.start) + filterRow(row.html, selectedIndexes);
@@ -121,7 +117,7 @@ module.exports = {
   type: 'select_html_table_columns',
   name: 'Select HTML Table Columns',
   category: 'Data',
-  description: 'Keeps selected table columns and removes every non-selected column.',
+  description: 'Keeps selected table columns in the order supplied and removes every non-selected column.',
   inputPorts: [
     { id: 'action', name: 'Action', kind: 'action', types: [] },
     { id: 'html', name: 'HTML Table', kind: 'value', types: ['text'], required: true },

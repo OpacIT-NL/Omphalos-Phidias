@@ -49,11 +49,12 @@ test('JSON table and detail converters accept list output ports', () => {
 
 test('Select HTML Detail Rows filters top-level rows and preserves nested detail tables', () => {
   const source = convertJSONToHTMLDetail({ ID: 17, Name: 'Delphi', Details: { Status: 'Online' } });
-  const filtered = selectHTMLDetailRows(`<main>${source}</main>`, ' name, Details ');
+  const filtered = selectHTMLDetailRows(`<main>${source}</main>`, ' Details, name ');
   assert.doesNotMatch(filtered, /scope="row">ID</);
   assert.match(filtered, /scope="row">Name/);
   assert.match(filtered, /scope="row">Details/);
   assert.match(filtered, /scope="row">Status/);
+  assert.ok(filtered.indexOf('scope="row">Details') < filtered.indexOf('scope="row">Name'));
   assert.match(filtered, /^<main>/); assert.match(filtered, /<\/main>$/);
   assert.throws(() => selectHTMLDetailRows(source, 'Missing'), /Row not found: Missing/);
 });
