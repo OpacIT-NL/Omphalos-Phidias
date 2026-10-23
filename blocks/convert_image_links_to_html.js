@@ -29,8 +29,9 @@ function maximumWidth(value) {
 
 function imageTag(url, label = '', maxWidth = null) {
   const alt = String(label).trim() === String(url).trim() ? '' : String(label).trim();
-  const sizing = maxWidth === null ? '' : ` style="width:auto;max-width:min(100%, ${maxWidth}px);height:auto"`;
-  return `<img class="phidias-linked-image" src="${escapeHTML(url)}" alt="${escapeHTML(alt)}" loading="lazy" decoding="async"${sizing}>`;
+  const image = `<img class="phidias-linked-image" src="${escapeHTML(url)}" alt="${escapeHTML(alt)}" loading="lazy" decoding="async"${maxWidth === null ? '' : ' style="display:block;width:auto;max-width:100%;height:auto"'}>`;
+  if (maxWidth === null) return image;
+  return `<span class="phidias-linked-image-frame" style="display:inline-block;width:${maxWidth}px;max-width:100%;vertical-align:middle;line-height:0">${image}</span>`;
 }
 
 function convertImageLinksToHTML(value, requestedMaxWidth = 0) {

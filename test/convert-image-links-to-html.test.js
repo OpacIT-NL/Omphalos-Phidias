@@ -33,7 +33,8 @@ test('Convert Image Links to HTML applies a responsive configurable maximum widt
   const automatic = block.convertImageLinksToHTML('https://example.test/image.png');
   const limited = block.convertImageLinksToHTML('https://example.test/image.png', 640.4);
   assert.doesNotMatch(automatic, /style=/);
-  assert.match(limited, /style="width:auto;max-width:min\(100%, 640px\);height:auto"/);
+  assert.match(limited, /^<span class="phidias-linked-image-frame" style="display:inline-block;width:640px;max-width:100%;vertical-align:middle;line-height:0">/);
+  assert.match(limited, /<img [^>]*style="display:block;width:auto;max-width:100%;height:auto"><\/span>$/);
   assert.equal(block.maximumWidth(0), null);
   assert.equal(block.maximumWidth('invalid'), null);
   assert.equal(block.maximumWidth(9000), 4096);
@@ -42,9 +43,16 @@ test('Convert Image Links to HTML applies a responsive configurable maximum widt
 test('Convert Image Links to HTML exposes typed ports and executes as a value block', async () => {
   const outputs = {};
   assert.equal(await block.execute({}, { max_width: 480 }, { content: 'https://example.test/image.png' }, (id, value) => { outputs[id] = value; }), 'next');
-  assert.match(outputs.html, /^<img class="phidias-linked-image"/);
-  assert.match(outputs.html, /max-width:min\(100%, 480px\)/);
+  assert.match(outputs.html, /^<span class="phidias-linked-image-frame"[^>]*width:480px/);
+  assert.match(outputs.html, /<img class="phidias-linked-image"/);
   assert.equal(block.fields.find(field => field.key === 'max_width').default, 0);
   assert.deepEqual(block.inputPorts.find(port => port.id === 'content').types, ['text']);
   assert.deepEqual(block.outputPorts.find(port => port.id === 'html').types, ['text']);
+});
+
+test('Convert Image Links to HTML gives table images a bounded intrinsic column width', () => {
+  const table = '<table><tbody><tr><td>https://example.test/wide-image.png</td><td>Text that should retain the remaining width</td></tr></tbody></table>';
+  const result = block.convertImageLinksToHTML(table, 64);
+  assert.match(result, /<td><span class="phidias-linked-image-frame" style="[^"]*width:64px[^"]*"><img [^>]*width:auto;max-width:100%;height:auto[^>]*><\/span><\/td>/);
+  assert.match(result, /<td>Text that should retain the remaining width<\/td>/);
 });
