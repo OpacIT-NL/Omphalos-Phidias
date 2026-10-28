@@ -1,5 +1,5 @@
 'use strict';
-const { outerTable, directRows, directCells, headerText } = require('./select_html_table_columns');
+const { outerTable, directRows, directCells, headerText, normalizeHeaderName } = require('./select_html_table_columns');
 
 function detailRows(table) {
   return directRows(table).map(row => ({ ...row, cells: directCells(row.html) })).filter(row => row.cells.length >= 2 && row.cells[0].tag === 'th');
@@ -12,11 +12,11 @@ function selectHTMLDetailRows(html, rowsText) {
   const outer = outerTable(html), allRows = directRows(outer.html).map(row => ({ ...row, cells: directCells(row.html) }));
   const rows = allRows.filter(row => row.cells.length >= 2 && row.cells[0].tag === 'th');
   if (!rows.length) throw new Error('HTML detail does not contain headed rows');
-  const names = rows.map(row => detailRowName(row).toLocaleLowerCase());
-  const missing = selectedNames.filter(name => !names.includes(name.toLocaleLowerCase()));
+  const names = rows.map(row => normalizeHeaderName(detailRowName(row)));
+  const missing = selectedNames.filter(name => !names.includes(normalizeHeaderName(name)));
   if (missing.length) throw new Error(`Row${missing.length === 1 ? '' : 's'} not found: ${missing.join(', ')}`);
-  const requestedNames = [...new Set(selectedNames.map(name => name.toLocaleLowerCase()))];
-  const selectedRows = requestedNames.flatMap(name => rows.filter(row => detailRowName(row).toLocaleLowerCase() === name));
+  const requestedNames = [...new Set(selectedNames.map(normalizeHeaderName))];
+  const selectedRows = requestedNames.flatMap(name => rows.filter(row => normalizeHeaderName(detailRowName(row)) === name));
   const detailSet = new Set(rows);
   let filtered = '', position = 0;
   let inserted = false;

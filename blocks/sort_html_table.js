@@ -1,5 +1,5 @@
 'use strict';
-const { outerTable, directRows, directCells, headerText } = require('./select_html_table_columns');
+const { outerTable, directRows, directCells, headerText, normalizeHeaderName } = require('./select_html_table_columns');
 
 const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
 function rowValue(row, columnIndex) {
@@ -15,7 +15,7 @@ function sortHTMLTable(html, column, direction = 'Ascending') {
   const headerRow = rows.find(row => directCells(row.html).some(cell => cell.tag === 'th'));
   if (!headerRow) throw new Error('HTML table does not contain column headings');
   const headers = directCells(headerRow.html).map(cell => headerText(cell.html));
-  const columnIndex = headers.findIndex(header => header.toLocaleLowerCase() === column.toLocaleLowerCase());
+  const columnIndex = headers.findIndex(header => normalizeHeaderName(header) === normalizeHeaderName(column));
   if (columnIndex < 0) throw new Error(`Column not found: ${column}`);
   const hasBody = rows.some(row => row.section === 'tbody');
   const sortable = rows.filter(row => (hasBody ? row.section === 'tbody' : row.section !== 'thead' && row.section !== 'tfoot') && !directCells(row.html).some(cell => cell.tag === 'th'));

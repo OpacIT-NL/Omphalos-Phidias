@@ -14,7 +14,12 @@ function decodeHTML(value) {
   });
 }
 function headerText(cell) {
-  return decodeHTML(cell.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim());
+  const metadata = String(cell).match(/\bdata-phidias-header\s*=\s*(["'])([\s\S]*?)\1/i);
+  if (metadata) return decodeHTML(metadata[2]);
+  return decodeHTML(String(cell).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim());
+}
+function normalizeHeaderName(value) {
+  return String(value ?? '').replace(/_+/g, ' ').replace(/\s+/g, ' ').trim().toLocaleLowerCase();
 }
 function matchingTableEnd(html, start) {
   TAG.lastIndex = start;
@@ -92,14 +97,14 @@ function selectHTMLTableColumns(html, columnsText) {
   if (typeof html !== 'string' || !html.trim()) throw new Error('HTML Table is required');
   const selectedNames = String(columnsText ?? '').split(',').map(value => value.trim()).filter(Boolean);
   if (!selectedNames.length) throw new Error('Enter at least one comma-separated column header');
-  const requestedNames = [...new Set(selectedNames.map(value => value.toLocaleLowerCase()))];
+  const requestedNames = [...new Set(selectedNames.map(normalizeHeaderName))];
   const { start: tableStart, end: tableEnd, html: table } = outerTable(html);
   const rows = directRows(table);
   const headerRow = rows.find(row => directCells(row.html).some(cell => cell.tag === 'th'));
   if (!headerRow) throw new Error('HTML table does not contain column headings');
   const headers = directCells(headerRow.html);
-  const normalizedHeaders = headers.map(cell => headerText(cell.html).toLocaleLowerCase());
-  const missing = selectedNames.filter(name => !normalizedHeaders.includes(name.toLocaleLowerCase()));
+  const normalizedHeaders = headers.map(cell => normalizeHeaderName(headerText(cell.html)));
+  const missing = selectedNames.filter(name => !normalizedHeaders.includes(normalizeHeaderName(name)));
   if (missing.length) throw new Error(`Column${missing.length === 1 ? '' : 's'} not found: ${missing.join(', ')}`);
   const selectedIndexes = requestedNames.flatMap(name => normalizedHeaders
     .map((header, index) => header === name ? index : -1)
@@ -146,5 +151,6 @@ module.exports = {
   outerTable,
   directRows,
   directCells,
-  headerText
+  headerText,
+  normalizeHeaderName
 };

@@ -1,5 +1,5 @@
 'use strict';
-const { outerTable, directRows, directCells, headerText } = require('./select_html_table_columns');
+const { outerTable, directRows, directCells, headerText, normalizeHeaderName } = require('./select_html_table_columns');
 
 function escapeHTML(value) {
   return String(value).replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
@@ -23,9 +23,9 @@ function createButtonColumn(html, columnName, urlTemplate, argumentColumn) {
   const headerRow = rows.find(row => directCells(row.html).some(cell => cell.tag === 'th'));
   if (!headerRow) throw new Error('HTML table does not contain column headings');
   const headers = directCells(headerRow.html).map(cell => headerText(cell.html));
-  const normalizedName = columnName.toLocaleLowerCase();
-  if (headers.some(header => header.toLocaleLowerCase() === normalizedName)) throw new Error(`Column already exists: ${columnName}`);
-  const argumentIndex = headers.findIndex(header => header.toLocaleLowerCase() === argumentColumn.toLocaleLowerCase());
+  const normalizedName = normalizeHeaderName(columnName);
+  if (headers.some(header => normalizeHeaderName(header) === normalizedName)) throw new Error(`Column already exists: ${columnName}`);
+  const argumentIndex = headers.findIndex(header => normalizeHeaderName(header) === normalizeHeaderName(argumentColumn));
   if (argumentIndex < 0) throw new Error(`Argument column not found: ${argumentColumn}`);
   const hasBody = rows.some(row => row.section === 'tbody');
   let result = '', position = 0;
@@ -33,7 +33,7 @@ function createButtonColumn(html, columnName, urlTemplate, argumentColumn) {
     result += outer.html.slice(position, row.start);
     const cells = directCells(row.html);
     let added;
-    if (row.start === headerRow.start) added = `<th class="phidias-table-button-column" style="width:1%;white-space:nowrap">${escapeHTML(columnName)}</th>`;
+    if (row.start === headerRow.start) added = `<th class="phidias-table-button-column" data-phidias-header="${escapeHTML(columnName)}" aria-label="${escapeHTML(columnName)}" style="width:1%;white-space:nowrap"></th>`;
     else if (cells.some(cell => cell.tag === 'th')) added = '<th class="phidias-table-button-column" style="width:1%;white-space:nowrap"></th>';
     else if ((hasBody && row.section === 'tbody') || (!hasBody && row.section !== 'thead' && row.section !== 'tfoot')) {
       const argument = cells[argumentIndex] ? headerText(cells[argumentIndex].html) : '';

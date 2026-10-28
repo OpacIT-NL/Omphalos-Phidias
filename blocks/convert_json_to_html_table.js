@@ -8,6 +8,9 @@ function escapeHTML(value) {
 function renderScalar(value) {
   return escapeHTML(value).replace(/\r\n?|\n/g, '<br>');
 }
+function displayHeader(value) {
+  return String(value).replace(/_+/g, ' ').trim();
+}
 function normalizeRows(value) {
   const values = Array.isArray(value) ? value : [value];
   return values.map(item => item && typeof item === 'object' && !Array.isArray(item) ? item : { Value: item });
@@ -25,7 +28,7 @@ function renderTable(value, ancestors = new Set(), depth = 0) {
   for (const row of rows) for (const key of Object.keys(row)) {
     if (!seen.has(key)) { seen.add(key); columns.push(key); }
   }
-  const header = columns.map(column => `<th>${escapeHTML(column)}</th>`).join('');
+  const header = columns.map(column => `<th>${escapeHTML(displayHeader(column))}</th>`).join('');
   const body = rows.map(row => {
     const cells = columns.map(column => {
       const cell = row[column];
@@ -68,5 +71,6 @@ module.exports = {
     return 'next';
   },
   convertJSONToHTMLTable,
-  renderScalar
+  renderScalar,
+  displayHeader
 };

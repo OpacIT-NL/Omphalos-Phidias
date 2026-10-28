@@ -3,6 +3,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const { convertJSONToHTMLDetail } = require('../blocks/convert_json_to_html_detail');
+const { convertJSONToHTMLTable } = require('../blocks/convert_json_to_html_table');
 const { selectHTMLDetailRows } = require('../blocks/select_html_detail_rows');
 const { createButtonDetailRow } = require('../blocks/create_button_detail_row');
 const { sortHTMLDetailRows } = require('../blocks/sort_html_detail_rows');
@@ -28,6 +29,21 @@ test('Convert JSON to HTML Detail creates headed vertical rows from objects and 
   assert.match(convertJSONToHTMLDetail('[{"ID":3}]'), /<th scope="row">ID<\/th><td>3<\/td>/);
   const circular = {}; circular.self = circular;
   assert.throws(() => convertJSONToHTMLDetail(circular), /circular objects/);
+});
+
+test('HTML table and detail converters display underscored keys as spaced headers', () => {
+  const value = { system_name: 'D6_System', account_details: { display_name: 'Dobbel_System' } };
+  const table = convertJSONToHTMLTable(value);
+  const detail = convertJSONToHTMLDetail(value);
+  for (const html of [table, detail]) {
+    assert.match(html, />system name<|>system name<\/th>/);
+    assert.match(html, />account details<|>account details<\/th>/);
+    assert.match(html, />display name<|>display name<\/th>/);
+    assert.match(html, />D6_System</);
+    assert.match(html, />Dobbel_System</);
+    assert.doesNotMatch(html, />system_name<|>account_details<|>display_name</);
+  }
+  assert.match(selectHTMLDetailRows(detail, 'account_details'), />account details</);
 });
 
 test('JSON table and detail converters accept list output ports', () => {
@@ -62,11 +78,12 @@ test('Select HTML Detail Rows filters top-level rows and preserves nested detail
 test('Create Button Detail Row appends a URL-encoded action row', () => {
   const source = convertJSONToHTMLDetail({ ID: 'server 1/a', Name: 'Alpha' });
   const result = createButtonDetailRow(source, 'Edit', '/systems/${text1}/edit?source=a&mode=full', 'id');
-  assert.match(result, /<th scope="row">Edit<\/th>/);
+  assert.match(result, /<th scope="row" data-phidias-header="Edit" aria-label="Edit"><\/th>/);
   assert.match(result, /class="phidias-table-button phidias-detail-button"/);
   assert.match(result, /href="\/systems\/server%201%2Fa\/edit\?source=a&amp;mode=full"/);
   assert.throws(() => createButtonDetailRow(source, 'ID', '/edit', 'ID'), /Row already exists/);
   assert.throws(() => createButtonDetailRow(source, 'Edit', 'javascript:alert(1)', 'ID'), /unsafe scheme/);
+  assert.throws(() => createButtonDetailRow(result, 'Edit', '/edit-again', 'ID'), /Row already exists: Edit/);
 });
 
 test('Sort HTML Detail Rows orders by header or value', () => {

@@ -16,6 +16,14 @@ test('Select HTML Table Columns follows the requested heading order', () => {
   assert.match(filtered, /<td>bob@example\.test<\/td><td>Bob<\/td>/);
 });
 
+test('Select HTML Table Columns accepts original underscored names for spaced headers', () => {
+  const html = convertJSONToHTMLTable([{ display_name: 'Dobbel', system_id: 'abc', Hidden: true }]);
+  const filtered = selectHTMLTableColumns(html, 'system_id, display_name');
+  assert.match(filtered, /<th>system id<\/th><th>display name<\/th>/);
+  assert.match(filtered, /<td>abc<\/td><td>Dobbel<\/td>/);
+  assert.doesNotMatch(filtered, /Hidden|true/);
+});
+
 test('Select HTML Table Columns preserves wrappers and nested tables inside selected cells', () => {
   const table = convertJSONToHTMLTable([{ Name: 'Server A', Details: { Status: 'Online', Region: 'EU' }, Secret: 'remove-me' }]);
   const html = `<!doctype html><main>${table}</main>`;

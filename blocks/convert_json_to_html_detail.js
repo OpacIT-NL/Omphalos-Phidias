@@ -1,5 +1,5 @@
 'use strict';
-const { convertJSONToHTMLTable, renderScalar } = require('./convert_json_to_html_table');
+const { convertJSONToHTMLTable, renderScalar, displayHeader } = require('./convert_json_to_html_table');
 
 function escapeHTML(value) {
   return String(value).replace(/[&<>"']/g, character => ({
@@ -23,7 +23,7 @@ function renderValue(value, ancestors, depth) {
 function renderDetail(value, ancestors = new Set(), depth = 0) {
   if (ancestors.has(value)) throw new Error('Convert JSON to HTML detail cannot convert circular objects');
   const nextAncestors = new Set(ancestors).add(value), indent = '  '.repeat(depth);
-  const rows = Object.entries(value).map(([key, child]) => `${indent}    <tr><th scope="row">${escapeHTML(key)}</th><td>${renderValue(child, nextAncestors, depth + 3)}</td></tr>`).join('\n');
+  const rows = Object.entries(value).map(([key, child]) => `${indent}    <tr><th scope="row">${escapeHTML(displayHeader(key))}</th><td>${renderValue(child, nextAncestors, depth + 3)}</td></tr>`).join('\n');
   return `${indent}<table class="phidias-detail-table">\n${indent}  <tbody>${rows ? `\n${rows}\n${indent}  ` : ''}</tbody>\n${indent}</table>`;
 }
 function convertJSONToHTMLDetail(value) {

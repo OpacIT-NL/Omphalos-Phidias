@@ -11,7 +11,7 @@ test('Create Button Column adds a header and row-specific encoded URLs', () => {
     { ID: 'server&2', Name: 'Beta' }
   ]);
   const result = createButtonColumn(html, 'Edit', '/systems/${text1}/edit?source=a&mode=full', 'id');
-  assert.match(result, /<th>ID<\/th><th>Name<\/th><th class="phidias-table-button-column" style="width:1%;white-space:nowrap">Edit<\/th>/);
+  assert.match(result, /<th>ID<\/th><th>Name<\/th><th class="phidias-table-button-column" data-phidias-header="Edit" aria-label="Edit" style="width:1%;white-space:nowrap"><\/th>/);
   assert.match(result, /href="\/systems\/server%201%2Fa\/edit\?source=a&amp;mode=full"/);
   assert.match(result, /href="\/systems\/server%262\/edit\?source=a&amp;mode=full"/);
   assert.equal((result.match(/class="phidias-table-button"/g) || []).length, 2);
@@ -31,7 +31,7 @@ test('Create Button Column preserves wrappers and nested tables and supports a U
 test('Create Button Column keeps multi-word button labels on one line', () => {
   const html = convertJSONToHTMLTable([{ ID: 'one' }]);
   const result = createButtonColumn(html, 'View Details', '/systems/${text1}', 'ID');
-  assert.match(result, /<th class="phidias-table-button-column" style="width:1%;white-space:nowrap">View Details<\/th>/);
+  assert.match(result, /<th class="phidias-table-button-column" data-phidias-header="View Details" aria-label="View Details" style="width:1%;white-space:nowrap"><\/th>/);
   assert.match(result, /<td class="phidias-table-button-column" style="width:1%;white-space:nowrap"><a class="phidias-table-button" style="min-width:max-content;white-space:nowrap"[^>]*>View Details<\/a><\/td>/);
 });
 
@@ -42,6 +42,8 @@ test('Create Button Column returns useful errors and rejects unsafe URL schemes'
   assert.match(outputs.error_message, /Argument column not found: Missing/);
   assert.throws(() => createButtonColumn(html, 'ID', '/edit', 'ID'), /Column already exists/);
   assert.throws(() => createButtonColumn(html, 'Edit', 'javascript:alert(1)', 'ID'), /unsafe scheme/);
+  const withButton = createButtonColumn(html, 'Edit', '/edit', 'ID');
+  assert.throws(() => createButtonColumn(withButton, 'Edit', '/edit-again', 'ID'), /Column already exists: Edit/);
 });
 
 test('Create Button Column accepts all four values from Text blocks', async t => {
@@ -66,6 +68,6 @@ test('Create Button Column accepts all four values from Text blocks', async t =>
   const app = createApp({ document, definitions: loadDefinitions(path.resolve(__dirname, '../blocks')) });
   const address = await app.start(0, '127.0.0.1'); t.after(() => app.stop());
   const result = await (await fetch(`http://127.0.0.1:${address.port}/table`)).text();
-  assert.match(result, /<th class="phidias-table-button-column"[^>]*>Edit<\/th>/);
+  assert.match(result, /<th class="phidias-table-button-column" data-phidias-header="Edit"[^>]*><\/th>/);
   assert.match(result, /href="\/edit\/abc%20123"/);
 });
