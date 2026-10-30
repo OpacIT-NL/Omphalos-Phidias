@@ -8,30 +8,45 @@ const requestBlock = require('../blocks/browser_api_request');
 const { createApp, loadDefinitions } = require('../runtime/app');
 const { validate } = require('../runtime/validate');
 
-async function runBrowserRequest(callback, supplier = () => new Response('{"systems":4}')) {
-  const calls = [], events = [], writes = [], navigations = [], errors = [];
+async function runBrowserRequest(callback, supplier = () => new Response('{"systems":4}'), passthrough) {
+  const calls = [], events = [], writes = [], navigations = [], errors = [], cookies = [];
   const status = { dataset: {} };
   const html = requestBlock.browserRequestHTML({
     id: 'supplier_lookup', url: 'https://supplier.example/search', method: 'GET',
-    headers: {}, body: null, bodyFormat: 'JSON', credentials: 'omit', timeoutMs: 30000
+    headers: {}, body: null, bodyFormat: 'JSON', credentials: 'omit', timeoutMs: 30000,
+    ...(passthrough === undefined ? {} : { passthrough })
   });
+  const document = {
+    currentScript: { previousElementSibling: status },
+    dispatchEvent: event => events.push(event),
+    open: () => writes.push('open'), write: html => writes.push(html), close: () => writes.push('close')
+  };
+  Object.defineProperty(document, 'cookie', { set: value => cookies.push(value), get: () => '' });
   await vm.runInNewContext(html.match(/<script>\n([\s\S]*)\n<\/script>$/)[1], {
     AbortController, Blob, URL, setTimeout, clearTimeout,
     CustomEvent: class { constructor(type, options) { this.type = type; this.detail = options.detail; } },
-    window: { location: { href: 'https://app.example/form', assign: url => navigations.push(url) } },
-    document: {
-      currentScript: { previousElementSibling: status },
-      dispatchEvent: event => events.push(event),
-      open: () => writes.push('open'), write: html => writes.push(html), close: () => writes.push('close')
-    },
+    window: { location: { href: 'https://app.example/form', protocol: 'https:', assign: url => navigations.push(url) } },
+    document,
     console: { error: (...args) => errors.push(args) },
     fetch: async (url, options) => {
       calls.push({ url, options });
       return url.startsWith('/_phidias/') ? callback(url, options) : supplier();
     }
   });
-  return { calls, events, writes, navigations, errors, state: status.dataset.state };
+  return { calls, events, writes, navigations, errors, cookies, state: status.dataset.state };
 }
+
+test('browser stores passthrough values in a scoped cookie and clears it after callback', async () => {
+  for (const value of ['context', ['one', { two: 2 }], { nested: ['three'] }]) {
+    const result = await runBrowserRequest(() => new Response(null, { status: 202 }), undefined, value);
+    assert.equal(result.cookies.length, 2);
+    assert.match(result.cookies[0], /^phidias_browser_api_supplier_lookup=/);
+    assert.match(result.cookies[0], /Path=\/_phidias\/browser-api\/supplier_lookup/);
+    assert.match(result.cookies[0], /SameSite=Strict; Secure/);
+    assert.ok(result.cookies[0].includes(encodeURIComponent(JSON.stringify(value))));
+    assert.match(result.cookies[1], /Max-Age=0$/);
+  }
+});
 
 test('browser displays callback HTML, including error pages, and leaves acknowledgements and JSON in place', async () => {
   for (const status of [200, 422]) {
@@ -105,6 +120,15 @@ test('Browser API Request outputs safe browser code and refuses protected creden
   await assert.rejects(() => requestBlock.execute({}, {
     method: 'GET', body_format: 'JSON', credentials: 'Omit', timeout_seconds: 30
   }, { request_id: 'secret_test', url: 'https://supplier.example', headers: { authorization: secret } }, () => {}), /Protected credentials cannot be sent/);
+  await assert.rejects(() => requestBlock.execute({}, {
+    method: 'GET', body_format: 'JSON', credentials: 'Omit', timeout_seconds: 30
+  }, { request_id: 'invalid_passthrough', url: 'https://supplier.example', passthrough: 42 }, () => {}), /must be text, a list, or an object/);
+  await assert.rejects(() => requestBlock.execute({}, {
+    method: 'GET', body_format: 'JSON', credentials: 'Omit', timeout_seconds: 30
+  }, { request_id: 'secret_passthrough', url: 'https://supplier.example', passthrough: { secret } }, () => {}), /Protected credentials cannot be sent/);
+  await assert.rejects(() => requestBlock.execute({}, {
+    method: 'GET', body_format: 'JSON', credentials: 'Omit', timeout_seconds: 30
+  }, { request_id: 'large_passthrough', url: 'https://supplier.example', passthrough: 'x'.repeat(3001) }, () => {}), /3,000-byte cookie limit/);
 });
 
 test('Browser API Reply IDs must be valid and unique across active workspaces', () => {
@@ -169,6 +193,46 @@ test('Browser API Reply receives browser results and follows success and error w
   assert.equal((await fetch(base + '/_phidias/browser-api/supplier_lookup', {
     method: 'POST', headers: { 'content-type': 'application/json', 'x-phidias-browser-api': 'supplier_lookup', origin: 'https://attacker.example' }, body: JSON.stringify(successful)
   })).status, 403);
+});
+
+test('Browser API Reply retrieves text, list, and object passthrough cookies', async t => {
+  const definitions = loadDefinitions(path.resolve(__dirname, '../blocks'));
+  const document = { version: 1, name: 'Browser passthrough', workspaces: [{
+    id: 'browser-api', name: 'Browser API', active: true,
+    blocks: [
+      { id: 'reply', type: 'browser_api_reply', x: 0, y: 0, options: { request_id: 'supplier_lookup' } },
+      { id: 'log', type: 'console_log', x: 300, y: 0, options: { level: 'info', value: '' } }
+    ],
+    connections: [
+      { id: 'action', from: 'reply', output: 'success', to: 'log', input: 'action', kind: 'action' },
+      { id: 'value', from: 'reply', output: 'passthrough', to: 'log', input: 'value', kind: 'value' }
+    ]
+  }] };
+  const values = [];
+  const app = createApp({ document, definitions, logger: { debug() {}, error() {}, warning() {}, info: value => values.push(value) } });
+  const address = await app.start(0, '127.0.0.1');
+  t.after(() => app.stop());
+  const endpoint = `http://127.0.0.1:${address.port}/_phidias/browser-api/supplier_lookup`;
+  const result = { ok: true, status: 200, headers: {}, body: null, error: '' };
+  for (const value of ['context', ['one', { two: 2 }], { nested: ['three'] }]) {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-phidias-browser-api': 'supplier_lookup',
+        cookie: `phidias_browser_api_supplier_lookup=${encodeURIComponent(JSON.stringify(value))}`
+      },
+      body: JSON.stringify(result)
+    });
+    assert.equal(response.status, 202);
+  }
+  assert.deepEqual(values.map(value => JSON.parse(JSON.stringify(value))), ['context', ['one', { two: 2 }], { nested: ['three'] }]);
+  const malformed = await fetch(endpoint, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-phidias-browser-api': 'supplier_lookup', cookie: 'phidias_browser_api_supplier_lookup=%7Bbad' },
+    body: JSON.stringify(result)
+  });
+  assert.equal(malformed.status, 400);
 });
 
 test('Browser API Reply supports HTML, JSON, and redirects through HTTP response on either branch', async t => {

@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const block = require('../blocks/enable_search_and_sorting_for_table');
 const { convertJSONToHTMLTable } = require('../blocks/convert_json_to_html_table');
+const { convertJSONToHTMLDetail } = require('../blocks/convert_json_to_html_detail');
 
 test('Enable Search and Sorting for Table adds controls to every outer column', () => {
   const nested = { Status: 'Online' };
@@ -12,13 +13,26 @@ test('Enable Search and Sorting for Table adds controls to every outer column', 
   const html = block.enableSearchAndSortingForTable(source);
   assert.match(html, /^<main><div class="phidias-table-search-sort">/);
   assert.equal((html.match(/class="phidias-table-search"/g) || []).length, 3);
+  assert.equal((html.match(/class="phidias-table-search phidias-table-search--mobile"/g) || []).length, 3);
   assert.equal((html.match(/class="phidias-table-sort"/g) || []).length, 3);
   assert.match(html, /aria-label="Search Name"/);
+  assert.match(html, /<details class="phidias-table-mobile-search"><summary>Search and filter<\/summary>/);
+  assert.match(html, /<div class="phidias-table-scroll"><table>/);
+  assert.match(html, /@media \(max-width:48rem\)/);
+  assert.match(html, /min-height:2\.75rem/);
+  assert.match(html, /peer\.dataset\.phidiasColumn === input\.dataset\.phidiasColumn/);
   assert.match(html, /localeCompare\(right\.value, undefined, \{ numeric: true/);
   assert.match(html, /<th>Status<\/th>/);
   assert.match(html, /<\/script><\/main>$/);
   const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
   assert.doesNotThrow(() => new Function(script));
+});
+
+test('Enable Search and Sorting for Table gives detail lists the mobile search panel', () => {
+  const html = block.enableSearchAndSortingForTable(convertJSONToHTMLDetail({ Name: 'Server 10', Status: 'Online' }));
+  assert.match(html, /<details class="phidias-table-mobile-search"><summary>Search and filter<\/summary>/);
+  assert.match(html, /class="phidias-table-search phidias-table-search--mobile"/);
+  assert.match(html, /<div class="phidias-table-scroll"><table class="phidias-detail-table">/);
 });
 
 test('Enable Search and Sorting for Table reports invalid input through its error output', async () => {

@@ -27,6 +27,16 @@ function scriptJSON(value) {
   return JSON.stringify(value).replace(/[<\u2028\u2029]/g, character => ({ '<': '\\u003c', '\u2028': '\\u2028', '\u2029': '\\u2029' })[character]);
 }
 
+function passthrough(value) {
+  if (containsProtectedSecret(value)) throw new Error('Protected credentials cannot be sent to a user browser');
+  if (typeof value !== 'string' && !Array.isArray(value) && (!value || typeof value !== 'object')) throw new Error('Browser API Request passthrough must be text, a list, or an object');
+  let encoded;
+  try { encoded = encodeURIComponent(JSON.stringify(value)); }
+  catch { throw new Error('Browser API Request passthrough must be JSON-compatible'); }
+  if (Buffer.byteLength(encoded) > 3000) throw new Error('Browser API Request passthrough exceeds the 3,000-byte cookie limit');
+  return value;
+}
+
 function browserRequestHTML(configuration) {
   const encodedID = encodeURIComponent(configuration.id);
   return `<span class="phidias-browser-api-request" data-request-id="${configuration.id}" role="status" aria-live="polite" hidden></span>
@@ -36,7 +46,19 @@ function browserRequestHTML(configuration) {
   const status = script && script.previousElementSibling;
   const configuration = ${scriptJSON(configuration)};
   const callbackURL = "/_phidias/browser-api/${encodedID}";
+  const passthroughCookie = "phidias_browser_api_" + configuration.id;
+  const passthroughCookieOptions = "; Path=" + callbackURL + "; SameSite=Strict" + (window.location.protocol === "https:" ? "; Secure" : "");
   const limit = 786432;
+  const hasPassthrough = Object.prototype.hasOwnProperty.call(configuration, "passthrough");
+  const storePassthrough = () => {
+    if (!hasPassthrough) return;
+    const encoded = encodeURIComponent(JSON.stringify(configuration.passthrough));
+    if (new Blob([encoded]).size > 3000) throw new Error("Browser API Request passthrough exceeds the 3,000-byte cookie limit");
+    document.cookie = passthroughCookie + "=" + encoded + passthroughCookieOptions + "; Max-Age=" + Math.ceil(configuration.timeoutMs / 1000 + 60);
+  };
+  const clearPassthrough = () => {
+    if (hasPassthrough) document.cookie = passthroughCookie + "=" + passthroughCookieOptions + "; Max-Age=0";
+  };
   const report = async payload => {
     const reply = await fetch(callbackURL, {
       method: "POST",
@@ -66,6 +88,7 @@ function browserRequestHTML(configuration) {
     const timer = setTimeout(() => controller.abort(), configuration.timeoutMs);
     let payload;
     try {
+      storePassthrough();
       const requestHeaders = { ...configuration.headers };
       let body = configuration.body;
       const hasBody = !["GET", "HEAD"].includes(configuration.method) && body !== null && body !== "";
@@ -94,7 +117,8 @@ function browserRequestHTML(configuration) {
     } finally {
       clearTimeout(timer);
     }
-    await report(payload);
+    try { await report(payload); }
+    finally { clearPassthrough(); }
   };
   if (status) status.dataset.state = "loading";
   return run().catch(error => {
@@ -109,13 +133,14 @@ module.exports = {
   type: 'browser_api_request',
   name: 'Browser API Request',
   category: 'Internet Stuff',
-  description: 'Outputs HTML that requests an API from the user browser, then sends the result to a Browser API Reply block. The supplier must permit the request through CORS.',
+  description: 'Outputs HTML that requests an API from the user browser, then sends the result to a Browser API Reply block. Value Passthrough temporarily carries text, lists, or objects in an ID-scoped browser cookie. The supplier must permit the request through CORS.',
   inputPorts: [
     { id: 'action', name: 'Action', kind: 'action', types: [] },
     { id: 'request_id', name: 'Request ID', kind: 'value', types: ['text'], required: true },
     { id: 'url', name: 'API URL', kind: 'value', types: ['text'], required: true },
     { id: 'headers', name: 'Headers', kind: 'value', types: ['object', 'text'] },
-    { id: 'body', name: 'Body', kind: 'value', types: ['text', 'object', 'list', 'number', 'unspecified'] }
+    { id: 'body', name: 'Body', kind: 'value', types: ['text', 'object', 'list', 'number', 'unspecified'] },
+    { id: 'passthrough', name: 'Value Passthrough', kind: 'value', types: ['text', 'object', 'list'] }
   ],
   fields: [
     { key: 'method', label: 'Method', type: 'select', choices: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'], default: 'GET' },
@@ -144,11 +169,13 @@ module.exports = {
       credentials: options.credentials === 'Include' ? 'include' : 'omit',
       timeoutMs: Number(options.timeout_seconds) * 1000
     };
+    if (Object.hasOwn(inputs, 'passthrough') && inputs.passthrough !== undefined) configuration.passthrough = passthrough(inputs.passthrough);
     setOutput('html', browserRequestHTML(configuration));
     return 'next';
   },
   browserRequestHTML,
   containsProtectedSecret,
   headers,
+  passthrough,
   requestID
 };

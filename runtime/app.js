@@ -598,6 +598,7 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
             setOutput('headers', result.headers || {});
             setOutput('error_message', result.error || '');
             setOutput('request_id', block.options.request_id);
+            setOutput('passthrough', seed.browserAPIPassthrough ?? null);
           }
           const output = def.trigger === 'browser_api_reply'
             ? (seed.browserAPIResult?.ok ? 'success' : 'error')
@@ -799,9 +800,22 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
         if (!result || typeof result !== 'object' || Array.isArray(result) || typeof result.ok !== 'boolean' || !Number.isInteger(result.status) || result.status < 0 || result.status > 599 || !result.headers || typeof result.headers !== 'object' || Array.isArray(result.headers) || typeof result.error !== 'string' || result.error.length > 2000) {
           res.writeHead(400); res.end('Invalid browser API response'); return;
         }
+        const passthroughCookieName = `phidias_browser_api_${requestID}`;
+        const passthroughCookie = String(req.headers.cookie || '').split(';').map(value => value.trim()).find(value => value.startsWith(`${passthroughCookieName}=`));
+        let browserAPIPassthrough;
+        if (passthroughCookie) {
+          const encoded = passthroughCookie.slice(passthroughCookieName.length + 1);
+          try {
+            if (Buffer.byteLength(encoded) > 3000) throw new Error('too large');
+            browserAPIPassthrough = JSON.parse(decodeURIComponent(encoded));
+            if (typeof browserAPIPassthrough !== 'string' && !Array.isArray(browserAPIPassthrough) && (!browserAPIPassthrough || typeof browserAPIPassthrough !== 'object')) throw new Error('invalid type');
+          } catch {
+            res.writeHead(400); res.end('Invalid browser API passthrough cookie'); return;
+          }
+        }
         const request = { method: req.method, path: url.pathname, endpoint: url.pathname, subpath: '/', query: Object.fromEntries(url.searchParams), headers: req.headers, body: result, ip: req.socket.remoteAddress, browserAPIRequestID: requestID };
         res.setHeader('cache-control', 'no-store');
-        await track(run(browserAPIRoute.ws, browserAPIRoute.block, request, res, { browserAPIResult: result }));
+        await track(run(browserAPIRoute.ws, browserAPIRoute.block, request, res, { browserAPIResult: result, browserAPIPassthrough }));
         if (!res.writableEnded) { res.writeHead(202); res.end(); }
         return;
       }

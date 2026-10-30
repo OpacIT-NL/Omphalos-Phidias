@@ -16,7 +16,7 @@ function replaceCellContent(cell, content) {
 }
 
 function enhanceHeaderRow(row) {
-  const cells = directCells(row);
+  const cells = directCells(row), headings = [];
   let output = '', position = 0;
   for (let index = 0; index < cells.length; index++) {
     const cell = cells[index];
@@ -28,12 +28,13 @@ function enhanceHeaderRow(row) {
       const openingEnd = cell.html.indexOf('>');
       const closingStart = cell.html.toLocaleLowerCase().lastIndexOf('</th');
       const original = cell.html.slice(openingEnd + 1, closingStart);
+      headings.push({ index, name });
       const controls = `<span class="phidias-table-column-controls"><button type="button" class="phidias-table-sort" data-phidias-column="${index}" title="Sort by ${escapeHTML(name)}">${original}<span class="phidias-table-sort__indicator" aria-hidden="true">↕</span></button><input type="search" class="phidias-table-search" data-phidias-column="${index}" aria-label="Search ${escapeHTML(name)}" placeholder="Search ${escapeHTML(name)}"></span>`;
       output += replaceCellContent(cell.html, controls);
     }
     position = cell.end;
   }
-  return output + row.slice(position);
+  return { html: output + row.slice(position), headings };
 }
 
 function enhanceTable(table) {
@@ -42,16 +43,35 @@ function enhanceTable(table) {
   if (!headerRow) throw new Error('HTML table does not contain column headings');
   const headingCount = directCells(headerRow.html).filter(cell => cell.tag === 'th').length;
   if (!headingCount) throw new Error('HTML table does not contain column headings');
-  return table.slice(0, headerRow.start) + enhanceHeaderRow(headerRow.html) + table.slice(headerRow.end);
+  const header = enhanceHeaderRow(headerRow.html);
+  return { html: table.slice(0, headerRow.start) + header.html + table.slice(headerRow.end), headings: header.headings };
+}
+
+function mobileSearchMenu(headings) {
+  const fields = headings.map(({ index, name }) => `<label class="phidias-table-mobile-search__field"><span>${escapeHTML(name)}</span><input type="search" class="phidias-table-search phidias-table-search--mobile" data-phidias-column="${index}" aria-label="Search ${escapeHTML(name)}" placeholder="Search ${escapeHTML(name)}"></label>`).join('');
+  return `<details class="phidias-table-mobile-search"><summary>Search and filter</summary><div class="phidias-table-mobile-search__fields">${fields}</div></details>`;
 }
 
 const STYLE = `<style>
-.phidias-table-search-sort{max-width:100%;overflow-x:auto}
+.phidias-table-search-sort{max-width:100%}
+.phidias-table-search-sort .phidias-table-scroll{max-width:100%;overflow-x:auto}
 .phidias-table-search-sort .phidias-table-column-controls{display:grid;gap:.35rem;min-width:7rem}
 .phidias-table-search-sort .phidias-table-sort{display:flex;width:100%;align-items:center;justify-content:space-between;gap:.5rem;border:0;padding:0;background:transparent;color:inherit;font:inherit;font-weight:inherit;text-align:left;cursor:pointer}
 .phidias-table-search-sort .phidias-table-sort__indicator{flex:0 0 auto;font-size:.8em;opacity:.65}
 .phidias-table-search-sort .phidias-table-search{box-sizing:border-box;width:100%;min-width:0;border:1px solid currentColor;border-radius:4px;padding:.3rem .45rem;background:var(--iris-surface,#fff);color:inherit;font:inherit;font-weight:400;opacity:.9}
 .phidias-table-search-sort .phidias-table-search::placeholder{color:inherit;opacity:.55}
+.phidias-table-search-sort .phidias-table-mobile-search{display:none}
+@media (max-width:48rem){
+  .phidias-table-search-sort .phidias-table-column-controls>.phidias-table-search{display:none}
+  .phidias-table-search-sort .phidias-table-mobile-search{display:block;margin:0 0 .75rem;border:1px solid currentColor;border-radius:.6rem;background:var(--iris-surface,#fff);color:inherit}
+  .phidias-table-search-sort .phidias-table-mobile-search>summary{display:flex;min-height:2.75rem;box-sizing:border-box;align-items:center;justify-content:space-between;gap:.75rem;padding:.7rem .85rem;font:inherit;font-weight:700;cursor:pointer;list-style:none;touch-action:manipulation}
+  .phidias-table-search-sort .phidias-table-mobile-search>summary::-webkit-details-marker{display:none}
+  .phidias-table-search-sort .phidias-table-mobile-search>summary::after{content:'+';flex:0 0 auto;font-size:1.25rem;line-height:1}
+  .phidias-table-search-sort .phidias-table-mobile-search[open]>summary::after{content:'−'}
+  .phidias-table-search-sort .phidias-table-mobile-search__fields{display:grid;gap:.75rem;padding:0 .85rem .85rem}
+  .phidias-table-search-sort .phidias-table-mobile-search__field{display:grid;gap:.35rem;min-width:0;font:inherit;font-weight:600}
+  .phidias-table-search-sort .phidias-table-mobile-search .phidias-table-search{min-height:2.75rem;padding:.7rem .8rem;border-radius:.5rem;font-size:1rem;line-height:1.25}
+}
 </style>`;
 
 const SCRIPT = `<script>
@@ -76,7 +96,10 @@ const SCRIPT = `<script>
     const terms = searches.map(input => ({ column: Number(input.dataset.phidiasColumn), value: input.value.trim().toLocaleLowerCase() }));
     for (const row of dataRows()) row.hidden = terms.some(term => term.value && !value(row, term.column).toLocaleLowerCase().includes(term.value));
   };
-  for (const input of searches) input.addEventListener('input', filter);
+  for (const input of searches) input.addEventListener('input', () => {
+    for (const peer of searches) if (peer !== input && peer.dataset.phidiasColumn === input.dataset.phidiasColumn) peer.value = input.value;
+    filter();
+  });
   for (const button of buttons) button.addEventListener('click', () => {
     const column = Number(button.dataset.phidiasColumn);
     const wasAscending = button.dataset.phidiasDirection === 'ascending';
@@ -105,7 +128,7 @@ function enableSearchAndSortingForTable(html) {
   if (typeof html !== 'string' || !html.trim()) throw new Error('HTML Table is required');
   const outer = outerTable(html);
   const enhanced = enhanceTable(outer.html);
-  const widget = `<div class="phidias-table-search-sort">${STYLE}${enhanced}</div>${SCRIPT}`;
+  const widget = `<div class="phidias-table-search-sort">${STYLE}${mobileSearchMenu(enhanced.headings)}<div class="phidias-table-scroll">${enhanced.html}</div></div>${SCRIPT}`;
   return html.slice(0, outer.start) + widget + html.slice(outer.end);
 }
 
@@ -113,7 +136,7 @@ module.exports = {
   type: 'enable_search_and_sorting_for_table',
   name: 'Enable Search and Sorting for Table',
   category: 'Data',
-  description: 'Adds a per-column search field and clickable sorting controls to an HTML table.',
+  description: 'Adds per-column search fields and clickable sorting controls to an HTML table or detail list, with a collapsible touch-friendly search panel on mobile.',
   inputPorts: [
     { id: 'action', name: 'Action', kind: 'action', types: [] },
     { id: 'html', name: 'HTML Table', kind: 'value', types: ['text'], required: true }

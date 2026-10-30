@@ -76,7 +76,7 @@ test('project creation, atomic saves, conflicts, reload, and downloadable ZIP', 
   const library = await (await call(endpoint + '/blocks')).json();
   const replyFormat = library.find(block => block.type === 'respond').fields.find(field => field.key === 'format');
   assert.equal(replyFormat.default, 'JSON'); assert.ok(replyFormat.choices.includes('HTML'));
-  for (const file of ['app.js', 'favicon.ico', 'workspaces.json', 'html/login.html', 'html/register.html', 'html/login.css', 'blocks/api_endpoint.js', 'blocks/get_sub_endpoint_by_name.js', 'blocks/linux_command.js', 'blocks/update_app.js', 'validate.js', 'cron.js', 'auth.js', 'logger.js', 'package.json']) await fs.access(path.join(directory, project.id, file));
+  for (const file of ['app.js', 'favicon.ico', 'workspaces.json', 'html/login.html', 'html/register.html', 'html/login.css', 'blocks/api_endpoint.js', 'blocks/get_sub_endpoint_by_name.js', 'blocks/linux_command.js', 'blocks/update_app.js', 'validate.js', 'cron.js', 'auth.js', 'logger.js', 'package.json', 'package-lock.json']) await fs.access(path.join(directory, project.id, file));
   assert.equal(project.appConfig, null);
   assert.deepEqual(project.workspaceCategories, []);
   assert.equal(project.workspaces[0].numberId, 1);
@@ -119,7 +119,13 @@ test('project creation, atomic saves, conflicts, reload, and downloadable ZIP', 
   assert.equal(exportedDependencies.argon2, undefined);
   assert.equal(exportedDependencies['@noble/hashes'], '2.4.0');
   assert.equal(exportedDependencies['hash-wasm'], '4.12.0');
-  assert.equal(exportedDependencies['basic-ftp'], '^6.2.3');
+  assert.equal(exportedDependencies['basic-ftp'], '^6.2.4');
+  assert.equal(exportedDependencies.mssql, '^12.7.13');
+  const exportedLock = JSON.parse(extracted.get('package-lock.json'));
+  assert.equal(exportedLock.name, `phidias-${project.id}`);
+  assert.deepEqual(exportedLock.packages[''].dependencies, exportedDependencies);
+  assert.equal(exportedLock.packages['node_modules/basic-ftp'].version, '6.2.4');
+  assert.equal(exportedLock.packages['node_modules/mssql'].version, '12.7.13');
   for (const name of ['api_endpoint.js', 'api_call.js', 'api_reply.js']) assert.ok(extracted.has(`blocks/${name}`));
   for (const name of ['json_to_cartesian_chart.js', 'json_to_circular_chart.js', 'chart_helpers.cjs']) assert.ok(extracted.has(`blocks/${name}`));
   for (const name of ['math_operation.js', 'percentage_calculator.js', 'aggregate_numbers.js', 'transform_json_numbers.js', 'math_helpers.cjs']) assert.ok(extracted.has(`blocks/${name}`));
