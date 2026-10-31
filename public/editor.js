@@ -312,9 +312,10 @@ function renderDeploymentConfigs(configurations) {
   const choices = '<option value="">No database</option>' + databaseCredentials.map(item => `<option value="${escapeHTML(item.id)}">${escapeHTML(item.name)} · ${escapeHTML(item.username)}@${escapeHTML(item.host)}:${item.port}/${escapeHTML(item.database)}</option>`).join('');
   for (const channel of ['RC', 'Prod']) {
     const form = document.querySelector(`[data-deployment-channel="${channel}"]`);
-    const config = configurations[channel] || { host: '0.0.0.0', port: 3001, 'log-level': 3, 'force-console-input-log': false, 'auth-storage': 'sqlite', 'credential-broker-url': '', 'update-url': '' };
+    const config = configurations[channel] || { host: '0.0.0.0', port: 3001, 'ssh-port': null, 'log-level': 3, 'force-console-input-log': false, 'auth-storage': 'sqlite', 'credential-broker-url': '', 'update-url': '' };
     form.elements.host.value = config.host;
     form.elements.port.value = config.port;
+    form.elements['ssh-port'].value = config['ssh-port'] || '';
     form.elements['log-level'].value = config['log-level'];
     form.elements['force-console-input-log'].checked = Boolean(config['force-console-input-log']);
     form.elements['update-url'].value = config['update-url'] || '';
@@ -448,6 +449,7 @@ async function saveDeploymentConfig(form) {
   const config = {
     host: form.elements.host.value.trim(),
     port: Number(form.elements.port.value),
+    'ssh-port': form.elements['ssh-port'].value ? Number(form.elements['ssh-port'].value) : null,
     'log-level': Number(form.elements['log-level'].value),
     'force-console-input-log': form.elements['force-console-input-log'].checked,
     'auth-storage': form.elements['auth-storage'].value,

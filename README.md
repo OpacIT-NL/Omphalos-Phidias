@@ -133,7 +133,7 @@ npm install
 node app.js
 ```
 
-You can also use `npm start` after installing dependencies. Exported applications use Node.js 22 or newer and read their host, port, stage, log level, database selections, broker URL, and update URL from the packaged `config.json`. `HOST` and `PORT` can override the packaged listening address when needed.
+You can also use `npm start` after installing dependencies. Exported applications use Node.js 22 or newer and read their host, HTTP port, optional SSH port, stage, log level, database selections, broker URL, and update URL from the packaged `config.json`. `HOST` and `PORT` can override the packaged HTTP listening address when needed.
 
 An authenticated direct export contains a unique `application.key`. Keep it beside `app.js`, restrict it to the operating-system account running the application, and never publish it. Public repository ZIPs exclude this key so an in-place update preserves the key already installed on the server.
 
@@ -202,6 +202,12 @@ Restart Phidias after changing the authentication backend or broker listener. Se
 
 Applications authenticate with their `application.key`. Broker requests are signed, time-limited, and protected against replay. Credential responses are encrypted for that application before being returned.
 
+### SSH consoles
+
+Phidias can expose its administration console over SSH. Configure the `ssh` object in `config.json` (or use `ssh enabled`, `ssh host`, and `ssh port` in configuration mode), save, and restart. Password login uses ordinary Phidias accounts and requires both the `login` and `console` core permissions. The private host key is generated automatically at the configured `hostKey` path.
+
+For an exported application, set **SSH port** and **Credential broker URL** independently in its RC and Prod deployment settings. The packaged `ssh-port` enables the listener; leaving it `null` disables SSH. Application SSH logins are checked by Phidias through the encrypted broker and require `console` plus the release channel's `login_rc` or `login_prod` permission. Console output is streamed to the shell, and its prompt follows the current Application Console Passthrough mode (`Console$>`, `Console#>`, `Config#>`, `DB_CLI#>`, or `MySQL>`). The **End SSH Session** block disconnects all active application SSH consoles.
+
 ## Console administration
 
 The local console and the editor’s **CLI** panel use the same modes:
@@ -236,6 +242,10 @@ Common configuration commands:
 | `log-level <0-4>` | Set console log filtering |
 | `file-log-level <0-4>` | Set file log filtering |
 | `projects-directory <path>` | Set project storage after restart |
+| `ssh enabled <true-or-false>` | Enable or disable the SSH console after restart |
+| `ssh host <address>` | Set the SSH listening address after restart |
+| `ssh port <1-65535>` | Set the SSH listening port after restart |
+| `ssh host-key <path>` | Set the SSH private host-key path after restart |
 | `auth database <path>` | Set the SQLite path after restart |
 | `auth secure-cookies <true-or-false>` | Control the Secure flag on new cookies |
 | `console force-input-log <true-or-false>` | Force console command auditing; hidden answers remain redacted |
@@ -274,6 +284,12 @@ The generated `config.json` starts with these values:
   "console": {
     "enablePasswordHash": null,
     "forceInputLog": false
+  },
+  "ssh": {
+    "enabled": false,
+    "host": "127.0.0.1",
+    "port": 2222,
+    "hostKey": "data/ssh_host_rsa_key"
   }
 }
 ```
@@ -309,6 +325,7 @@ Back up these items:
 - The configured projects directory
 - The sibling `repo` directory containing revision ZIPs
 - `data/phidias.key`
+- `data/ssh_host_rsa_key` when the SSH console is enabled
 - The SQLite authentication database and its `-wal` and `-shm` files, or the selected MySQL database
 
 For a consistent SQLite file backup, stop Phidias before copying the database files. Store the database on persistent local storage supported by SQLite WAL.
