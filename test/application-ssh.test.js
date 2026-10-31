@@ -47,10 +47,12 @@ test('deployed application SSH uses brokered Phidias credentials and forwards it
   await app.start(0, '127.0.0.1');
 
   const client = new Client(), output = [];
+  let shellStream;
   let consoleOutputReceived;
   await new Promise((resolve, reject) => {
     client.once('ready', () => client.shell((error, stream) => {
       if (error) return reject(error);
+      shellStream = stream;
       consoleOutputReceived = new Promise((resolveOutput, rejectOutput) => {
         const timer = setTimeout(() => rejectOutput(new Error(`Timed out waiting for application SSH output; received ${JSON.stringify(output.join(''))}`)), 5000);
         stream.on('data', chunk => {
@@ -73,7 +75,13 @@ test('deployed application SSH uses brokered Phidias credentials and forwards it
   assert.match(output.join(''), /Console\$> /);
   assert.match(output.join(''), /forwarded application output/);
 
+  const shellClosed = new Promise(resolve => shellStream.once('close', resolve));
+  shellStream.write('exit\n');
+  await shellClosed;
+  assert.match(output.join(''), /Session closed\./);
+
   const clientClosed = new Promise(resolve => client.once('close', resolve));
-  await app.stop(); stopped = true;
+  client.end();
   await clientClosed;
+  await app.stop(); stopped = true;
 });

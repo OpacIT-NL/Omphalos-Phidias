@@ -974,6 +974,10 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
             stream.once('close', cleanup); stream.once('end', cleanup);
             shell.on('line', async line => {
               processing = true; shell.pause();
+              if (line.trim().toLowerCase() === 'exit') {
+                stream.end('Session closed.\r\n');
+                return;
+              }
               if (line.trim() && stdinListeners.length) await Promise.allSettled([...stdinListeners].map(listener => listener(line)));
               processing = false; shell.resume(); shell.setPrompt(prompt()); shell.prompt();
             });

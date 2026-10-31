@@ -24,12 +24,13 @@ async function fixture(t, apply) {
     stderr: { write: line => logOutput.push(line) }
   });
   let shutdowns = 0;
+  let sessionCloses = 0;
   const engine = new CommandConsole({ config, auth, logger,
     write: text => messages.push(text), ask: async (prompt, secret) => { questions.push({ prompt, secret }); if (!answers.length) throw new Error('No test answer'); return answers.shift(); },
-    shutdown: async () => { shutdowns++; }, status: () => 'Test listener'
+    shutdown: async () => { shutdowns++; }, closeSession: async () => { sessionCloses++; }, status: () => 'Test listener'
   });
   t.after(async () => { auth.close(); await fs.rm(folder, { recursive: true, force: true }); });
-  return { engine, config, auth, logger, logOutput, messages, answers, questions, file, database, shutdowns: () => shutdowns };
+  return { engine, config, auth, logger, logOutput, messages, answers, questions, file, database, shutdowns: () => shutdowns, sessionCloses: () => sessionCloses };
 }
 test('console modes, privilege boundaries, aliases, do, and redacted configuration', async t => {
   const { engine, config, messages, answers, file, questions } = await fixture(t);
@@ -55,6 +56,13 @@ test('console modes, privilege boundaries, aliases, do, and redacted configurati
   assert.ok(messages.includes('Enter the enable password at the hidden prompt below.'));
   await engine.execute('config terminal'); await engine.execute('do show status'); assert.equal(engine.mode, 'config');
   await engine.execute('do disable'); assert.equal(engine.mode, 'disabled');
+});
+test('exit closes a disabled console session', async t => {
+  const { engine, messages, sessionCloses } = await fixture(t);
+  await engine.execute('exit');
+  assert.equal(sessionCloses(), 1);
+  assert.equal(engine.stopped, true);
+  assert.equal(messages.at(-1), 'Session closed.');
 });
 test('running settings are validated, applied, explicitly saved, and loaded without require cache', async t => {
   const applied = [];

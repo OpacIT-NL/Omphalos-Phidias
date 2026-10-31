@@ -536,6 +536,7 @@ if (require.main === module) {
           const sshTerminal = new Terminal({ input: stream, output: stream, terminal: true, lineEnding: '\r\n' });
           const engine = new CommandConsole({ config: state, auth: application.auth, logger,
             ask: (prompt, secret) => sshTerminal.ask(prompt, secret), write: message => sshTerminal.write(message),
+            closeSession: () => { if (!stream.destroyed) stream.end(); },
             shutdown: () => shutdown(`SSH console (${username})`), status: consoleStatus });
           sshTerminal.write(`OpacIT Omphalos Phidias SSH console (${username}). Type help or enable.`);
           await sshTerminal.run(engine);
