@@ -6,6 +6,8 @@ const path = require('node:path');
 const block = require('../blocks/enable_search_and_sorting_for_table');
 const { convertJSONToHTMLTable } = require('../blocks/convert_json_to_html_table');
 const { convertJSONToHTMLDetail } = require('../blocks/convert_json_to_html_detail');
+const { createButtonColumn } = require('../blocks/create_button_column');
+const { createButtonDetailRow } = require('../blocks/create_button_detail_row');
 
 test('Enable Search and Sorting for Table adds controls to every outer column', () => {
   const nested = { Status: 'Online' };
@@ -26,6 +28,37 @@ test('Enable Search and Sorting for Table adds controls to every outer column', 
   assert.match(html, /<\/script><\/main>$/);
   const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
   assert.doesNotThrow(() => new Function(script));
+});
+
+test('Enable Search and Sorting for Table excludes button columns', () => {
+  const source = createButtonColumn(
+    convertJSONToHTMLTable([{ Name: 'Alpha', Status: 'Online' }]),
+    'Open',
+    '/systems/${text1}',
+    'Name'
+  );
+  const html = block.enableSearchAndSortingForTable(source);
+  assert.equal((html.match(/class="phidias-table-search"/g) || []).length, 2);
+  assert.equal((html.match(/class="phidias-table-search phidias-table-search--mobile"/g) || []).length, 2);
+  assert.equal((html.match(/class="phidias-table-sort"/g) || []).length, 2);
+  assert.doesNotMatch(html, /aria-label="Search Open"/);
+  assert.match(html, /<th class="phidias-table-button-column"[^>]*><\/th>/);
+  assert.match(html, />Open<\/a>/);
+});
+
+test('Enable Search and Sorting for Table keeps button detail rows outside filtering and sorting', () => {
+  const source = createButtonDetailRow(
+    convertJSONToHTMLDetail({ Name: 'Alpha', Status: 'Online' }),
+    'Edit',
+    '/systems/${text1}',
+    'Name'
+  );
+  const html = block.enableSearchAndSortingForTable(source);
+  assert.match(html, /<tr class="phidias-table-button-row">/);
+  assert.match(html, /const isButtonRow = row =>/);
+  assert.match(html, /if \(isButtonRow\(row\)\) \{\s*row\.hidden = false;/);
+  assert.match(html, /\.filter\(row => !isButtonRow\(row\)\)/);
+  assert.match(html, /original\.map\(row => isButtonRow\(row\) \? row : sorted\[sortedIndex\+\+\]\.row\)/);
 });
 
 test('Enable Search and Sorting for Table gives detail lists the mobile search panel', () => {

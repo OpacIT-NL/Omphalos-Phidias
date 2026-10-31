@@ -15,13 +15,17 @@ function replaceCellContent(cell, content) {
   return cell.slice(0, openingEnd + 1) + content + cell.slice(closingStart);
 }
 
+function isButtonColumn(cell) {
+  return /\bphidias-table-button-column\b/i.test(String(cell));
+}
+
 function enhanceHeaderRow(row) {
   const cells = directCells(row), headings = [];
   let output = '', position = 0;
   for (let index = 0; index < cells.length; index++) {
     const cell = cells[index];
     output += row.slice(position, cell.start);
-    if (cell.tag !== 'th') {
+    if (cell.tag !== 'th' || isButtonColumn(cell.html)) {
       output += cell.html;
     } else {
       const name = headerText(cell.html) || `Column ${index + 1}`;
@@ -48,6 +52,7 @@ function enhanceTable(table) {
 }
 
 function mobileSearchMenu(headings) {
+  if (!headings.length) return '';
   const fields = headings.map(({ index, name }) => `<label class="phidias-table-mobile-search__field"><span>${escapeHTML(name)}</span><input type="search" class="phidias-table-search phidias-table-search--mobile" data-phidias-column="${index}" aria-label="Search ${escapeHTML(name)}" placeholder="Search ${escapeHTML(name)}"></label>`).join('');
   return `<details class="phidias-table-mobile-search"><summary>Search and filter</summary><div class="phidias-table-mobile-search__fields">${fields}</div></details>`;
 }
@@ -83,6 +88,7 @@ const SCRIPT = `<script>
   const directRows = section => Array.from(section ? section.rows : []).filter(row => row.closest('table') === table);
   const bodies = Array.from(table.tBodies);
   const dataRows = () => bodies.flatMap(directRows);
+  const isButtonRow = row => row.classList.contains('phidias-table-button-row') || Boolean(row.querySelector('.phidias-detail-button'));
   const searches = Array.from(root.querySelectorAll('.phidias-table-search'));
   const buttons = Array.from(root.querySelectorAll('.phidias-table-sort'));
   const value = (row, index) => (row.cells[index]?.textContent || '').trim();
@@ -94,7 +100,13 @@ const SCRIPT = `<script>
   };
   const filter = () => {
     const terms = searches.map(input => ({ column: Number(input.dataset.phidiasColumn), value: input.value.trim().toLocaleLowerCase() }));
-    for (const row of dataRows()) row.hidden = terms.some(term => term.value && !value(row, term.column).toLocaleLowerCase().includes(term.value));
+    for (const row of dataRows()) {
+      if (isButtonRow(row)) {
+        row.hidden = false;
+        continue;
+      }
+      row.hidden = terms.some(term => term.value && !value(row, term.column).toLocaleLowerCase().includes(term.value));
+    }
   };
   for (const input of searches) input.addEventListener('input', () => {
     for (const peer of searches) if (peer !== input && peer.dataset.phidiasColumn === input.dataset.phidiasColumn) peer.value = input.value;
@@ -115,9 +127,14 @@ const SCRIPT = `<script>
     const indicator = button.querySelector('.phidias-table-sort__indicator');
     if (indicator) indicator.textContent = direction === 1 ? '↑' : '↓';
     for (const body of bodies) {
-      const rows = directRows(body).map((row, index) => ({ row, index, value: value(row, column) }));
-      rows.sort((left, right) => compare(left, right, direction));
-      for (const item of rows) body.appendChild(item.row);
+      const original = directRows(body);
+      const sorted = original
+        .filter(row => !isButtonRow(row))
+        .map((row, index) => ({ row, index, value: value(row, column) }));
+      sorted.sort((left, right) => compare(left, right, direction));
+      let sortedIndex = 0;
+      const ordered = original.map(row => isButtonRow(row) ? row : sorted[sortedIndex++].row);
+      for (const row of ordered) body.appendChild(row);
     }
     filter();
   });

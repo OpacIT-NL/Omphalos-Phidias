@@ -79,6 +79,7 @@ test('Create Button Detail Row appends a URL-encoded action row', () => {
   const source = convertJSONToHTMLDetail({ ID: 'server 1/a', Name: 'Alpha' });
   const result = createButtonDetailRow(source, 'Edit', '/systems/${text1}/edit?source=a&mode=full', 'id');
   assert.match(result, /<th scope="row" data-phidias-header="Edit" aria-label="Edit"><\/th>/);
+  assert.match(result, /<tr class="phidias-table-button-row">/);
   assert.match(result, /class="phidias-table-button phidias-detail-button"/);
   assert.match(result, /href="\/systems\/server%201%2Fa\/edit\?source=a&amp;mode=full"/);
   assert.throws(() => createButtonDetailRow(source, 'ID', '/edit', 'ID'), /Row already exists/);

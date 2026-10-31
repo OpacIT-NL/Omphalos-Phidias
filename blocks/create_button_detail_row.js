@@ -20,7 +20,7 @@ function createButtonDetailRow(html, rowName, urlTemplate, argumentRow) {
   const argument = rows.find(row => normalizeHeaderName(detailRowName(row)) === normalizeHeaderName(argumentRow));
   if (!argument) throw new Error(`Argument row not found: ${argumentRow}`);
   const value = headerText(argument.cells[1].html), url = urlTemplate.replaceAll('${text1}', encodeURIComponent(value));
-  const row = `<tr><th scope="row" data-phidias-header="${escapeHTML(rowName)}" aria-label="${escapeHTML(rowName)}"></th><td><a class="phidias-table-button phidias-detail-button" href="${escapeHTML(url)}" role="button">${escapeHTML(rowName)}</a></td></tr>`;
+  const row = `<tr class="phidias-table-button-row"><th scope="row" data-phidias-header="${escapeHTML(rowName)}" aria-label="${escapeHTML(rowName)}"></th><td><a class="phidias-table-button phidias-detail-button" href="${escapeHTML(url)}" role="button">${escapeHTML(rowName)}</a></td></tr>`;
   const insertAt = rows.at(-1).end;
   const changed = outer.html.slice(0, insertAt) + row + outer.html.slice(insertAt);
   return html.slice(0, outer.start) + changed + html.slice(outer.end);
