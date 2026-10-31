@@ -120,11 +120,14 @@ function findRoute(routes, method, pathname, predicate = () => true) {
   }
   return match;
 }
-const DEFAULT_APP_CONFIG = Object.freeze({ port: 3001, host: '0.0.0.0', 'log-level': 3, 'force-console-input-log': false, auth: Object.freeze({ database: 'data/auth.sqlite' }) });
+const DEFAULT_APP_CONFIG = Object.freeze({ port: 3001, host: '0.0.0.0', 'ssh-port': null, 'log-level': 3, 'force-console-input-log': false, auth: Object.freeze({ database: 'data/auth.sqlite' }) });
 function validateAppConfig(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('config.json must contain an object');
   value = { ...DEFAULT_APP_CONFIG, ...value };
   if (!Number.isInteger(value.port) || value.port < 1 || value.port > 65535) throw new Error('config.json: port must be an integer between 1 and 65535');
+  const sshPort = value['ssh-port'] ?? null;
+  if (sshPort !== null && (!Number.isInteger(sshPort) || sshPort < 1 || sshPort > 65535)) throw new Error('config.json: ssh-port must be null or an integer between 1 and 65535');
+  if (sshPort === value.port) throw new Error('config.json: ssh-port must differ from port');
   if (typeof value.host !== 'string' || !net.isIP(value.host)) throw new Error('config.json: host must be an IPv4 or IPv6 address');
   if (!Number.isInteger(value['log-level']) || value['log-level'] < 0 || value['log-level'] > 4) throw new Error('config.json: log-level must be an integer between 0 and 4');
   if (typeof value['force-console-input-log'] !== 'boolean') throw new Error('config.json: force-console-input-log must be true or false');
@@ -151,6 +154,7 @@ function validateAppConfig(value) {
     try { broker = new URL(auth.broker.url); } catch { throw new Error('config.json: auth.broker.url must be an HTTP or HTTPS URL'); }
     if (!['http:', 'https:'].includes(broker.protocol) || broker.username || broker.password) throw new Error('config.json: auth.broker.url must be an HTTP or HTTPS URL without embedded credentials');
   }
+  if (sshPort !== null && !auth.broker?.url) throw new Error('config.json: auth.broker.url is required when ssh-port is configured');
   const database = value.database ?? null;
   if (database !== null && (!database || typeof database !== 'object' || Array.isArray(database) || typeof database['credential-set'] !== 'string' || !/^[a-f0-9-]{36}$/.test(database['credential-set']))) throw new Error('config.json: database must identify a credential set');
   const loggingDatabase = value['logging-database'] ?? null;
@@ -158,6 +162,7 @@ function validateAppConfig(value) {
   return {
     port: value.port,
     host: value.host,
+    'ssh-port': sshPort,
     'log-level': value['log-level'],
     'force-console-input-log': value['force-console-input-log'],
     auth: authProvider === 'mysql'
@@ -186,7 +191,9 @@ function loadAppConfig(directory = __dirname) {
 }
 function brokerSignatureText(request) {
   const base = `${request.projectId}\n${request.channel}\n${request.timestamp}\n${request.nonce}`;
-  return request.purpose === 'credential' ? `${base}\ncredential\n${request.selector}\n${request.types.join(',')}` : base;
+  if (request.purpose === 'credential') return `${base}\ncredential\n${request.selector}\n${request.types.join(',')}`;
+  if (request.purpose === 'ssh-auth') return `${base}\nssh-auth`;
+  return base;
 }
 function readApplicationKey(config, directory) {
   const keyFile = path.join(directory, 'application.key');
@@ -199,8 +206,18 @@ function readApplicationKey(config, directory) {
 async function requestBroker(config, directory, endpoint, details = {}) {
   if (!config.auth.broker?.url) throw new Error('No credential broker URL is configured for this application');
   const applicationKey = readApplicationKey(config, directory);
+  const secret = details.secret;
+  if (secret !== undefined) details = { ...details, secret: undefined };
   const request = { projectId: config['project-id'], channel: config['release-channel'], timestamp: Date.now(), nonce: crypto.randomBytes(16).toString('hex'), ...details };
+  delete request.secret;
   request.signature = crypto.createHmac('sha512', applicationKey).update(brokerSignatureText(request)).digest('hex');
+  if (secret !== undefined) {
+    const key = crypto.hkdfSync('sha512', applicationKey, Buffer.from(request.nonce, 'hex'), Buffer.from('phidias/auth-broker/v1'), 32);
+    const iv = crypto.randomBytes(12), cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+    cipher.setAAD(Buffer.from(brokerSignatureText(request)));
+    const ciphertext = Buffer.concat([cipher.update(JSON.stringify(secret), 'utf8'), cipher.final()]);
+    request.credentials = { algorithm: 'AES-256-GCM', iv: iv.toString('base64'), tag: cipher.getAuthTag().toString('base64'), ciphertext: ciphertext.toString('base64') };
+  }
   const response = await fetch(`${config.auth.broker.url}${endpoint}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(request), signal: AbortSignal.timeout(15_000) });
   const envelope = await response.json().catch(() => null);
   if (!response.ok) throw new Error(`Authentication broker rejected the request (${response.status}): ${envelope?.error || 'Unknown error'}`);
@@ -285,7 +302,7 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
   validate(document, definitions);
   const controller = new AbortController(), timers = [], stdinListeners = [], activeRuns = new Set(), routes = [], formRoutes = new Map(), browserAPIRoutes = new Map(), consoleStreams = new Map(), chatViews = new Map(), authenticationStores = new Map();
   const shared = Object.create(null);
-  let started = false, stdinInterface = null, controlRequested = null, localAuthenticationStore = null, localAuthenticationInitialization = null;
+  let started = false, stdinInterface = null, sshServer = null, controlRequested = null, localAuthenticationStore = null, localAuthenticationInitialization = null;
   const databasePools = new Map();
   const credentialCache = new Map();
   const workspaceIdentity = workspace => ({ id: workspace.id, numberId: workspace.numberId, name: workspace.name });
@@ -378,6 +395,7 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
     context.redactForLog = value => snapshotLogValue(value, new WeakMap(), '$', 0, context.secretValues);
     context.render = value => render(value, context);
     context.getConsolePrompt = () => readConsolePrompt(directory);
+    context.endSSHSessions = () => sshServer?.endSessions('SSH session ended by application workflow.');
     context.createConsolePassthrough = () => {
       if (!request) throw new Error('Application Console Passthrough requires an HTTP endpoint trigger');
       if (typeof logger?.subscribe !== 'function') throw new Error('The application logger does not support live console streaming');
@@ -899,15 +917,14 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
         port ??= process.env.PORT === undefined ? config.port : Number(process.env.PORT);
         host ??= process.env.HOST || config.host;
       }
+      if (applicationConfig['ssh-port'] !== null) readApplicationKey(applicationConfig, directory);
       await new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, host, () => { server.off('error', reject); resolve(); }); });
       started = true;
       for (const ws of document.workspaces.filter(ws => ws.active)) for (const block of ws.blocks) {
         const trigger = definitions.get(block.type).trigger;
         if (trigger === 'startup') track(run(ws, block)).catch(reportError);
         if (trigger === 'stdin') {
-          const listener = line => {
-            track(run(ws, block, null, null, { legacyValues: [line] })).catch(reportError);
-          };
+          const listener = line => track(run(ws, block, null, null, { legacyValues: [line] })).catch(reportError);
           stdinInterface ||= readline.createInterface({ input: stdin, terminal: false, crlfDelay: Infinity });
           stdinListeners.push(listener);
           stdinInterface.on('line', listener);
@@ -932,10 +949,54 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
           }, 1000));
         }
       }
+      if (applicationConfig['ssh-port'] !== null) {
+        const { createSSHConsoleServer } = require('./ssh-console');
+        sshServer = createSSHConsoleServer({
+          hostKeyFile: path.join(directory, 'data', 'ssh_host_rsa_key'),
+          logger,
+          greeting: `${document.name} application console`,
+          authenticate: async ({ username, password, ip }) => {
+            const result = await requestBroker(applicationConfig, directory, '/v1/ssh-auth', { purpose: 'ssh-auth', secret: { username, password, ip } });
+            if (!result?.authorized || !result.username) throw new Error('Username or password was rejected');
+            return result.username;
+          },
+          openShell: ({ stream, username }) => {
+            const shell = readline.createInterface({ input: stream, output: stream, terminal: true, historySize: 100, removeHistoryDuplicates: true });
+            let cleaned = false, processing = false;
+            const prompt = () => `${readConsolePrompt(directory)} `;
+            const writeLog = entry => {
+              if (stream.destroyed) return;
+              stream.write(`\r\n${String(entry.line ?? '').replace(/\r?\n/g, '\r\n')}\r\n`);
+              if (!processing) { shell.setPrompt(prompt()); shell.prompt(true); }
+            };
+            const unsubscribe = typeof logger?.subscribe === 'function' ? logger.subscribe(writeLog, { replay: false }) : () => {};
+            const cleanup = () => { if (cleaned) return; cleaned = true; unsubscribe(); shell.close(); };
+            stream.once('close', cleanup); stream.once('end', cleanup);
+            shell.on('line', async line => {
+              processing = true; shell.pause();
+              if (line.trim() && stdinListeners.length) await Promise.allSettled([...stdinListeners].map(listener => listener(line)));
+              processing = false; shell.resume(); shell.setPrompt(prompt()); shell.prompt();
+            });
+            shell.on('SIGINT', () => { stream.write('^C\r\n'); shell.setPrompt(prompt()); shell.prompt(); });
+            stream.write(`${document.name} application console (${username})\r\n`);
+            shell.setPrompt(prompt()); shell.prompt();
+          }
+        });
+        await new Promise((resolve, reject) => {
+          sshServer.once('error', reject);
+          sshServer.listen(applicationConfig['ssh-port'], applicationConfig.host, () => { sshServer.off('error', reject); resolve(); });
+        });
+        logger?.info?.('SSH console listening on %s:%d', applicationConfig.host, applicationConfig['ssh-port']);
+      }
       return server.address();
     },
     async stop() {
       controller.abort(); timers.forEach(clearInterval);
+      if (sshServer) {
+        sshServer.closeClients();
+        await new Promise(resolve => sshServer.close(resolve));
+        sshServer = null;
+      }
       await new Promise(resolve => { server.close(resolve); server.closeAllConnections(); });
       await Promise.allSettled([...activeRuns]);
       stdinListeners.forEach(listener => stdinInterface?.off('line', listener));

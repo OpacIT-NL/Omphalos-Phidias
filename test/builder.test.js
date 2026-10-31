@@ -76,13 +76,13 @@ test('project creation, atomic saves, conflicts, reload, and downloadable ZIP', 
   const library = await (await call(endpoint + '/blocks')).json();
   const replyFormat = library.find(block => block.type === 'respond').fields.find(field => field.key === 'format');
   assert.equal(replyFormat.default, 'JSON'); assert.ok(replyFormat.choices.includes('HTML'));
-  for (const file of ['app.js', 'favicon.ico', 'workspaces.json', 'html/login.html', 'html/register.html', 'html/login.css', 'blocks/api_endpoint.js', 'blocks/get_sub_endpoint_by_name.js', 'blocks/linux_command.js', 'blocks/update_app.js', 'validate.js', 'cron.js', 'auth.js', 'logger.js', 'package.json', 'package-lock.json']) await fs.access(path.join(directory, project.id, file));
+  for (const file of ['app.js', 'ssh-console.js', 'favicon.ico', 'workspaces.json', 'html/login.html', 'html/register.html', 'html/login.css', 'blocks/api_endpoint.js', 'blocks/get_sub_endpoint_by_name.js', 'blocks/linux_command.js', 'blocks/update_app.js', 'validate.js', 'cron.js', 'auth.js', 'logger.js', 'package.json', 'package-lock.json']) await fs.access(path.join(directory, project.id, file));
   assert.equal(project.appConfig, null);
   assert.deepEqual(project.workspaceCategories, []);
   assert.equal(project.workspaces[0].numberId, 1);
   assert.deepEqual(project.workspaces[0].blocks.map(block => block.numberId), [1, 2]);
   const defaultExportConfig = JSON.parse(zipEntries(await store.export(project.id)).get('config.json'));
-  assert.deepEqual(defaultExportConfig, { port: 3001, host: '0.0.0.0', 'log-level': 3, 'force-console-input-log': false, auth: { database: path.join(directory, 'auth.sqlite') }, 'project-id': project.id, 'release-channel': 'RC' });
+  assert.deepEqual(defaultExportConfig, { port: 3001, host: '0.0.0.0', 'ssh-port': null, 'log-level': 3, 'force-console-input-log': false, auth: { database: path.join(directory, 'auth.sqlite') }, 'project-id': project.id, 'release-channel': 'RC' });
   const probe = require('node:net').createServer();
   await new Promise(resolve => probe.listen(0, '127.0.0.1', resolve));
   const configuredPort = probe.address().port;
@@ -257,21 +257,51 @@ test('saved revisions publish to a browsable RC repository and can be promoted, 
   assert.equal((await call('/repo/DelphiRC/delphi.rev3.zip')).status, 404);
 });
 
-test('RC and Prod independently package their authentication broker URLs', async t => {
+test('RC and Prod version archives independently package SSH and broker settings', async t => {
   const { call } = await fixture(t);
   const project = await (await call('/api/projects', 'POST', { name: 'Brokered' })).json();
   const endpoint = `/api/projects/${project.id}`;
-  const rc = { port: 7101, host: '127.0.0.1', 'log-level': 3, 'auth-storage': 'mysql', 'credential-broker-url': 'https://rc-auth.example:3443/' };
-  const prod = { port: 7100, host: '127.0.0.1', 'log-level': 2, 'auth-storage': 'mysql', 'credential-broker-url': 'https://prod-auth.example:3444' };
+  const rc = { port: 7101, 'ssh-port': 7201, host: '127.0.0.1', 'log-level': 3, 'auth-storage': 'mysql', 'credential-broker-url': 'https://rc-auth.example:3443/' };
+  const prod = { port: 7100, 'ssh-port': 7200, host: '127.0.0.1', 'log-level': 2, 'auth-storage': 'mysql', 'credential-broker-url': 'https://prod-auth.example:3444' };
   assert.equal((await call(`${endpoint}/deployment-configs/RC`, 'PUT', rc)).status, 200);
   assert.equal((await call(`${endpoint}/deployment-configs/Prod`, 'PUT', prod)).status, 200);
   const configurations = await (await call(`${endpoint}/deployment-configs`)).json();
   assert.equal(configurations.RC['credential-broker-url'], 'https://rc-auth.example:3443');
   assert.equal(configurations.Prod['credential-broker-url'], 'https://prod-auth.example:3444');
+  assert.equal(configurations.RC['ssh-port'], 7201);
+  assert.equal(configurations.Prod['ssh-port'], 7200);
   const exported = zipEntries(Buffer.from(await (await call(`${endpoint}/export`)).arrayBuffer()));
   assert.deepEqual(JSON.parse(exported.get('config.json')).auth, { provider: 'mysql', broker: { url: 'https://rc-auth.example:3443' } });
+  assert.equal(JSON.parse(exported.get('config.json'))['ssh-port'], 7201);
   assert.equal(exported.get('application.key').length, 32);
+
+  project.workspaces[0].blocks[1].options.body = 'Brokered revision';
+  const saved = await (await call(endpoint, 'PUT', project)).json();
+  const revisionName = `brokered.rev${saved.revision}.zip`;
+  let rcArchive = zipEntries(Buffer.from(await (await call(`/repo/BrokeredRC/${revisionName}`)).arrayBuffer()));
+  let rcConfig = JSON.parse(rcArchive.get('config.json'));
+  assert.equal(rcConfig['release-channel'], 'RC');
+  assert.equal(rcConfig['ssh-port'], 7201);
+  assert.equal(rcConfig.auth.broker.url, 'https://rc-auth.example:3443');
+
+  assert.equal((await call(`${endpoint}/versions/${saved.revision}/promote`, 'POST', {})).status, 200);
+  let prodArchive = zipEntries(Buffer.from(await (await call(`/repo/BrokeredProd/${revisionName}`)).arrayBuffer()));
+  let prodConfig = JSON.parse(prodArchive.get('config.json'));
+  assert.equal(prodConfig['release-channel'], 'Prod');
+  assert.equal(prodConfig['ssh-port'], 7200);
+  assert.equal(prodConfig.auth.broker.url, 'https://prod-auth.example:3444');
+
+  assert.equal((await call(`${endpoint}/deployment-configs/RC`, 'PUT', { ...rc, 'ssh-port': 7301 })).status, 200);
+  assert.equal((await call(`${endpoint}/deployment-configs/Prod`, 'PUT', { ...prod, 'ssh-port': 7300 })).status, 200);
+  rcArchive = zipEntries(Buffer.from(await (await call(`/repo/BrokeredRC/${revisionName}`)).arrayBuffer()));
+  prodArchive = zipEntries(Buffer.from(await (await call(`/repo/BrokeredProd/${revisionName}`)).arrayBuffer()));
+  rcConfig = JSON.parse(rcArchive.get('config.json'));
+  prodConfig = JSON.parse(prodArchive.get('config.json'));
+  assert.equal(rcConfig['ssh-port'], 7301);
+  assert.equal(prodConfig['ssh-port'], 7300);
+
   assert.equal((await call(`${endpoint}/deployment-configs/RC`, 'PUT', { ...rc, 'credential-broker-url': null })).status, 400);
+  assert.equal((await call(`${endpoint}/deployment-configs/RC`, 'PUT', { ...rc, port: rc['ssh-port'] })).status, 400);
 });
 
 test('version cleanup deletes only old RC-only revisions and preserves production builds', async t => {
@@ -933,11 +963,11 @@ test('cron triggers follow five-field local schedules and reject invalid express
 test('generated app config is created once, validated, and preserved', async t => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'phidias-app-config-'));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
-  assert.deepEqual(loadAppConfig(directory), { port: 3001, host: '0.0.0.0', 'log-level': 3, 'force-console-input-log': false, auth: { database: 'data/auth.sqlite' } });
+  assert.deepEqual(loadAppConfig(directory), { port: 3001, host: '0.0.0.0', 'ssh-port': null, 'log-level': 3, 'force-console-input-log': false, auth: { database: 'data/auth.sqlite' } });
   const filename = path.join(directory, 'config.json');
   const configured = JSON.stringify({ port: 4321, host: '127.0.0.1' }, null, 2) + '\n';
   await fs.writeFile(filename, configured);
-  assert.deepEqual(loadAppConfig(directory), { port: 4321, host: '127.0.0.1', 'log-level': 3, 'force-console-input-log': false, auth: { database: 'data/auth.sqlite' } });
+  assert.deepEqual(loadAppConfig(directory), { port: 4321, host: '127.0.0.1', 'ssh-port': null, 'log-level': 3, 'force-console-input-log': false, auth: { database: 'data/auth.sqlite' } });
   assert.equal(await fs.readFile(filename, 'utf8'), configured);
   await fs.writeFile(filename, '{broken');
   assert.throws(() => loadAppConfig(directory), /Invalid config.json/);

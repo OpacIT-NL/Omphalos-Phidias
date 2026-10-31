@@ -6,7 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { Auth } = require('../lib/auth');
-const { createAuthBroker, signRequest, decryptResponse } = require('../lib/auth-broker');
+const { createAuthBroker, signRequest, encryptResponse, decryptResponse } = require('../lib/auth-broker');
 
 test('authentication broker verifies app keys, encrypts MySQL settings, and rejects replay', async t => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'phidias-broker-'));
@@ -43,4 +43,19 @@ test('authentication broker verifies app keys, encrypts MySQL settings, and reje
   const tampered = { ...credentialRequest, timestamp: Date.now(), nonce: crypto.randomBytes(16).toString('hex') };
   tampered.signature = signRequest(applicationKey, tampered); tampered.selector = 'Different Credential';
   assert.equal((await fetch(`http://127.0.0.1:${broker.address().port}/v1/credential`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(tampered) })).status, 401);
+
+  await auth.createUser('ssh-user', 'a sufficiently long password');
+  const sshRequest = { projectId, channel: 'RC', timestamp: Date.now(), nonce: crypto.randomBytes(16).toString('hex'), purpose: 'ssh-auth' };
+  sshRequest.signature = signRequest(applicationKey, sshRequest);
+  sshRequest.credentials = encryptResponse(applicationKey, sshRequest, { username: 'ssh-user', password: 'a sufficiently long password', ip: '127.0.0.1' });
+  const sshResponse = await fetch(`http://127.0.0.1:${broker.address().port}/v1/ssh-auth`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(sshRequest) });
+  assert.equal(sshResponse.status, 200);
+  const sshEnvelope = await sshResponse.json();
+  assert.equal(JSON.stringify(sshEnvelope).includes('a sufficiently long password'), false);
+  assert.deepEqual(decryptResponse(applicationKey, sshRequest, sshEnvelope).authorized, true);
+
+  const rejectedRequest = { projectId, channel: 'RC', timestamp: Date.now(), nonce: crypto.randomBytes(16).toString('hex'), purpose: 'ssh-auth' };
+  rejectedRequest.signature = signRequest(applicationKey, rejectedRequest);
+  rejectedRequest.credentials = encryptResponse(applicationKey, rejectedRequest, { username: 'ssh-user', password: 'wrong password', ip: '127.0.0.1' });
+  assert.equal((await fetch(`http://127.0.0.1:${broker.address().port}/v1/ssh-auth`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(rejectedRequest) })).status, 401);
 });

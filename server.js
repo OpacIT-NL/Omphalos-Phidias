@@ -453,14 +453,14 @@ async function listen(server, host, port) {
 async function closeListener(server) {
   if (!server.listening) return;
   await new Promise(resolve => {
-    const timer = setTimeout(() => server.closeAllConnections(), 8000);
+    const timer = setTimeout(() => server.closeAllConnections?.(), 8000);
     timer.unref();
     server.close(() => { clearTimeout(timer); resolve(); });
-    server.closeIdleConnections();
+    server.closeIdleConnections?.();
   });
 }
 if (require.main === module) {
-  let logger, terminal, application, state, stopping = false;
+  let logger, terminal, application, state, sshServer, stopping = false;
   function critical(message, error) {
     try { (logger || createLogger({ level: 0, directory: path.join(__dirname, 'log') })).critical('%s: %s', message, error?.stack || error); }
     catch { process.stderr.write(`${new Date().toISOString()} [CRITICAL] ${message}: ${String(error?.message || error).replace(/[\r\n]/g, ' ')}\n`); }
@@ -473,7 +473,8 @@ if (require.main === module) {
     if (state?.dirty() || application?.auth.pendingChanges) logger?.warning('Stopping with unsaved running configuration or accounts');
     logger?.info('Stopping server (%s)', reason);
     terminal?.close();
-    if (application) { await Promise.all([closeListener(application.server), application.brokerServer ? closeListener(application.brokerServer) : Promise.resolve()]); await application.auth.close(); }
+    sshServer?.closeClients?.();
+    if (application) { await Promise.all([closeListener(application.server), application.brokerServer ? closeListener(application.brokerServer) : Promise.resolve(), sshServer ? closeListener(sshServer) : Promise.resolve()]); await application.auth.close(); }
     logger?.info('Server stopped');
   }
   (async () => {
@@ -501,7 +502,8 @@ if (require.main === module) {
     const { CommandConsole } = require('./lib/console');
     const consoleStatus = () => {
       const address = application.server.address();
-      return `Listener: ${address ? `${address.address}:${address.port}` : 'not listening'}. Storage path changes require a restart.`;
+      const sshAddress = sshServer?.address();
+      return `Listener: ${address ? `${address.address}:${address.port}` : 'not listening'}. SSH: ${sshAddress ? `${sshAddress.address}:${sshAddress.port}` : 'disabled'}. Storage path changes require a restart.`;
     };
     application.setCommandConsoleFactory(({ ask, write }) => new CommandConsole({
       config: state,
@@ -518,6 +520,29 @@ if (require.main === module) {
     if (application.brokerServer) {
       await listen(application.brokerServer, config.document.auth.broker.host, config.document.auth.broker.port);
       logger.info('Authentication broker listening on %s:%d', config.document.auth.broker.host, config.document.auth.broker.port);
+    }
+    if (config.sshConfig.enabled) {
+      const { createSSHConsoleServer } = require('./lib/ssh-console');
+      const { Terminal } = require('./lib/terminal');
+      sshServer = createSSHConsoleServer({
+        hostKeyFile: config.sshConfig.hostKey,
+        logger,
+        authenticate: async ({ username, password, ip }) => {
+          const user = await application.auth.authenticate(username, password, ip);
+          await application.auth.requireCore(user.username, 'console');
+          return user;
+        },
+        openShell: async ({ stream, username }) => {
+          const sshTerminal = new Terminal({ input: stream, output: stream });
+          const engine = new CommandConsole({ config: state, auth: application.auth, logger,
+            ask: (prompt, secret) => sshTerminal.ask(prompt, secret), write: message => sshTerminal.write(message),
+            shutdown: () => shutdown(`SSH console (${username})`), status: consoleStatus });
+          sshTerminal.write(`OpacIT Omphalos Phidias SSH console (${username}). Type help or enable.`);
+          await sshTerminal.run(engine);
+        }
+      });
+      await listen(sshServer, config.sshConfig.host, config.sshConfig.port);
+      logger.info('SSH console listening on %s:%d', config.sshConfig.host, config.sshConfig.port);
     }
     for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => { shutdown(signal).catch(error => { critical('Shutdown failed', error); process.exit(1); }); });
     // Process managers such as CubeCoders AMP expose their console through a
