@@ -8,7 +8,12 @@ const { Server } = require('ssh2');
 function ensureHostKey(filename) {
   fs.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
   try {
-    const { privateKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 3072 });
+    fs.chmodSync(filename, 0o600);
+    return fs.readFileSync(filename);
+  } catch (error) { if (error.code !== 'ENOENT') throw error; }
+
+  const { privateKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 3072 });
+  try {
     fs.writeFileSync(filename, privateKey.export({ type: 'pkcs1', format: 'pem' }), { flag: 'wx', mode: 0o600 });
   } catch (error) { if (error.code !== 'EEXIST') throw error; }
   fs.chmodSync(filename, 0o600);

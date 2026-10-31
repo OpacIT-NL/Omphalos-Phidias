@@ -39,7 +39,7 @@ test('console modes, privilege boundaries, aliases, do, and redacted configurati
   await engine.execute('en'); assert.equal(engine.prompt, 'Console#> ');
   await engine.execute('conf t'); assert.equal(engine.prompt, 'Config#> ');
   await engine.execute('port 8080'); assert.equal(config.running.port, 8080);
-  await engine.execute('copy run start'); assert.equal(JSON.parse(await fs.readFile(file)).port, 3000);
+  await engine.execute('copy run start'); assert.equal(JSON.parse(await fs.readFile(file)).port, 8080); assert.equal(engine.mode, 'config');
   answers.push(password, password); await engine.execute('enable secret');
   assert.equal(await argon2.verify(config.running.console.enablePasswordHash, password), true);
   await engine.execute('do show run');
@@ -200,6 +200,6 @@ test('help and question-mark show the current mode, and do help lists enabled co
   await engine.execute('enable'); await engine.execute('help');
   assert.match(messages.at(-1), /copy run start/); assert.match(messages.at(-1), /shutdown/);
   await engine.execute('conf t'); await engine.execute('?');
-  assert.match(messages.at(-1), /host <IPv4\/IPv6>/); assert.match(messages.at(-1), /ssh host-key <path>/); assert.match(messages.at(-1), /user <name> grant_all/);
+  assert.match(messages.at(-1), /host <IPv4\/IPv6>/); assert.match(messages.at(-1), /ssh host-key <path>/); assert.match(messages.at(-1), /user <name> grant_all/); assert.match(messages.at(-1), /copy run start/);
   await engine.execute('do help'); assert.match(messages.at(-1), /show running-config/); assert.equal(engine.mode, 'config');
 });

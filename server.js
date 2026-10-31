@@ -533,7 +533,7 @@ if (require.main === module) {
           return user;
         },
         openShell: async ({ stream, username }) => {
-          const sshTerminal = new Terminal({ input: stream, output: stream });
+          const sshTerminal = new Terminal({ input: stream, output: stream, terminal: true, lineEnding: '\r\n' });
           const engine = new CommandConsole({ config: state, auth: application.auth, logger,
             ask: (prompt, secret) => sshTerminal.ask(prompt, secret), write: message => sshTerminal.write(message),
             shutdown: () => shutdown(`SSH console (${username})`), status: consoleStatus });
