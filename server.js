@@ -12,6 +12,7 @@ const { loadConfig, ConfigState } = require('./lib/config');
 const { createLogger } = require('./lib/logger');
 const { Store } = require('./lib/store');
 const { WebConsoleSession } = require('./lib/web-console');
+const { RepositorySettings } = require('./lib/repository-settings');
 const { readBody } = require('./runtime/app');
 const { version } = require('./package.json');
 const htmlVersion = version.replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
@@ -87,6 +88,7 @@ async function createServer({ directory = loadConfig().directory, repositoryDire
   const keyFile = authConfigFile ? path.join(path.dirname(authConfigFile), 'data', 'phidias.key') : path.join(path.dirname(authDatabase), 'phidias.key');
   const auth = await openAuth(authConfig, { secureCookies, keyFile });
   const store = new Store(directory, repositoryDirectory, { authDatabase, authConfigFile, authProvider: authConfig.provider, databaseCredential: id => auth.databaseCredential(id), applicationKey: async id => { const key = await auth.ensureApplicationKey(id); await auth.flush?.(); return key; } }); await store.init();
+  const repositorySettings = await new RepositorySettings(path.join(store.repositoryDirectory, '.settings.json')).init();
   const brokerServer = authConfig.broker?.enabled ? createAuthBroker({ auth, mysqlConfig: authConfig.provider === 'mysql' ? authConfig.mysql : null, logger }) : null;
   const webConsoles = new Map();
   let commandConsoleFactory = null;
@@ -158,9 +160,10 @@ async function createServer({ directory = loadConfig().directory, repositoryDire
       const repositoryMatch = url.pathname.match(/^\/repo\/([^/]+)\/([^/]+\.zip)$/);
       if (repositoryMatch) {
         if (!['GET', 'HEAD'].includes(req.method)) return send(405, { error: 'Method not allowed' });
-        const archive = await store.repositoryFile(repositoryMatch[1], repositoryMatch[2]);
-        // Deployment profiles can repackage a revision for its channel, so clients must revalidate numbered ZIPs too.
-        res.setHeader('Cache-Control', 'no-cache');
+        const includeApplicationKey = repositorySettings.authorizes(req);
+        const archive = await store.repositoryFile(repositoryMatch[1], repositoryMatch[2], includeApplicationKey);
+        // Keyed responses must never enter a shared cache. Deployment profiles can also repackage numbered ZIPs.
+        res.setHeader('Cache-Control', includeApplicationKey ? 'private, no-store' : 'no-cache');
         res.writeHead(200, { 'content-type': 'application/zip', 'content-length': archive.length, 'content-disposition': `attachment; filename="${repositoryMatch[2]}"` });
         return res.end(req.method === 'HEAD' ? undefined : archive);
       }
@@ -181,6 +184,16 @@ async function createServer({ directory = loadConfig().directory, repositoryDire
           if (url.pathname === '/api/console/input' && req.method === 'POST') return send(200, await webConsole(session).submit((await readBody(req))?.input));
           if (url.pathname === '/api/console' && req.method === 'GET') return send(200, webConsole(session).snapshot());
           if (url.pathname === '/api/console' && req.method === 'DELETE') { closeWebConsole(session); return send(200, { ok: true }); }
+          return send(405, { error: 'Method not allowed' });
+        }
+        if (url.pathname === '/api/repository-settings') {
+          await auth.requireCore(session.username, 'manage_users');
+          if (req.method === 'GET') return send(200, repositorySettings.get());
+          if (req.method === 'PUT') {
+            const saved = await repositorySettings.save(await readBody(req));
+            logger.info('Repository network settings saved by %s', session.username);
+            return send(200, saved);
+          }
           return send(405, { error: 'Method not allowed' });
         }
         const credentialMatch = url.pathname.match(/^\/api\/credentials(?:\/([a-f0-9-]{36}))?$/);
@@ -436,7 +449,7 @@ async function createServer({ directory = loadConfig().directory, repositoryDire
     webConsoles.clear();
     if (closeResourcesOnClose) { Promise.resolve(auth.close()).catch(() => {}); logger.info('Server stopped'); }
   });
-  return { server, brokerServer, store, auth, setCommandConsoleFactory(factory) {
+  return { server, brokerServer, store, auth, repositorySettings, setCommandConsoleFactory(factory) {
     for (const current of webConsoles.values()) current.close();
     webConsoles.clear();
     commandConsoleFactory = factory;
@@ -450,8 +463,13 @@ async function listen(server, host, port) {
     server.listen(port, host);
   });
 }
+function listenerIsOpen(server) {
+  if (typeof server?.listening === 'boolean') return server.listening;
+  try { return typeof server?.address === 'function' && server.address() !== null; }
+  catch { return false; }
+}
 async function closeListener(server) {
-  if (!server.listening) return;
+  if (!listenerIsOpen(server)) return;
   await new Promise(resolve => {
     const timer = setTimeout(() => server.closeAllConnections?.(), 8000);
     timer.unref();
@@ -565,4 +583,4 @@ if (require.main === module) {
     await shutdown('startup failure');
   });
 }
-module.exports = { createServer };
+module.exports = { createServer, closeListener };
