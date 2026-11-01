@@ -76,7 +76,7 @@ test('project creation, atomic saves, conflicts, reload, and downloadable ZIP', 
   const library = await (await call(endpoint + '/blocks')).json();
   const replyFormat = library.find(block => block.type === 'respond').fields.find(field => field.key === 'format');
   assert.equal(replyFormat.default, 'JSON'); assert.ok(replyFormat.choices.includes('HTML'));
-  for (const file of ['app.js', 'ssh-console.js', 'favicon.ico', 'workspaces.json', 'html/login.html', 'html/register.html', 'html/login.css', 'blocks/api_endpoint.js', 'blocks/get_sub_endpoint_by_name.js', 'blocks/linux_command.js', 'blocks/update_app.js', 'validate.js', 'cron.js', 'auth.js', 'logger.js', 'package.json', 'package-lock.json']) await fs.access(path.join(directory, project.id, file));
+  for (const file of ['app.js', 'ssh-console.js', 'favicon.ico', 'workspaces.json', 'html/login.html', 'html/register.html', 'html/change-password.html', 'html/login.css', 'blocks/api_endpoint.js', 'blocks/get_sub_endpoint_by_name.js', 'blocks/linux_command.js', 'blocks/update_app.js', 'validate.js', 'cron.js', 'auth.js', 'logger.js', 'package.json', 'package-lock.json']) await fs.access(path.join(directory, project.id, file));
   assert.equal(project.appConfig, null);
   assert.deepEqual(project.workspaceCategories, []);
   assert.equal(project.workspaces[0].numberId, 1);
@@ -112,7 +112,7 @@ test('project creation, atomic saves, conflicts, reload, and downloadable ZIP', 
   assert.ok(extracted.has('auth.js'));
   assert.ok(extracted.has('password-hash.js'));
   assert.ok(extracted.has('logger.js'));
-  for (const name of ['login.html', 'register.html', 'login.css']) assert.ok(extracted.has(`html/${name}`));
+  for (const name of ['login.html', 'register.html', 'change-password.html', 'login.css']) assert.ok(extracted.has(`html/${name}`));
   assert.equal(extracted.get('application.key').length, 32);
   assert.deepEqual(extracted.get('favicon.ico').subarray(0, 4), Buffer.from([0, 0, 1, 0]));
   const exportedDependencies = JSON.parse(extracted.get('package.json')).dependencies;
@@ -184,7 +184,7 @@ test('projects import from uploaded ZIP files and same-origin repository URLs', 
 
   const { zip } = require('../lib/zip');
   const legacyProject = await store.importArchive(zip([['workspaces.json', JSON.stringify(saved)]]), { name: 'Legacy import without authentication templates' });
-  assert.deepEqual(await store.templates(legacyProject.id), ['login.css', 'login.html', 'register.html']);
+  assert.deepEqual(await store.templates(legacyProject.id), ['change-password.html', 'login.css', 'login.html', 'register.html']);
   await assert.rejects(() => store.importArchive(zip([['../workspaces.json', JSON.stringify(saved)]])), /unsafe path/);
 });
 
@@ -389,12 +389,12 @@ test('HTML templates are edited through the API, included in builds, and restore
   const { call } = await fixture(t);
   const project = await (await call('/api/projects', 'POST', { name: 'Templates' })).json();
   const endpoint = `/api/projects/${project.id}`;
-  assert.deepEqual(await (await call(endpoint + '/templates')).json(), ['login.css', 'login.html', 'register.html']);
+  assert.deepEqual(await (await call(endpoint + '/templates')).json(), ['change-password.html', 'login.css', 'login.html', 'register.html']);
 
   let response = await call(endpoint + '/templates/page.html', 'PUT', { contents: '<h1>%title%</h1>', previousName: null, revision: 1 });
   assert.equal(response.status, 200);
   let saved = await response.json(); assert.equal(saved.project.revision, 2);
-  assert.deepEqual(await (await call(endpoint + '/templates')).json(), ['login.css', 'login.html', 'page.html', 'register.html']);
+  assert.deepEqual(await (await call(endpoint + '/templates')).json(), ['change-password.html', 'login.css', 'login.html', 'page.html', 'register.html']);
   assert.deepEqual(await (await call(endpoint + '/templates/page.html')).json(), { name: 'page.html', contents: '<h1>%title%</h1>', revision: 2 });
   let archive = zipEntries(Buffer.from(await (await call('/repo/TemplatesRC/latest.zip')).arrayBuffer()));
   assert.equal(archive.get('html/page.html').toString(), '<h1>%title%</h1>');
@@ -411,12 +411,12 @@ test('HTML templates are edited through the API, included in builds, and restore
   assert.equal((await call(endpoint + '/templates/home.html', 'PUT', { contents: 'duplicate', previousName: null, revision: 5 })).status, 409);
   response = await call(endpoint + '/templates/home.html', 'DELETE', { revision: 5 });
   assert.equal(response.status, 200); assert.equal((await response.json()).revision, 6);
-  assert.deepEqual(await (await call(endpoint + '/templates')).json(), ['login.css', 'login.html', 'register.html']);
+  assert.deepEqual(await (await call(endpoint + '/templates')).json(), ['change-password.html', 'login.css', 'login.html', 'register.html']);
   archive = zipEntries(Buffer.from(await (await call('/repo/TemplatesRC/latest.zip')).arrayBuffer()));
   assert.equal(archive.has('html/home.html'), false);
   response = await call(endpoint + '/templates/styles.css', 'PUT', { contents: 'body { color: purple; }', previousName: null, revision: 6 });
   assert.equal(response.status, 200); assert.equal((await response.json()).project.revision, 7);
-  assert.deepEqual(await (await call(endpoint + '/templates')).json(), ['login.css', 'login.html', 'register.html', 'styles.css']);
+  assert.deepEqual(await (await call(endpoint + '/templates')).json(), ['change-password.html', 'login.css', 'login.html', 'register.html', 'styles.css']);
   archive = zipEntries(Buffer.from(await (await call('/repo/TemplatesRC/latest.zip')).arrayBuffer()));
   assert.equal(archive.get('html/styles.css').toString(), 'body { color: purple; }');
   const updatedCSS = 'body { color: purple; }\n\n.dashboard { display: grid; }';

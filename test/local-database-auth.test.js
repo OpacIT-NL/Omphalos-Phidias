@@ -256,7 +256,7 @@ test('Login Local, local session check, userid output, and Logout Local work thr
 
 test('local authentication blocks have no auth database options and expose userid as text', () => {
   const definitions = loadDefinitions(path.resolve(__dirname, '../blocks'));
-  for (const type of ['login_local', 'logout_local', 'check_if_user_is_logged_in_local', 'register_local_account']) {
+  for (const type of ['login_local', 'logout_local', 'check_if_user_is_logged_in_local', 'register_local_account', 'change_local_user_password']) {
     const definition = definitions.get(type);
     assert.ok(definition);
     assert.equal(definition.fields.some(field => field.key === 'database'), false);

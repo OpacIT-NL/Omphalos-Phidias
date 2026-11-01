@@ -39,7 +39,7 @@ test('release ZIP excludes local config/data and preserves installed config when
   }
   assert.equal(archive.readUInt32LE(offset), 0x02014b50);
   assert.ok(files.has('server.js')); assert.ok(files.has('lib/console.js'));
-  for (const name of ['login.html', 'register.html', 'login.css']) assert.ok(files.has(`defaults/templates/${name}`));
+  for (const name of ['login.html', 'register.html', 'change-password.html', 'login.css']) assert.ok(files.has(`defaults/templates/${name}`));
   assert.ok(!files.has('config.json'));
   assert.ok([...files.keys()].every(file => !/^(data|projects|log|logs|node_modules)\//.test(file)));
   assert.equal(JSON.parse(files.get('package.json')).version, '0.0.1');
