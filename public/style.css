@@ -45,7 +45,7 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-vis
 .toolbar-spacer { flex:1; }
 #save-state,#account-name,#sign-in-again { margin:0 7px;color:var(--muted);font-size:11px;white-space:nowrap; }
 #sign-in-again { color:var(--danger); }
-#access-management,#console-management { font-size:10px;font-weight:750;letter-spacing:.04em; }
+#access-management,#console-management,#credential-management,#repository-settings { font-size:10px;font-weight:750;letter-spacing:.04em; }
 
 .project-rail { display:flex;flex-direction:column;min-height:0;border-right:1px solid var(--border);background:var(--surface-2); }
 .project-list { flex:1;overflow-y:auto;display:flex;flex-direction:column;align-items:center;gap:9px;padding:10px 0; }
@@ -236,6 +236,14 @@ dialog h2 { margin:0 0 16px;font-size:18px; }
 .database-credentials>div { display:grid;gap:2px; }.database-credentials small { color:var(--muted);font-size:10px;font-weight:400; }
 .database-credentials select,.database-credentials button { height:31px;border:1px solid var(--field-border);border-radius:5px;padding:0 9px;background:var(--field);color:var(--field-text); }
 .database-credentials button { background:var(--surface-3); }.database-credentials button.danger { color:var(--danger); }
+.repository-dialog { width:min(680px,calc(100vw - 32px));padding:0;overflow:hidden; }
+.repository-dialog>header { display:flex;align-items:flex-start;gap:18px;padding:17px 19px;border-bottom:1px solid var(--border);background:var(--surface-2); }
+.repository-dialog>header h2,.repository-dialog>header p { margin:0; }.repository-dialog>header p { margin-top:4px;color:var(--muted);font-size:11px; }
+.repository-dialog>header button { width:30px;height:30px;margin-left:auto;border:0;border-radius:5px;background:transparent;font-size:20px; }.repository-dialog>header button:hover { background:var(--surface-3); }
+.repository-dialog form { display:grid;gap:15px;padding:18px 19px; }.repository-dialog label { display:grid;gap:5px;font-size:11px;font-weight:650; }
+.repository-dialog textarea { width:100%;min-height:105px;border:1px solid var(--field-border);border-radius:5px;padding:8px 10px;background:var(--field);color:var(--field-text);font:12px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;resize:vertical; }
+.repository-dialog small,.repository-dialog footer span { color:var(--muted);font-size:10px;font-weight:400; }.repository-dialog footer { display:flex;align-items:center;justify-content:space-between;gap:15px;border-top:1px solid var(--border);padding-top:14px; }
+.repository-dialog footer button { min-height:32px;border:1px solid var(--accent);border-radius:5px;padding:0 13px;background:var(--accent);color:white;white-space:nowrap; }
 .credential-dialog { width:min(960px,94vw);height:min(700px,88vh);padding:0;overflow:hidden; }
 .credential-dialog>header { display:flex;align-items:center;justify-content:space-between;padding:16px 18px;border-bottom:1px solid var(--border);background:var(--surface-2); }
 .credential-dialog>header h2,.credential-dialog>header p { margin:0; }.credential-dialog>header p { margin-top:3px;color:var(--muted);font-size:12px; }

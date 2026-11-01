@@ -124,6 +124,39 @@ class LocalDatabaseAuth {
     }
   }
 
+  async changePassword({ username, currentPassword, newPassword, confirmNewPassword }, ip) {
+    username = typeof username === 'string' ? username.trim() : '';
+    validatePassword(newPassword);
+    if (newPassword !== confirmNewPassword) throw authError('The new passwords do not match.', 400);
+    this.consumeAttempt(ip, `change-password:${username.toLocaleLowerCase()}`);
+    if (this.pending >= 2) throw authError('Password change is busy. Try again shortly.', 429, 2);
+    this.pending++;
+    try {
+      const passwordHasher = passwordLibrary();
+      const [rows] = await this.database.execute('SELECT `id`,`username`,`password_hash`,`allow_login` FROM `users` WHERE `username` = ? LIMIT 1', [username]);
+      const user = rows[0];
+      const storedHash = typeof user?.password_hash === 'string' && user.password_hash.startsWith('$argon2id$') ? user.password_hash : null;
+      const fallback = await (dummyHash ||= passwordHasher.hash(crypto.randomBytes(32), passwordOptions()));
+      const validCurrentPassword = typeof currentPassword === 'string' && Buffer.byteLength(currentPassword) <= 1024;
+      let matches = false;
+      try { matches = await passwordHasher.verify(storedHash || fallback, validCurrentPassword ? currentPassword : 'invalid-password'); } catch {}
+      if (!user || !storedHash || !validCurrentPassword || !matches) throw authError('Invalid username or current password.');
+      if (Number(user.allow_login) !== 1) throw authError('This account is not allowed to change its password.', 403);
+
+      const passwordHash = await passwordHasher.hash(newPassword, passwordOptions());
+      const [result] = await this.database.execute(
+        'UPDATE `users` SET `password_hash` = ? WHERE `id` = ? AND `password_hash` = ?',
+        [passwordHash, user.id, storedHash]
+      );
+      if (result?.affectedRows !== undefined && Number(result.affectedRows) !== 1) throw authError('The password changed during this request. Try again.', 409);
+      await this.database.execute('DELETE FROM `sessions` WHERE `user_id` = ?', [user.id]);
+      for (const [key, session] of this.sessions) if (session.userid === String(user.id)) this.sessions.delete(key);
+      return { userid: String(user.id), username: String(user.username) };
+    } finally {
+      this.pending--;
+    }
+  }
+
   async createSession(user, remember = false) {
     const token = crypto.randomBytes(32).toString('hex');
     const now = Date.now();

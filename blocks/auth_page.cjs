@@ -4,7 +4,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 
 const escapeHTML = value => String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
-const templateNames = Object.freeze({ login: 'login.html', register: 'register.html' });
+const templateNames = Object.freeze({ login: 'login.html', register: 'register.html', changePassword: 'change-password.html' });
 
 async function renderAuthPage(directory, kind, values = {}) {
   const templateName = templateNames[kind];

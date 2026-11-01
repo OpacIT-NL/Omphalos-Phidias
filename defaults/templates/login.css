@@ -27,7 +27,8 @@ body {
   box-shadow: 0 22px 60px #0008;
 }
 
-.auth-card--register {
+.auth-card--register,
+.auth-card--password {
   width: min(440px, 100%);
 }
 

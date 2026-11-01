@@ -548,6 +548,23 @@ async function credentialRowAction(button) {
   if (values.port !== undefined) values.port = values.port === '' ? null : Number(values.port); values.type = item.type;
   await api(`/api/credentials/${id}`, { method:'PUT', body:JSON.stringify(values) }); await refreshCredentialManager(); toast('Credential updated. Restart deployed applications to clear cached credentials.');
 }
+const networkLines = value => String(value || '').split(/\r?\n/).map(item => item.trim()).filter(Boolean);
+async function openRepositorySettings() {
+  const settings = await api('/api/repository-settings');
+  $('#repository-authorized-networks').value = settings.authorizedNetworks.join('\n');
+  $('#repository-trusted-proxies').value = settings.trustedProxies.join('\n');
+  $('#repository-dialog').showModal();
+}
+async function saveRepositorySettings(event) {
+  event.preventDefault();
+  const saved = await api('/api/repository-settings', { method: 'PUT', body: JSON.stringify({
+    authorizedNetworks: networkLines($('#repository-authorized-networks').value),
+    trustedProxies: networkLines($('#repository-trusted-proxies').value)
+  }) });
+  $('#repository-authorized-networks').value = saved.authorizedNetworks.join('\n');
+  $('#repository-trusted-proxies').value = saved.trustedProxies.join('\n');
+  toast('Repository settings saved.');
+}
 async function versionAction(button) {
   const revision = Number(button.closest('[data-revision]').dataset.revision), action = button.dataset.versionAction;
   if (action === 'promote') {
@@ -1321,6 +1338,10 @@ $('#template-dialog').addEventListener('cancel', event => { event.preventDefault
 $('#access-management').onclick = handle(openAccessManager);
 $('#console-management').onclick = handle(openWebConsole);
 $('#credential-management').onclick = handle(openCredentialManager);
+$('#repository-settings').onclick = handle(openRepositorySettings);
+$('#repository-form').onsubmit = event => handle(() => saveRepositorySettings(event))();
+$('#repository-close').onclick = () => $('#repository-dialog').close();
+$('#repository-dialog').addEventListener('cancel', event => { event.preventDefault(); $('#repository-dialog').close(); });
 $('#credential-close').onclick = () => $('#credential-dialog').close();
 $('#credential-new').onclick = handle(createManagedCredential);
 $('#credential-categories').onclick = event => { const button = event.target.closest('[data-credential-category]'); if (!button) return; credentialCategory = button.dataset.credentialCategory; renderCredentialManager(); };
@@ -1370,7 +1391,7 @@ window.addEventListener('keydown', event => {
     if (command && key === 's') { event.preventDefault(); if (templateDirty) handle(saveTemplate)(); }
     return;
   }
-  if ($('#form-dialog').open || $('#version-dialog').open || $('#access-dialog').open || $('#credential-dialog').open || $('#console-dialog').open) return;
+  if ($('#form-dialog').open || $('#version-dialog').open || $('#access-dialog').open || $('#credential-dialog').open || $('#repository-dialog').open || $('#console-dialog').open) return;
   const editing = event.target.closest?.('input,textarea,select,[contenteditable]');
   if (command && key === 's') { event.preventDefault(); handle(save)(); }
   if (command && key === 'c' && !editing && (selectedBlocks.size || (!selectedEdge && ws()))) {
@@ -1386,7 +1407,7 @@ window.addEventListener('beforeunload', event => { if (dirty || templateDirty) {
 window.addEventListener('resize', renderWires);
 async function refreshSession() {
   const session = await api('/api/session'); csrfToken = session.csrfToken; sessionPermissions = session.permissions || {};
-  $('#account-name').textContent = session.username; $('#sign-in-again').hidden = true; $('#access-management').hidden = !sessionPermissions.manageUsers; $('#credential-management').hidden = !sessionPermissions.manageUsers;
+  $('#account-name').textContent = session.username; $('#sign-in-again').hidden = true; $('#access-management').hidden = !sessionPermissions.manageUsers; $('#credential-management').hidden = !sessionPermissions.manageUsers; $('#repository-settings').hidden = !sessionPermissions.manageUsers;
   $('#console-management').hidden = !sessionPermissions.console;
   if (!sessionPermissions.console && $('#console-dialog').open) closeWebConsole();
   for (const selector of ['#new-project', '#rail-new-project', '#home-new-project']) $(selector).disabled = !sessionPermissions.createProjects;
