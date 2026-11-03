@@ -22,7 +22,7 @@ module.exports = {
         {
             "id": "custom_position",
             "name": "Custom Position",
-            "description": "Acceptable Types: Number, Unspecified\n\nDescription: The custom position to remove the item from the list. Starts at \"1\". (Only use this input if you selected the option \"Custom Position\")",
+            "description": "Acceptable Types: Number, Unspecified\n\nDescription: The custom position to remove the item from the list. Starts at \"0\". (Only use this input if you selected the option \"Custom Position\")",
             "types": ["number", "unspecified"]
         }
     ],
@@ -74,7 +74,7 @@ module.exports = {
             case "custom":
                 const custom_position = parseInt(this.GetInputValue("custom_position", cache));
 
-                list.splice(custom_position - 1, 1);
+                list.splice(custom_position, 1);
                 break;
         }
 
