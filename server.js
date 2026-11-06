@@ -15,6 +15,7 @@ const { WebConsoleSession } = require('./lib/web-console');
 const { RepositorySettings } = require('./lib/repository-settings');
 const { readBody } = require('./runtime/app');
 const { version } = require('./package.json');
+const PROJECT_DOCUMENT_LIMIT = 25 * 1024 * 1024;
 const htmlVersion = version.replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
 const escapeHTML = value => String(value).replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
 const repositoryPage = (folder, entries) => {
@@ -416,7 +417,7 @@ async function createServer({ directory = loadConfig().directory, repositoryDire
           if (req.method === 'GET' && !action) return send(200, { ...(await store.get(id)), access: await projectAccess(session.username, id) });
           if (req.method === 'PUT' && !action) {
             await auth.requireProject(session.username, id, 'edit');
-            const body = await readBody(req);
+            const body = await readBody(req, PROJECT_DOCUMENT_LIMIT);
             if (!body || typeof body !== 'object') return send(400, { error: 'Expected a project document' });
             const project = await store.save(id, body);
             logger.info('Project saved: %s (revision %d)', id, project.revision);

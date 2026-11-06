@@ -158,6 +158,29 @@ test('project creation, atomic saves, conflicts, reload, and downloadable ZIP', 
   assert.match(runtimeLog, /\[DEBUG\] Request completed: GET \/hello \(200,/);
 });
 
+test('project saves accept valid workspace documents larger than 1 MiB', async t => {
+  const { call, store } = await fixture(t);
+  const project = await (await call('/api/projects', 'POST', { name: 'Large workspace' })).json();
+  const workspace = project.workspaces[0];
+  for (let index = 0; index < 24; index++) {
+    workspace.blocks.push({
+      id: `large-text-${index}`,
+      numberId: index + 3,
+      type: 'text',
+      x: index * 20,
+      y: index * 20,
+      options: { text: `${index}:` + 'x'.repeat(48_000) }
+    });
+  }
+  assert.ok(Buffer.byteLength(JSON.stringify(project)) > 1024 * 1024);
+
+  const response = await call(`/api/projects/${project.id}`, 'PUT', project);
+  assert.equal(response.status, 200);
+  const saved = await response.json();
+  assert.equal(saved.revision, 2);
+  assert.equal((await store.get(project.id)).workspaces[0].blocks.length, workspace.blocks.length);
+});
+
 test('projects import from uploaded ZIP files and same-origin repository URLs', async t => {
   const { call, base, headers, store } = await fixture(t);
   const source = await (await call('/api/projects', 'POST', { name: 'Imported source' })).json();
