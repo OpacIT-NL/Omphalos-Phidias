@@ -49,7 +49,8 @@ module.exports = {
         const object = this.GetInputValue("object", cache);
         const key = this.GetOptionValue("key", cache);
 
-        this.StoreOutputValue(object[key], "value", cache);
+        const value = object[key];
+        this.StoreOutputValue(value === undefined ? null : value, "value", cache);
         this.RunNextBlock("action", cache);
     }
 }

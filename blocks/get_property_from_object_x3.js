@@ -164,6 +164,10 @@ if (option == 1) {
             }
         }
 
+        const keys = [key1, key2, key3];
+        for (let index = 0; index < keys.length; index++) {
+            if (object[keys[index]] === undefined) this.StoreOutputValue(option == 2 ? "null" : null, `value${index + 1}`, cache);
+        }
         this.RunNextBlock("action", cache);
     }
 }

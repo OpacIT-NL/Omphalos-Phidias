@@ -83,12 +83,38 @@ test('every multi-property getter converts null to text in Raw Value mode', asyn
   }
 });
 
+test('every multi-property getter publishes null for missing or undefined properties', async () => {
+  for (const count of [3, 6, 9]) {
+    for (const option of ['1', '2']) {
+      const options = { option }, object = { explicitlyUndefined: undefined };
+      for (let index = 1; index <= count; index++) options[`key${index}`] = index === 1 ? 'explicitlyUndefined' : `missing${index}`;
+      const { context, values } = await runLegacyGetter(`../blocks/get_property_from_object_x${count}`, options, object);
+
+      for (let index = 1; index <= count; index++) {
+        const expected = option === '2' ? 'null' : null;
+        assert.equal(Object.hasOwn(values, `value${index}`), true);
+        assert.equal(values[`value${index}`], expected);
+        assert.equal(context.values.has(`getter:value${index}`), true);
+      }
+    }
+  }
+});
+
 test('single-property getter publishes null', async () => {
   const { getter, context, values } = await runLegacyGetter('../blocks/get_property_from_object_option', { key: 'nullable' }, { nullable: null });
   assert.equal(Object.hasOwn(values, 'value'), true);
   assert.equal(values.value, null);
   assert.equal(context.values.has('getter:value'), true);
   assert.ok(getter.outputPorts.find(port => port.id === 'value').types.includes('null'));
+});
+
+test('single-property getter normalizes missing and undefined properties to null', async () => {
+  for (const object of [{}, { missing: undefined }]) {
+    const { context, values } = await runLegacyGetter('../blocks/get_property_from_object_option', { key: 'missing' }, object);
+    assert.equal(Object.hasOwn(values, 'value'), true);
+    assert.equal(values.value, null);
+    assert.equal(context.values.has('getter:value'), true);
+  }
 });
 
 test('Get Property From Object x3 passes null into Create Object and Add Property x3', async () => {
