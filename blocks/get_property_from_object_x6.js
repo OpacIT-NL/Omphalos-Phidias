@@ -118,37 +118,37 @@ module.exports = {
             "id": "value1",
             "name": "Value 1",
             "description": "Type: Object\n\nDescription: The property value obtained.",
-            "types": ["object", "unspecified", "text"]
+            "types": ["object", "unspecified", "null", "text"]
         },
         {
             "id": "value2",
             "name": "Value 2",
             "description": "Type: Object\n\nDescription: The property value obtained.",
-            "types": ["object", "unspecified", "text"]
+            "types": ["object", "unspecified", "null", "text"]
         },
         {
             "id": "value3",
             "name": "Value 3",
             "description": "Type: Object\n\nDescription: The property value obtained.",
-            "types": ["object", "unspecified", "text"]
+            "types": ["object", "unspecified", "null", "text"]
         },
         {
             "id": "value4",
             "name": "Value 4",
             "description": "Type: Object\n\nDescription: The property value obtained.",
-            "types": ["object", "unspecified", "text"]
+            "types": ["object", "unspecified", "null", "text"]
         },
         {
             "id": "value5",
             "name": "Value 5",
             "description": "Type: Object\n\nDescription: The property value obtained.",
-            "types": ["object", "unspecified", "text"]
+            "types": ["object", "unspecified", "null", "text"]
         },
         {
             "id": "value6",
             "name": "Value 6",
             "description": "Type: Object\n\nDescription: The property value obtained.",
-            "types": ["object", "unspecified", "text"]
+            "types": ["object", "unspecified", "null", "text"]
         },
 
     ],
@@ -190,27 +190,27 @@ module.exports = {
 
 if (option == 1) {
 
-    if ((object[key1]) != undefined)
+    if ((object[key1]) !== undefined)
     {
         this.StoreOutputValue(object[key1], "value1", cache);
     }
-    if ((object[key2]) != undefined)
+    if ((object[key2]) !== undefined)
     {
         this.StoreOutputValue(object[key2], "value2", cache);
     }
-    if ((object[key3]) != undefined)
+    if ((object[key3]) !== undefined)
     {
         this.StoreOutputValue(object[key3], "value3", cache);
     }
-    if ((object[key4]) != undefined)
+    if ((object[key4]) !== undefined)
     {
         this.StoreOutputValue(object[key4], "value4", cache);
     }
-    if ((object[key5]) != undefined)
+    if ((object[key5]) !== undefined)
     {
         this.StoreOutputValue(object[key5], "value5", cache);
     }
-    if ((object[key6]) != undefined)
+    if ((object[key6]) !== undefined)
     {
         this.StoreOutputValue(object[key6], "value6", cache);
     }
@@ -219,7 +219,7 @@ if (option == 1) {
         {
             let ObjectConvertToString;
 
-            if ((object[key1]) != undefined)
+            if ((object[key1]) !== undefined)
             {
                 ObjectConvertToString = (object[key1]);
                 raw = JSON.stringify(ObjectConvertToString);
@@ -227,7 +227,7 @@ if (option == 1) {
                 result = raw2.replace('"', '');
                 this.StoreOutputValue(result, "value1", cache);
             }
-            if ((object[key2]) != undefined)
+            if ((object[key2]) !== undefined)
             {
                 ObjectConvertToString = (object[key2]);
                 raw = JSON.stringify(ObjectConvertToString);
@@ -235,7 +235,7 @@ if (option == 1) {
                 result = raw2.replace('"', '');
                 this.StoreOutputValue(result, "value2", cache);
             }
-            if ((object[key3]) != undefined)
+            if ((object[key3]) !== undefined)
             {
                 ObjectConvertToString = (object[key3]);
                 raw = JSON.stringify(ObjectConvertToString);
@@ -243,7 +243,7 @@ if (option == 1) {
                 result = raw2.replace('"', '');
                 this.StoreOutputValue(result, "value3", cache);
             }
-            if ((object[key4]) != undefined)
+            if ((object[key4]) !== undefined)
             {
                 ObjectConvertToString = (object[key4]);
                 raw = JSON.stringify(ObjectConvertToString);
@@ -251,7 +251,7 @@ if (option == 1) {
                 result = raw2.replace('"', '');
                 this.StoreOutputValue(result, "value4", cache);
             }
-            if ((object[key5]) != undefined)
+            if ((object[key5]) !== undefined)
             {
                 ObjectConvertToString = (object[key5]);
                 raw = JSON.stringify(ObjectConvertToString);
@@ -259,7 +259,7 @@ if (option == 1) {
                 result = raw2.replace('"', '');
                 this.StoreOutputValue(result, "value5", cache);
             }
-            if ((object[key6]) != undefined)
+            if ((object[key6]) !== undefined)
             {
                 ObjectConvertToString = (object[key6]);
                 raw = JSON.stringify(ObjectConvertToString);

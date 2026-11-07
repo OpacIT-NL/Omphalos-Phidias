@@ -82,19 +82,19 @@ module.exports = {
             "id": "value1",
             "name": "Value 1",
             "description": "Type: Object\n\nDescription: The property value obtained.",
-            "types": ["object", "unspecified", "text"]
+            "types": ["object", "unspecified", "null", "text"]
         },
         {
             "id": "value2",
             "name": "Value 2",
             "description": "Type: Object\n\nDescription: The property value obtained.",
-            "types": ["object", "unspecified", "text"]
+            "types": ["object", "unspecified", "null", "text"]
         },
         {
             "id": "value3",
             "name": "Value 3",
             "description": "Type: Object\n\nDescription: The property value obtained.",
-            "types": ["object", "unspecified", "text"]
+            "types": ["object", "unspecified", "null", "text"]
         }
 
     ],
@@ -121,15 +121,15 @@ module.exports = {
 
 if (option == 1) {
 
-    if ((object[key1]) != undefined)
+    if ((object[key1]) !== undefined)
     {
         this.StoreOutputValue(object[key1], "value1", cache);
     }
-    if ((object[key2]) != undefined)
+    if ((object[key2]) !== undefined)
     {
         this.StoreOutputValue(object[key2], "value2", cache);
     }
-    if ((object[key3]) != undefined)
+    if ((object[key3]) !== undefined)
     {
         this.StoreOutputValue(object[key3], "value3", cache);
     }
@@ -138,7 +138,7 @@ if (option == 1) {
         {
             let ObjectConvertToString;
 
-            if ((object[key1]) != undefined)
+            if ((object[key1]) !== undefined)
             {
                 ObjectConvertToString = (object[key1]);
                 raw = JSON.stringify(ObjectConvertToString);
@@ -146,7 +146,7 @@ if (option == 1) {
                 result = raw2.replace('"', '');
                 this.StoreOutputValue(result, "value1", cache);
             }
-            if ((object[key2]) != undefined)
+            if ((object[key2]) !== undefined)
             {
                 ObjectConvertToString = (object[key2]);
                 raw = JSON.stringify(ObjectConvertToString);
@@ -154,7 +154,7 @@ if (option == 1) {
                 result = raw2.replace('"', '');
                 this.StoreOutputValue(result, "value2", cache);
             }
-            if ((object[key3]) != undefined)
+            if ((object[key3]) !== undefined)
             {
                 ObjectConvertToString = (object[key3]);
                 raw = JSON.stringify(ObjectConvertToString);

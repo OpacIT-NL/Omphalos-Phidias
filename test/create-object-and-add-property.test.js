@@ -2,6 +2,21 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
+const { normalizeDefinition, executeLegacy } = require('../runtime/legacy');
+
+async function runLegacyGetter(modulePath, options, object) {
+  const getter = normalizeDefinition(require(modulePath), `${modulePath.split('/').at(-1)}.js`);
+  const context = {
+    values: new Map(),
+    vars: Object.create(null),
+    blockIDs: new Set(),
+    secretValues: new Set(),
+    render: value => value
+  };
+  const followed = [];
+  const values = await executeLegacy(getter, context, { id: 'getter', options }, { object }, async output => { followed.push(output); });
+  return { getter, context, followed, values };
+}
 
 test('wire-only object builders expose the requested number of key/value pairs', () => {
   for (let count = 1; count <= 9; count++) {
@@ -35,6 +50,66 @@ test('object builders preserve connected value types and skip blank keys', async
     details: { state: 'ready' },
     items: [1, 2]
   });
+});
+
+test('every multi-property getter publishes null in Object mode', async () => {
+  for (const count of [3, 6, 9]) {
+    const options = { option: '1' }, object = {};
+    for (let index = 1; index <= count; index++) {
+      options[`key${index}`] = `nullable${index}`;
+      object[`nullable${index}`] = null;
+    }
+    const { getter, context, followed, values } = await runLegacyGetter(`../blocks/get_property_from_object_x${count}`, options, object);
+
+    for (let index = 1; index <= count; index++) {
+      assert.equal(Object.hasOwn(values, `value${index}`), true);
+      assert.equal(values[`value${index}`], null);
+      assert.equal(context.values.has(`getter:value${index}`), true);
+      assert.ok(getter.outputPorts.find(port => port.id === `value${index}`).types.includes('null'));
+    }
+    assert.deepEqual(followed, ['action']);
+  }
+});
+
+test('every multi-property getter converts null to text in Raw Value mode', async () => {
+  for (const count of [3, 6, 9]) {
+    const options = { option: '2' }, object = {};
+    for (let index = 1; index <= count; index++) {
+      options[`key${index}`] = `nullable${index}`;
+      object[`nullable${index}`] = null;
+    }
+    const { values } = await runLegacyGetter(`../blocks/get_property_from_object_x${count}`, options, object);
+    for (let index = 1; index <= count; index++) assert.equal(values[`value${index}`], 'null');
+  }
+});
+
+test('single-property getter publishes null', async () => {
+  const { getter, context, values } = await runLegacyGetter('../blocks/get_property_from_object_option', { key: 'nullable' }, { nullable: null });
+  assert.equal(Object.hasOwn(values, 'value'), true);
+  assert.equal(values.value, null);
+  assert.equal(context.values.has('getter:value'), true);
+  assert.ok(getter.outputPorts.find(port => port.id === 'value').types.includes('null'));
+});
+
+test('Get Property From Object x3 passes null into Create Object and Add Property x3', async () => {
+  const { context, followed, values } = await runLegacyGetter('../blocks/get_property_from_object_x3', {
+    option: '1', key1: 'nullable', key2: 'name', key3: 'count'
+  }, { nullable: null, name: 'D6 System', count: 0 });
+
+  assert.equal(Object.hasOwn(values, 'value1'), true);
+  assert.equal(values.value1, null);
+  assert.equal(context.values.has('getter:value1'), true);
+  assert.deepEqual(followed, ['action']);
+
+  const creator = require('../blocks/create_object_and_add_property_3x');
+  const outputs = {};
+  await creator.execute({}, {}, {
+    key1: 'nullable', value1: values.value1,
+    key2: 'name', value2: values.value2,
+    key3: 'count', value3: values.value3
+  }, (name, value) => { outputs[name] = value; });
+
+  assert.deepEqual(outputs.object, { nullable: null, name: 'D6 System', count: 0 });
 });
 
 test('later duplicate keys overwrite earlier values without prototype mutation', async () => {
