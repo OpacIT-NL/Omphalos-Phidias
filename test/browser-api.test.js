@@ -55,6 +55,8 @@ test('browser displays callback HTML, including error pages, and leaves acknowle
     assert.deepEqual(result.writes, ['open', html, 'close']);
     assert.deepEqual(result.errors, []);
     assert.equal(result.events[0].detail.body.systems, 4);
+    assert.equal(result.events[1].type, 'phidias:internal-refresh');
+    assert.deepEqual(JSON.parse(JSON.stringify(result.events[1].detail)), { source: 'browser-api-reply', requestId: 'supplier_lookup' });
     assert.equal(result.calls.length, 2);
   }
   for (const reply of [new Response(null, { status: 202 }), new Response('{"saved":true}', { headers: { 'content-type': 'application/json' } })]) {
@@ -112,6 +114,7 @@ test('Browser API Request outputs safe browser code and refuses protected creden
   assert.doesNotMatch(outputs.html, /<\/script><script>alert/);
   assert.match(outputs.html, /\\u003c\/script>/);
   assert.match(outputs.html, /phidias:browser-api-reply/);
+  assert.match(outputs.html, /phidias:internal-refresh/);
   const inlineScript = outputs.html.match(/<script>\n([\s\S]*)\n<\/script>$/)?.[1];
   assert.ok(inlineScript);
   assert.doesNotThrow(() => new Function(inlineScript));

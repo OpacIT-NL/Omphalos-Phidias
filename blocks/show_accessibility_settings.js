@@ -37,6 +37,7 @@ function accessibilitySettingsHTML(options = {}) {
     <p class="phidias-accessibility-settings__status" role="status" aria-live="polite"></p>
   </div>
   <footer class="phidias-accessibility-settings__actions">
+    <button class="phidias-accessibility-settings__save" type="button">Save settings</button>
     <button class="phidias-accessibility-settings__reset" type="button">Reset settings</button>
   </footer>
 </section>`;
@@ -73,15 +74,19 @@ html[data-phidias-theme="light"] .phidias-accessibility-settings{--phidias-setti
 .phidias-accessibility-settings__field select{width:100%;padding:7px 10px}
 .phidias-accessibility-settings__hint,.phidias-accessibility-settings__status{min-height:1.5em;margin:0;color:var(--phidias-settings-muted);font-size:.875rem}
 .phidias-accessibility-settings__status{color:var(--phidias-settings-status)}
-.phidias-accessibility-settings__actions{display:flex;justify-content:flex-end;padding:14px 18px;border-top:1px solid var(--phidias-settings-border)}
-@media(max-width:480px){.phidias-accessibility-settings__group{grid-template-columns:1fr}.phidias-accessibility-settings__actions button{width:100%}}
+.phidias-accessibility-settings__actions{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:10px;padding:14px 18px;border-top:1px solid var(--phidias-settings-border)}
+.phidias-accessibility-settings__save{background:#176b80!important;border-color:#67e8f9!important;color:#fff!important}
+@media(max-width:480px){.phidias-accessibility-settings__group{grid-template-columns:1fr}.phidias-accessibility-settings__actions{flex-direction:column}.phidias-accessibility-settings__actions button{width:100%}}
 @media(prefers-reduced-motion:reduce){.phidias-accessibility-settings *{scroll-behavior:auto!important;transition:none!important;animation:none!important}}
 @media(forced-colors:active){.phidias-accessibility-settings,.phidias-accessibility-settings button,.phidias-accessibility-settings select,.phidias-accessibility-settings__group label,.phidias-accessibility-settings__toggle{forced-color-adjust:auto}}
 </style>
 <script ${RUNTIME_MARKER}>
 (() => {
-  if (window.__phidiasAccessibilitySettings && typeof window.__phidiasAccessibilitySettings.bind === "function") {
+  if (window.__phidiasAccessibilitySettings &&
+      window.__phidiasAccessibilitySettings.page === document.documentElement &&
+      typeof window.__phidiasAccessibilitySettings.bind === "function") {
     window.__phidiasAccessibilitySettings.bind(document);
+    window.__phidiasAccessibilitySettings.apply();
     return;
   }
 
@@ -95,17 +100,28 @@ html[data-phidias-theme="light"] .phidias-accessibility-settings{--phidias-setti
     if (!part) return "";
     try { return decodeURIComponent(part.slice(prefix.length)); } catch { return ""; }
   };
+  const readLocal = name => {
+    try { return window.localStorage.getItem(name) || ""; } catch { return ""; }
+  };
   const writeCookie = (name, value) => {
     let cookie = encodeURIComponent(name) + "=" + encodeURIComponent(value) + "; Path=/; Max-Age=${COOKIE_MAX_AGE}; SameSite=Lax";
     if (location.protocol === "https:") cookie += "; Secure";
     document.cookie = cookie;
+  };
+  const writeLocal = (name, value) => {
+    try { window.localStorage.setItem(name, String(value)); } catch {}
+  };
+  const readPreference = name => readCookie(name) || readLocal(name);
+  const writePreference = (name, value) => {
+    writeCookie(name, value);
+    writeLocal(name, value);
   };
   const normalize = values => ({
     theme: values.theme === "light" ? "light" : "dark",
     textSize: allowedSizes.includes(Number(values.textSize)) ? Number(values.textSize) : 100,
     contrast: values.contrast === "high" ? "high" : "normal"
   });
-  let settings = normalize({ theme: readCookie(cookieNames.theme), textSize: readCookie(cookieNames.textSize), contrast: readCookie(cookieNames.contrast) });
+  let settings = normalize({ theme: readPreference(cookieNames.theme), textSize: readPreference(cookieNames.textSize), contrast: readPreference(cookieNames.contrast) });
   const page = document.documentElement;
 
   const syncRoot = root => {
@@ -130,9 +146,9 @@ html[data-phidias-theme="light"] .phidias-accessibility-settings{--phidias-setti
     page.dataset.phidiasContrast = settings.contrast;
     page.style.setProperty("--phidias-text-scale", String(settings.textSize / 100));
     if (save) {
-      writeCookie(cookieNames.theme, settings.theme);
-      writeCookie(cookieNames.textSize, String(settings.textSize));
-      writeCookie(cookieNames.contrast, settings.contrast);
+      writePreference(cookieNames.theme, settings.theme);
+      writePreference(cookieNames.textSize, String(settings.textSize));
+      writePreference(cookieNames.contrast, settings.contrast);
     }
     for (const root of roots) syncRoot(root);
     if (announcingRoot) announce(announcingRoot);
@@ -143,13 +159,15 @@ html[data-phidias-theme="light"] .phidias-accessibility-settings{--phidias-setti
     root.dataset.phidiasAccessibilityBound = "true";
     roots.add(root);
     for (const input of root.querySelectorAll('input[name="phidias-accessibility-theme"]')) {
-      input.addEventListener("change", () => { if (input.checked) { settings.theme = input.value; applySettings(true, root); } });
+      input.addEventListener("change", () => { if (input.checked) { settings.theme = input.value; applySettings(false, null); } });
     }
     const textSize = root.querySelector("[data-phidias-text-size]");
     const contrast = root.querySelector("[data-phidias-high-contrast]");
+    const save = root.querySelector(".phidias-accessibility-settings__save");
     const reset = root.querySelector(".phidias-accessibility-settings__reset");
-    if (textSize) textSize.addEventListener("change", () => { settings.textSize = Number(textSize.value); applySettings(true, root); });
-    if (contrast) contrast.addEventListener("change", () => { settings.contrast = contrast.checked ? "high" : "normal"; applySettings(true, root); });
+    if (textSize) textSize.addEventListener("change", () => { settings.textSize = Number(textSize.value); applySettings(false, null); });
+    if (contrast) contrast.addEventListener("change", () => { settings.contrast = contrast.checked ? "high" : "normal"; applySettings(false, null); });
+    if (save) save.addEventListener("click", () => applySettings(true, root));
     if (reset) reset.addEventListener("click", () => { settings = { theme: "dark", textSize: 100, contrast: "normal" }; applySettings(true, root); });
     syncRoot(root);
   };
@@ -158,9 +176,14 @@ html[data-phidias-theme="light"] .phidias-accessibility-settings{--phidias-setti
     for (const root of scope.querySelectorAll("[data-phidias-accessibility-settings]")) bindRoot(root);
   };
 
-  window.__phidiasAccessibilitySettings = { bind, apply: () => applySettings(false, null) };
+  const refresh = () => {
+    applySettings(false, null);
+    bind(document);
+  };
+  window.__phidiasAccessibilitySettings = { page, bind, apply: () => applySettings(false, null), refresh };
   applySettings(false, null);
   bind(document);
+  document.addEventListener("phidias:internal-refresh", refresh);
 })();
 </script>`;
 }

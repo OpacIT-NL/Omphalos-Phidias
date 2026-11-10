@@ -25,6 +25,7 @@ test('Show Accessibility Settings renders a plain, always-visible settings secti
   assert.match(html, /<select data-phidias-text-size>/);
   assert.match(html, /data-phidias-high-contrast/);
   assert.match(html, /role="status" aria-live="polite"/);
+  assert.match(html, /class="phidias-accessibility-settings__save"[^>]*>Save settings<\/button>/);
   assert.match(html, /Reset settings/);
   assert.doesNotMatch(html, /<dialog|aria-haspopup|<script|<style/i);
   assert.doesNotMatch(html, /Display <options>/);
@@ -56,7 +57,7 @@ test('Use Accessibility Settings inserts its runtime inside complete HTML docume
   assert.match(enhanced, /<\/script>\n<\/body><\/html>$/);
 });
 
-test('Use Accessibility Settings persists validated preferences in existing cookies', () => {
+test('Use Accessibility Settings persists validated preferences across forced reloads', () => {
   const html = accessibilityRuntimeHTML();
 
   assert.equal(COOKIE_MAX_AGE, 31536000);
@@ -69,6 +70,10 @@ test('Use Accessibility Settings persists validated preferences in existing cook
   assert.match(html, /Path=\/; Max-Age=31536000; SameSite=Lax/);
   assert.match(html, /location\.protocol === "https:"/);
   assert.match(html, /cookie \+= "; Secure"/);
+  assert.match(html, /window\.localStorage\.getItem\(name\)/);
+  assert.match(html, /window\.localStorage\.setItem\(name, String\(value\)\)/);
+  assert.match(html, /readCookie\(name\) \|\| readLocal\(name\)/);
+  assert.match(html, /writePreference\(cookieNames\.theme, settings\.theme\)/);
 });
 
 test('Use Accessibility Settings provides global theme, contrast, and focus adaptations', () => {
@@ -93,7 +98,10 @@ test('Use Accessibility Settings binds plain settings sections and emits valid J
 
   assert.match(runtime, /querySelectorAll\("\[data-phidias-accessibility-settings\]"\)/);
   assert.match(runtime, /phidiasAccessibilityBound/);
-  assert.match(runtime, /window\.__phidiasAccessibilitySettings = \{ bind/);
+  assert.match(runtime, /save\.addEventListener\("click", \(\) => applySettings\(true, root\)\)/);
+  assert.match(runtime, /window\.__phidiasAccessibilitySettings\.page === document\.documentElement/);
+  assert.match(runtime, /window\.__phidiasAccessibilitySettings = \{ page, bind/);
+  assert.match(runtime, /addEventListener\("phidias:internal-refresh", refresh\)/);
   assert.ok(script);
   assert.doesNotThrow(() => new Function(script));
 });

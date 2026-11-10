@@ -81,6 +81,9 @@ function browserRequestHTML(configuration) {
       document.open();
       document.write(html);
       document.close();
+      document.dispatchEvent(new CustomEvent("phidias:internal-refresh", {
+        detail: { source: "browser-api-reply", requestId: configuration.id }
+      }));
     }
   };
   const run = async () => {
