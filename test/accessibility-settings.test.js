@@ -47,12 +47,17 @@ test('Show Accessibility Settings defaults safely and persists validated prefere
 test('Show Accessibility Settings provides global theme, contrast, media, and focus adaptations', () => {
   const html = accessibilityHTML();
 
-  assert.match(html, /data-phidias-theme="light"[^}]+invert\(1\) hue-rotate\(180deg\)/);
+  assert.match(html, /--phidias-theme-filter:brightness\(1\)/);
+  assert.match(html, /--phidias-contrast-filter:contrast\(1\)/);
+  assert.match(html, /data-phidias-theme="light"[^}]+var\(--phidias-light-theme-filter,invert\(1\) hue-rotate\(180deg\)\)/);
   assert.match(html, /data-phidias-contrast="high"[^}]+contrast\(1\.35\)/);
   assert.match(html, /data-phidias-preserve-colors/);
   assert.match(html, /:focus-visible\{outline:3px solid CanvasText/);
   assert.match(html, /box-shadow:0 0 0 5px Canvas/);
-  assert.match(html, /body a\{color:#ff0!important;text-decoration:underline/);
+  assert.match(html, /--phidias-high-contrast-link:#66e0ff/);
+  assert.match(html, /body a\{color:var\(--phidias-high-contrast-link\)!important;text-decoration:underline/);
+  assert.doesNotMatch(html, /--phidias-high-contrast-link:#ff0/);
+  assert.doesNotMatch(html, /--phidias-(?:theme|contrast)-filter:none/);
   assert.match(html, /@media\(prefers-reduced-motion:reduce\)/);
   assert.match(html, /@media\(forced-colors:active\)/);
   assert.match(html, /dialog\.addEventListener\("close", \(\) => openButton\.focus\(\)\)/);

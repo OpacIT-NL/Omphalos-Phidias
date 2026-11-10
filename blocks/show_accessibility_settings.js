@@ -45,16 +45,16 @@ function accessibilityHTML(options = {}) {
   </dialog>
 </aside>
 <style data-phidias-accessibility-style>
-html[data-phidias-accessibility-ready]{--phidias-theme-filter:none;--phidias-contrast-filter:none;filter:var(--phidias-theme-filter) var(--phidias-contrast-filter);color-scheme:dark}
+html[data-phidias-accessibility-ready]{--phidias-theme-filter:brightness(1);--phidias-contrast-filter:contrast(1);--phidias-high-contrast-bg:#000;--phidias-high-contrast-text:#fff;--phidias-high-contrast-link:#66e0ff;filter:var(--phidias-theme-filter) var(--phidias-contrast-filter);color-scheme:dark}
 html[data-phidias-theme="dark"]{color-scheme:dark}
-html[data-phidias-theme="light"]{--phidias-theme-filter:invert(1) hue-rotate(180deg);color-scheme:light;background:#f5f5f5}
+html[data-phidias-theme="light"]{--phidias-theme-filter:var(--phidias-light-theme-filter,invert(1) hue-rotate(180deg));color-scheme:light;background:#f5f5f5}
 html[data-phidias-contrast="high"]{--phidias-contrast-filter:contrast(1.35) saturate(1.08)}
 html[data-phidias-accessibility-ready] body{min-width:0;zoom:var(--phidias-text-scale,1)}
-html[data-phidias-theme="light"] :is(img,video,canvas,iframe,embed,object,[data-phidias-preserve-colors]){filter:invert(1) hue-rotate(180deg)}
+html[data-phidias-theme="light"] :is(img,video,canvas,iframe,embed,object,[data-phidias-preserve-colors]){filter:var(--phidias-light-media-filter,invert(1) hue-rotate(180deg))}
 html[data-phidias-accessibility-ready] :is(img,picture,video,canvas,svg){max-width:100%;height:auto}
 html[data-phidias-accessibility-ready] :focus-visible{outline:3px solid CanvasText!important;outline-offset:3px!important;box-shadow:0 0 0 5px Canvas!important}
-html[data-phidias-contrast="high"] body,html[data-phidias-contrast="high"] body :where(div,section,article,aside,header,footer,nav,main,form,fieldset,dialog,table,thead,tbody,tfoot,tr,th,td,input,select,textarea,button){border-color:#fff!important;background-color:#000!important;color:#fff!important;text-shadow:none!important}
-html[data-phidias-contrast="high"] body a{color:#ff0!important;text-decoration:underline!important;text-decoration-thickness:.12em!important;text-underline-offset:.18em!important}
+html[data-phidias-contrast="high"] body,html[data-phidias-contrast="high"] body :where(div,section,article,aside,header,footer,nav,main,form,fieldset,dialog,table,thead,tbody,tfoot,tr,th,td,input,select,textarea,button){border-color:var(--phidias-high-contrast-text)!important;background-color:var(--phidias-high-contrast-bg)!important;color:var(--phidias-high-contrast-text)!important;text-shadow:none!important}
+html[data-phidias-contrast="high"] body a{color:var(--phidias-high-contrast-link)!important;text-decoration:underline!important;text-decoration-thickness:.12em!important;text-underline-offset:.18em!important}
 .phidias-accessibility,.phidias-accessibility *{box-sizing:border-box}
 .phidias-accessibility{position:fixed;z-index:2147483000;right:18px;bottom:18px;font:400 16px/1.5 Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#f5f7fa}
 .phidias-accessibility button,.phidias-accessibility select,.phidias-accessibility input{font:inherit}
