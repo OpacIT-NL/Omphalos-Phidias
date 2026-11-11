@@ -75,7 +75,7 @@ function validate(document, definitions) {
         if (ws.active && formIDs.has(formID)) fail(`Duplicate Form Submit ID: ${formID}`);
         if (ws.active) formIDs.add(formID);
       }
-      if (block.type === 'browser_api_reply') {
+      if (def.trigger === 'browser_api_reply') {
         const requestID = block.options.request_id;
         if (typeof requestID !== 'string' || !/^[a-zA-Z][a-zA-Z0-9_-]{0,79}$/.test(requestID)) fail('Browser API Reply ID must start with a letter and contain only letters, numbers, underscores, or dashes');
         if (ws.active && browserAPIIDs.has(requestID)) fail(`Duplicate Browser API Reply ID: ${requestID}`);

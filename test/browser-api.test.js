@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const vm = require('node:vm');
 const requestBlock = require('../blocks/browser_api_request');
+const request2x = require('../blocks/browser_api_request_2x');
 const { createApp, loadDefinitions } = require('../runtime/app');
 const { validate } = require('../runtime/validate');
 
@@ -132,6 +133,122 @@ test('Browser API Request outputs safe browser code and refuses protected creden
   await assert.rejects(() => requestBlock.execute({}, {
     method: 'GET', body_format: 'JSON', credentials: 'Omit', timeout_seconds: 30
   }, { request_id: 'large_passthrough', url: 'https://supplier.example', passthrough: 'x'.repeat(3001) }, () => {}), /3,000-byte cookie limit/);
+});
+
+test('Browser API Request 2x and 3x expose parallel request inputs and matching reply outputs', async () => {
+  const definitions = loadDefinitions(path.resolve(__dirname, '../blocks'));
+  const request3x = definitions.get('browser_api_request_3x');
+  const reply2x = definitions.get('browser_api_reply_2x');
+  const reply3x = definitions.get('browser_api_reply_3x');
+
+  assert.ok(request3x);
+  assert.ok(reply2x);
+  assert.ok(reply3x);
+  assert.deepEqual(request3x.inputPorts.filter(port => /^url\d$/.test(port.id)).map(port => port.id), ['url1', 'url2', 'url3']);
+  assert.deepEqual(reply2x.outputPorts.filter(port => /^response\d$/.test(port.id)).map(port => port.id), ['response1', 'response2']);
+  assert.deepEqual(reply3x.outputPorts.filter(port => /^body\d$/.test(port.id)).map(port => port.id), ['body1', 'body2', 'body3']);
+
+  const output = {};
+  assert.equal(await request2x.execute({}, {
+    method1: 'GET', body_format1: 'JSON', credentials1: 'Omit',
+    method2: 'POST', body_format2: 'JSON', credentials2: 'Include', timeout_seconds: 20
+  }, {
+    request_id: 'parallel_lookup',
+    url1: 'https://one.example/data',
+    url2: 'https://two.example/data',
+    body2: { enabled: true }
+  }, (id, value) => { output[id] = value; }), 'next');
+  assert.match(output.html, /"requests":\[/);
+  assert.match(output.html, /Promise\.all\(configuration\.requests\.map\(requestOne\)\)/);
+  assert.doesNotThrow(() => new Function(output.html.match(/<script>\n([\s\S]*)\n<\/script>$/)[1]));
+});
+
+test('batched browser requests start together and send one ordered callback', async () => {
+  const html = requestBlock.browserBatchRequestHTML({
+    id: 'parallel_lookup', timeoutMs: 30000,
+    requests: [
+      { url: 'https://one.example/data', method: 'GET', headers: {}, body: null, bodyFormat: 'JSON', credentials: 'omit' },
+      { url: 'https://two.example/data', method: 'GET', headers: {}, body: null, bodyFormat: 'JSON', credentials: 'omit' }
+    ]
+  });
+  const status = { dataset: {} }, events = [], calls = [];
+  let started = 0, release;
+  const gate = new Promise(resolve => { release = resolve; });
+  let callbackPayload;
+  const document = {
+    currentScript: { previousElementSibling: status },
+    dispatchEvent: event => events.push(event), open() {}, write() {}, close() {}
+  };
+  Object.defineProperty(document, 'cookie', { set() {}, get: () => '' });
+  await vm.runInNewContext(html.match(/<script>\n([\s\S]*)\n<\/script>$/)[1], {
+    AbortController, Blob, URL, setTimeout, clearTimeout,
+    CustomEvent: class { constructor(type, options) { this.type = type; this.detail = options.detail; } },
+    window: { location: { href: 'https://app.example/page', protocol: 'https:', assign() {} } },
+    document,
+    console: { error() {} },
+    fetch: async (url, options) => {
+      calls.push(url);
+      if (url.startsWith('/_phidias/')) {
+        callbackPayload = JSON.parse(options.body);
+        return new Response(null, { status: 202 });
+      }
+      started++;
+      if (started === 2) release();
+      await gate;
+      return url.includes('one.example')
+        ? new Response('{"source":1}', { status: 200, headers: { 'content-type': 'application/json' } })
+        : new Response('{"source":2}', { status: 503, headers: { 'content-type': 'application/json' } });
+    }
+  });
+  assert.equal(started, 2);
+  assert.deepEqual(calls, ['https://one.example/data', 'https://two.example/data', '/_phidias/browser-api/parallel_lookup']);
+  assert.equal(callbackPayload.batch, true);
+  assert.equal(callbackPayload.ok, false);
+  assert.deepEqual(callbackPayload.results.map(result => result.body.source), [1, 2]);
+  assert.deepEqual(callbackPayload.results.map(result => result.status), [200, 503]);
+  assert.equal(status.dataset.state, 'error');
+  assert.equal(events[0].type, 'phidias:browser-api-reply');
+});
+
+test('Browser API Reply 2x exposes each batch result in one workflow run', async t => {
+  const definitions = loadDefinitions(path.resolve(__dirname, '../blocks'));
+  const document = { version: 1, name: 'Batch browser reply', workspaces: [{
+    id: 'batch-browser-api', name: 'Batch Browser API', active: true,
+    blocks: [
+      { id: 'reply', type: 'browser_api_reply_2x', x: 0, y: 0, options: { request_id: 'parallel_lookup' } },
+      { id: 'log-one', type: 'console_log', x: 300, y: 0, options: { level: 'info', value: '' } },
+      { id: 'log-two', type: 'console_log', x: 600, y: 0, options: { level: 'info', value: '' } }
+    ],
+    connections: [
+      { id: 'start', from: 'reply', output: 'success', to: 'log-one', input: 'action', kind: 'action' },
+      { id: 'first-value', from: 'reply', output: 'response1', to: 'log-one', input: 'value', kind: 'value' },
+      { id: 'continue', from: 'log-one', output: 'action', to: 'log-two', input: 'action', kind: 'action' },
+      { id: 'second-value', from: 'reply', output: 'response2', to: 'log-two', input: 'value', kind: 'value' }
+    ]
+  }] };
+  const entries = [];
+  const app = createApp({ document, definitions, logger: { debug() {}, error() {}, warning() {}, info: value => entries.push(value) } });
+  const address = await app.start(0, '127.0.0.1');
+  t.after(() => app.stop());
+  const endpoint = `http://127.0.0.1:${address.port}/_phidias/browser-api/parallel_lookup`;
+  const results = [
+    { ok: true, status: 200, headers: { source: 'one' }, body: { value: 1 }, error: '' },
+    { ok: true, status: 201, headers: { source: 'two' }, body: { value: 2 }, error: '' }
+  ];
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-phidias-browser-api': 'parallel_lookup' },
+    body: JSON.stringify({ batch: true, ok: true, results, error: '' })
+  });
+  assert.equal(response.status, 202);
+  assert.deepEqual(entries.map(value => JSON.parse(JSON.stringify(value))), results);
+
+  const wrongShape = await fetch(endpoint, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-phidias-browser-api': 'parallel_lookup' },
+    body: JSON.stringify(results[0])
+  });
+  assert.equal(wrongShape.status, 400);
 });
 
 test('Browser API Reply IDs must be valid and unique across active workspaces', () => {

@@ -610,10 +610,25 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
           }
           if (def.trigger === 'browser_api_reply') {
             const result = seed.browserAPIResult || {};
-            setOutput('response', result);
-            setOutput('body', result.body ?? null);
-            setOutput('status', result.status ?? 0);
-            setOutput('headers', result.headers || {});
+            const batchSize = Number(def.browserAPIBatchSize || 0);
+            if (batchSize) {
+              const results = Array.isArray(result.results) ? result.results : [];
+              setOutput('responses', results);
+              for (let index = 0; index < batchSize; index++) {
+                const item = results[index] || {};
+                const suffix = index + 1;
+                setOutput(`response${suffix}`, item);
+                setOutput(`body${suffix}`, item.body ?? null);
+                setOutput(`status${suffix}`, item.status ?? 0);
+                setOutput(`headers${suffix}`, item.headers || {});
+                setOutput(`error_message${suffix}`, item.error || '');
+              }
+            } else {
+              setOutput('response', result);
+              setOutput('body', result.body ?? null);
+              setOutput('status', result.status ?? 0);
+              setOutput('headers', result.headers || {});
+            }
             setOutput('error_message', result.error || '');
             setOutput('request_id', block.options.request_id);
             setOutput('passthrough', seed.browserAPIPassthrough ?? null);
@@ -711,7 +726,7 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
       routes.push({ method: block.options.method, path: normalizeRoutePath(block.options.path), ws, block, loginBlock: login?.block, loginWorkspace: login?.workspace });
     }
     for (const block of ws.blocks.filter(block => block.type === 'form_submit')) formRoutes.set(block.options.form_id, { ws, block });
-    for (const block of ws.blocks.filter(block => block.type === 'browser_api_reply')) browserAPIRoutes.set(block.options.request_id, { ws, block });
+    for (const block of ws.blocks.filter(block => definitions.get(block.type)?.trigger === 'browser_api_reply')) browserAPIRoutes.set(block.options.request_id, { ws, block });
   }
   const server = http.createServer(async (req, res) => {
     const requestStarted = Date.now();
@@ -815,7 +830,11 @@ function createApp({ directory = __dirname, document, definitions, onError, onCo
         if (!browserAPIRoute) { res.writeHead(404); res.end('Browser API Reply not found'); return; }
         if (req.headers['x-phidias-browser-api'] !== requestID) { res.writeHead(403); res.end('Browser API callback header is missing or invalid'); return; }
         const result = await readBody(req);
-        if (!result || typeof result !== 'object' || Array.isArray(result) || typeof result.ok !== 'boolean' || !Number.isInteger(result.status) || result.status < 0 || result.status > 599 || !result.headers || typeof result.headers !== 'object' || Array.isArray(result.headers) || typeof result.error !== 'string' || result.error.length > 2000) {
+        const validResult = item => item && typeof item === 'object' && !Array.isArray(item) && typeof item.ok === 'boolean' && Number.isInteger(item.status) && item.status >= 0 && item.status <= 599 && item.headers && typeof item.headers === 'object' && !Array.isArray(item.headers) && typeof item.error === 'string' && item.error.length <= 2000;
+        const batchSize = Number(definitions.get(browserAPIRoute.block.type)?.browserAPIBatchSize || 0);
+        const validSingle = !batchSize && validResult(result) && result.batch !== true;
+        const validBatch = batchSize && result && typeof result === 'object' && !Array.isArray(result) && result.batch === true && typeof result.ok === 'boolean' && Array.isArray(result.results) && result.results.length === batchSize && result.results.every(validResult) && result.ok === result.results.every(item => item.ok) && typeof result.error === 'string' && result.error.length <= 6000;
+        if (!validSingle && !validBatch) {
           res.writeHead(400); res.end('Invalid browser API response'); return;
         }
         const passthroughCookieName = `phidias_browser_api_${requestID}`;

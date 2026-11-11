@@ -1,6 +1,6 @@
 'use strict';
 
-module.exports = {
+const definition = {
   type: 'browser_api_reply',
   name: 'Browser API Reply',
   category: 'Triggers',
@@ -21,3 +21,39 @@ module.exports = {
     { id: 'passthrough', name: 'Value Passthrough', kind: 'value', types: ['text', 'object', 'list'] }
   ]
 };
+
+function createBatchDefinition(count) {
+  if (![2, 3].includes(count)) throw new Error('Browser API Reply batch size must be 2 or 3');
+  const outputPorts = [
+    { id: 'success', name: 'Action', kind: 'action', types: [] },
+    { id: 'error', name: 'Action (Error)', kind: 'action', types: [] },
+    { id: 'responses', name: 'Complete Responses', kind: 'value', types: ['list'] }
+  ];
+  for (let index = 1; index <= count; index++) outputPorts.push(
+    { id: `response${index}`, name: `Complete Response ${index}`, kind: 'value', types: ['object'] },
+    { id: `body${index}`, name: `Response Body ${index}`, kind: 'value', types: ['text', 'object', 'list', 'number', 'unspecified'] },
+    { id: `status${index}`, name: `HTTP Status ${index}`, kind: 'value', types: ['number'] },
+    { id: `headers${index}`, name: `Response Headers ${index}`, kind: 'value', types: ['object'] },
+    { id: `error_message${index}`, name: `Error Message ${index}`, kind: 'value', types: ['text'] }
+  );
+  outputPorts.push(
+    { id: 'error_message', name: 'Combined Error Message', kind: 'value', types: ['text'] },
+    { id: 'request_id', name: 'Request ID', kind: 'value', types: ['text'] },
+    { id: 'passthrough', name: 'Value Passthrough', kind: 'value', types: ['text', 'object', 'list'] }
+  );
+  return {
+    type: `browser_api_reply_${count}x`,
+    name: `Browser API Reply ${count}x`,
+    category: 'Triggers',
+    description: `Starts one workflow after a Browser API Request ${count}x batch and exposes all ${count} responses separately.`,
+    trigger: 'browser_api_reply',
+    browserAPIBatchSize: count,
+    inputPorts: [],
+    fields: [{ key: 'request_id', label: 'Request ID', type: 'text', default: 'browser_request' }],
+    outputs: ['success', 'error'],
+    outputPorts
+  };
+}
+
+module.exports = definition;
+module.exports.createBatchDefinition = createBatchDefinition;
