@@ -19,22 +19,34 @@ function isButtonColumn(cell) {
   return /\bphidias-table-button-column\b/i.test(String(cell));
 }
 
+function isHiddenColumn(cell) {
+  return /\bphidias-table-hidden-column\b/i.test(String(cell)) || /\sdata-phidias-hidden-column(?:\s|=|>)/i.test(String(cell));
+}
+
+function addHeaderMetadata(cell, name) {
+  if (/\sdata-phidias-header\s*=/i.test(cell)) return cell;
+  const openingEnd = cell.indexOf('>');
+  if (openingEnd < 0) throw new Error('HTML table contains an invalid column heading');
+  return cell.slice(0, openingEnd) + ` data-phidias-header="${escapeHTML(name)}"` + cell.slice(openingEnd);
+}
+
 function enhanceHeaderRow(row) {
   const cells = directCells(row), headings = [];
   let output = '', position = 0;
   for (let index = 0; index < cells.length; index++) {
     const cell = cells[index];
     output += row.slice(position, cell.start);
-    if (cell.tag !== 'th' || isButtonColumn(cell.html)) {
+    if (cell.tag !== 'th' || isButtonColumn(cell.html) || isHiddenColumn(cell.html)) {
       output += cell.html;
     } else {
       const name = headerText(cell.html) || `Column ${index + 1}`;
-      const openingEnd = cell.html.indexOf('>');
-      const closingStart = cell.html.toLocaleLowerCase().lastIndexOf('</th');
-      const original = cell.html.slice(openingEnd + 1, closingStart);
+      const cellWithMetadata = addHeaderMetadata(cell.html, name);
+      const openingEnd = cellWithMetadata.indexOf('>');
+      const closingStart = cellWithMetadata.toLocaleLowerCase().lastIndexOf('</th');
+      const original = cellWithMetadata.slice(openingEnd + 1, closingStart);
       headings.push({ index, name });
       const controls = `<span class="phidias-table-column-controls"><button type="button" class="phidias-table-sort" data-phidias-column="${index}" title="Sort by ${escapeHTML(name)}">${original}<span class="phidias-table-sort__indicator" aria-hidden="true">↕</span></button><input type="search" class="phidias-table-search" data-phidias-column="${index}" aria-label="Search ${escapeHTML(name)}" placeholder="Search ${escapeHTML(name)}"></span>`;
-      output += replaceCellContent(cell.html, controls);
+      output += replaceCellContent(cellWithMetadata, controls);
     }
     position = cell.end;
   }
